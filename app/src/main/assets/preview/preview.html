@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="stylesheet" href="katex.min.css">
+    <style>
+        html {
+            min-height: 100%;
+            overflow-y: auto;
+            overscroll-behavior-y: contain;
+        }
+
+        body {
+            font-family: sans-serif;
+            margin: 6px 12px;
+            min-height: 100%;
+            line-height: 1.55;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding-bottom: 96px;
+            -webkit-overflow-scrolling: touch;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        #content {
+            min-height: calc(100vh - 12px);
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        h1 {
+            font-size: 1.45rem;
+            line-height: 1.25;
+            margin: 0 0 10px;
+        }
+
+        h2,
+        h3,
+        h4,
+        h5,
+        h6 {
+            margin: 12px 0 6px;
+        }
+
+        p {
+            margin: 6px 0;
+        }
+
+        /* Light Mode (Default) */
+        body {
+            background-color: transparent;
+            color: #202124;
+        }
+
+        /* Dark Mode */
+        body.dark-mode {
+            background-color: transparent;
+            color: #e8eaed;
+        }
+
+        a {
+            color: #1a73e8;
+        }
+
+        body.dark-mode a {
+            color: #8ab4f8;
+        }
+
+        blockquote {
+            border-left: 4px solid #ccc;
+            margin: 0;
+            padding-left: 16px;
+            color: #666;
+        }
+
+        body.dark-mode blockquote {
+            border-left-color: #555;
+            color: #aaa;
+        }
+
+        pre {
+            background-color: #f5f5f5;
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+
+        .code-block-wrapper {
+            position: relative;
+            margin: 8px 0;
+        }
+
+        .code-block-wrapper pre {
+            margin: 0;
+            padding-top: 40px;
+        }
+
+        .code-copy-button {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            border: 1px solid rgba(0, 0, 0, 0.18);
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 12px;
+            color: #111111;
+            background: rgba(255, 255, 255, 0.94);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+        }
+
+        body.dark-mode .code-copy-button {
+            color: #ffffff;
+            background: rgba(0, 0, 0, 0.72);
+            border-color: rgba(255, 255, 255, 0.26);
+        }
+
+        body.dark-mode pre {
+            background-color: #2d2d2d;
+        }
+
+        code {
+            font-family: monospace;
+            background-color: #f5f5f5;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+
+        body.dark-mode code {
+            background-color: #2d2d2d;
+        }
+
+        /* Tables */
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 16px;
+        }
+
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 8px;
+        }
+
+        body.dark-mode th,
+        body.dark-mode td {
+            border-color: #444;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        body.dark-mode tr:nth-child(even) {
+            background-color: #1e1e1e;
+        }
+
+        /* Checkboxes */
+        .task-list-item-checkbox {
+            margin-right: 8px;
+            cursor: pointer;
+        }
+
+        /* Images */
+        img {
+            display: block;
+            max-width: calc(100% - 6px);
+            height: auto;
+            margin: 10px 3px 12px;
+            border-radius: 6px;
+            background-color: rgba(255, 255, 255, 0.96);
+            box-shadow:
+                0 -1px 2px rgba(0, 0, 0, 0.06),
+                0 1px 3px rgba(0, 0, 0, 0.10),
+                0 2px 5px rgba(0, 0, 0, 0.16);
+        }
+
+        body.dark-mode img {
+            background-color: rgba(255, 255, 255, 0.08);
+            box-shadow:
+                0 -1px 2px rgba(0, 0, 0, 0.26),
+                0 1px 3px rgba(0, 0, 0, 0.34),
+                0 2px 6px rgba(0, 0, 0, 0.42);
+        }
+
+        /* List Formatting */
+        ul, ol {
+            padding-left: 24px;
+            margin-top: 4px;
+            margin-bottom: 4px;
+        }
+        li {
+            display: list-item;
+            margin-bottom: 4px;
+        }
+
+        .preview-search-highlight {
+            background: rgba(255, 214, 10, 0.55);
+            border-radius: 3px;
+            padding: 0 1px;
+        }
+
+        body.dark-mode .preview-search-highlight {
+            background: rgba(255, 214, 10, 0.35);
+        }
+    </style>
+</head>
+
+<body>
+    <script>
+        if (new URLSearchParams(window.location.search).get('dark') === 'true') {
+            document.body.classList.add('dark-mode');
+        }
+    </script>
+    <div id="content"></div>
+
+    <script src="markdown-it.min.js"></script>
+    <script src="katex.min.js"></script>
+    <script src="markdown-it-texmath.min.js"></script>
+    <script src="markdown-it-task-lists.min.js"></script>
+
+    <script>
+        // Initialize MarkdownIt
+        const md = window.markdownit({
+            html: false, // Fix XSS by disabling raw HTML
+            linkify: true,
+            typographer: true,
+            breaks: true
+        });
+
+        // Add support for <u> tag safely
+        md.inline.ruler.before('emphasis', 'underline', (state, silent) => {
+            const marker = '<u>';
+            const closer = '</u>';
+            if (!state.src.startsWith(marker, state.pos)) return false;
+
+            const start = state.pos;
+            const end = state.src.indexOf(closer, start + marker.length);
+            if (end === -1) return false;
+
+            if (!silent) {
+                const tokenOpen = state.push('underline_open', 'u', 1);
+                tokenOpen.markup = marker;
+
+                const oldMax = state.posMax;
+                state.pos += marker.length;
+                state.posMax = end;
+                state.md.inline.tokenize(state);
+                state.posMax = oldMax;
+
+                const tokenClose = state.push('underline_close', 'u', -1);
+                tokenClose.markup = closer;
+            }
+            state.pos = end + closer.length;
+            return true;
+        });
+
+        // Use Plugins
+        md.use(window.markdownitTaskLists, { enabled: true });
+        md.use(texmath, {
+            engine: katex,
+            delimiters: 'dollars',
+            katexOptions: { macros: { "\\RR": "\\mathbb{R}" } }
+        });
+
+        // Store content
+        const contentDiv = document.getElementById('content');
+
+        // Main Update Function
+        window.updateContent = function (markdown, isDark) {
+            if (isDark) document.body.classList.add('dark-mode');
+            else document.body.classList.remove('dark-mode');
+
+            try {
+                contentDiv.innerHTML = md.render(markdown || '');
+                attachCheckboxListeners();
+                attachCodeBlockCopyButtons();
+            } catch (error) {
+                console.error('Preview render failed: ' + error);
+                contentDiv.textContent = markdown || '';
+            }
+        };
+
+        window.updateContentFromAndroid = function (isDark) {
+            const markdown = (window.Android && window.Android.getMarkdown)
+                ? window.Android.getMarkdown()
+                : '';
+            window.updateContent(markdown, isDark);
+        };
+
+        function attachCheckboxListeners() {
+            const checkboxes = document.querySelectorAll('.task-list-item-checkbox');
+            checkboxes.forEach((cb, index) => {
+                cb.disabled = false; // Look enabled
+                cb.onchange = function () {
+                    console.log("Checkbox toggled at index: " + index);
+                    // Pass the GLOBAL index of the checkbox to Android.
+                    // Android will have to find the N-th "- [ ]" in the text and toggle it.
+                    if (window.Android) {
+                        window.Android.onCheckboxToggled(index, cb.checked);
+                    }
+                };
+                cb.ontouchstart = function () {
+                    if (window.Android && window.Android.onPreviewControlTouched) {
+                        window.Android.onPreviewControlTouched();
+                    }
+                };
+            });
+        }
+
+        function attachCodeBlockCopyButtons() {
+            const blocks = contentDiv.querySelectorAll('pre');
+            blocks.forEach((pre) => {
+                if (pre.parentElement && pre.parentElement.classList.contains('code-block-wrapper')) return;
+                const wrapper = document.createElement('div');
+                wrapper.className = 'code-block-wrapper';
+                pre.parentNode.insertBefore(wrapper, pre);
+                wrapper.appendChild(pre);
+                const button = document.createElement('button');
+                button.className = 'code-copy-button';
+                button.type = 'button';
+                button.textContent = '复制';
+                button.onclick = function (event) {
+                    event.stopPropagation();
+                    if (window.Android && window.Android.copyCodeBlock) {
+                        window.Android.copyCodeBlock(pre.innerText || pre.textContent || '');
+                    }
+                    button.textContent = '已复制';
+                    setTimeout(() => { button.textContent = '复制'; }, 1200);
+                };
+                button.ontouchstart = function (event) {
+                    event.stopPropagation();
+                    if (window.Android && window.Android.onPreviewControlTouched) {
+                        window.Android.onPreviewControlTouched();
+                    }
+                };
+                wrapper.appendChild(button);
+            });
+        }
+
+        function clearSearchHighlights() {
+            const highlights = contentDiv.querySelectorAll('.preview-search-highlight');
+            highlights.forEach((span) => {
+                const text = document.createTextNode(span.textContent || '');
+                span.parentNode.replaceChild(text, span);
+                text.parentNode.normalize();
+            });
+        }
+
+        window.applySearchHighlight = function (query) {
+            clearSearchHighlights();
+            const q = (query || '').trim();
+            if (!q) return 0;
+            const lower = q.toLowerCase();
+            const walker = document.createTreeWalker(contentDiv, NodeFilter.SHOW_TEXT, {
+                acceptNode: function (node) {
+                    const parent = node.parentElement;
+                    if (!parent || parent.closest('button')) return NodeFilter.FILTER_REJECT;
+                    return node.nodeValue.toLowerCase().indexOf(lower) >= 0
+                        ? NodeFilter.FILTER_ACCEPT
+                        : NodeFilter.FILTER_REJECT;
+                }
+            });
+            const nodes = [];
+            while (walker.nextNode()) nodes.push(walker.currentNode);
+            let firstHighlight = null;
+            let count = 0;
+            nodes.forEach((node) => {
+                const text = node.nodeValue;
+                const fragment = document.createDocumentFragment();
+                let start = 0;
+                let index = text.toLowerCase().indexOf(lower, start);
+                while (index >= 0) {
+                    if (index > start) fragment.appendChild(document.createTextNode(text.slice(start, index)));
+                    const span = document.createElement('span');
+                    span.className = 'preview-search-highlight';
+                    span.textContent = text.slice(index, index + q.length);
+                    fragment.appendChild(span);
+                    if (!firstHighlight) firstHighlight = span;
+                    count++;
+                    start = index + q.length;
+                    index = text.toLowerCase().indexOf(lower, start);
+                }
+                if (start < text.length) fragment.appendChild(document.createTextNode(text.slice(start)));
+                node.parentNode.replaceChild(fragment, node);
+            });
+            if (firstHighlight) {
+                firstHighlight.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            }
+            return count;
+        };
+
+        window.scrollToHeading = function (text, level) {
+            const normalized = (text || '').trim();
+            if (!normalized) return false;
+            const selector = level > 0 ? 'h' + level : 'h1,h2,h3,h4,h5,h6';
+            const headings = Array.from(contentDiv.querySelectorAll(selector));
+            const target = headings.find((heading) => (heading.textContent || '').trim() === normalized)
+                || Array.from(contentDiv.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+                    .find((heading) => (heading.textContent || '').trim() === normalized);
+            if (target) {
+                target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                return true;
+            }
+            return false;
+        };
+
+        window.onerror = function (msg, url, line) {
+            console.error("Preview Error: " + msg);
+        };
+    </script>
+</body>
+
+</html>

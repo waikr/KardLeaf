@@ -1,0 +1,6 @@
+# Copy to local.properties on your machine if you need release signing.
+# Do not commit local.properties, keystores, or real passwords.
+RELEASE_STORE_FILE=notes.jks
+RELEASE_STORE_PASSWORD=your_store_password
+RELEASE_KEY_ALIAS=your_key_alias
+RELEASE_KEY_PASSWORD=your_key_password

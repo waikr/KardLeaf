@@ -1,0 +1,76 @@
+<resources>
+    <string name="app_name">KardLeaf</string>
+    <string name="app_name_cn">卡叶笔记</string>
+    <string name="app_author">kangle</string>
+    <string name="search_hint">Cerca in KardLeaf</string>
+    <string name="clear_search">Cancella ricerca</string>
+    <string name="sort_notes">Ordina note</string>
+    <string name="sort_date_modified">Data di modifica</string>
+    <string name="sort_date_created">Data di creazione</string>
+    <string name="sort_title">Titolo</string>
+    <string name="sort_ascending">Crescente</string>
+    <string name="sort_descending">Decrescente</string>
+    <string name="view_grid">Vista a griglia</string>
+    <string name="view_list">Vista a elenco</string>
+    <string name="menu">Menu</string>
+    <string name="add_note">Aggiungi nota</string>
+    <string name="welcome_title">Benvenuto su KardLeaf!</string>
+    <string name="select_folder">Seleziona cartella</string>
+    <string name="folder_access_needed">Accesso alla cartella necessario</string>
+    <string name="folder_access_rationale">KardLeaf ha bisogno dell\'accesso a una cartella per leggere e salvare le tue note in markdown.</string>
+    <string name="grant_access">Concedi accesso</string>
+
+    <!-- Dialogs -->
+    <string name="empty_trash_title">Svuotare il cestino?</string>
+    <string name="empty_trash_message">Tutte le note nel cestino verranno eliminate definitivamente.</string>
+    <string name="empty_trash_confirm">Svuota</string>
+    <string name="delete_label_title">Eliminare l\'etichetta?</string>
+    <string name="delete_label_message">Sei sicuro di voler eliminare l\'etichetta \"%1$s\"?</string>
+    <string name="delete_label_confirm">Elimina</string>
+    <string name="cancel">Annulla</string>
+    <string name="delete_selected_notes_title">Eliminare le note selezionate?</string>
+    <string name="delete_selected_notes_message">Sei sicuro di voler eliminare queste %1$d note?</string>
+
+    <!-- Toasts & Messages -->
+    <string name="label_deleted_toast">Etichetta eliminata</string>
+    <string name="press_back_again_exit">Premi di nuovo Indietro per uscire</string>
+    <string name="error_delete_label_not_empty">L\'etichetta deve essere vuota per poterla eliminare</string>
+    <string name="loading_notes">Caricamento note...</string>
+    <string name="no_results_found">Nessun risultato trovato</string>
+
+    <!-- Navigation & Headers -->
+    <string name="all_notes">Tutte le note</string>
+    <string name="labels">Etichette</string>
+    <string name="create_new_label">Crea nuova etichetta</string>
+    <string name="archive">Archivio</string>
+    <string name="trash">Cestino</string>
+    <string name="pinned">Fissate</string>
+    <string name="others">Altre</string>
+    <string name="archived_notes_header">Note archiviate</string>
+    <string name="search_everywhere">Cerca ovunque</string>
+    <string name="search_results">Risultati della ricerca</string>
+    <string name="root_folder">Cartella radice</string>
+    <string name="root_folder_no_label">Cartella radice (nessuna cartella)</string>
+
+    <!-- Actions -->
+    <string name="empty_trash_desc">Svuota cestino</string>
+    <string name="restore">Ripristina</string>
+    <string name="move">Sposta</string>
+    <string name="pin_unpin">Fissa/Sblocca</string>
+    <string name="unarchive">Estrai dall\'archivio</string>
+    <string name="delete">Elimina</string>
+    <string name="done">Fine</string>
+    <string name="back">Indietro</string>
+    <string name="label">Etichetta</string>
+    <string name="edit">Modifica</string>
+    <string name="create">Crea</string>
+    <string name="close_selection">Chiudi selezione</string>
+    <string name="more_options">Altre opzioni</string>
+
+    <!-- Editor -->
+    <string name="label_name_hint">Nome etichetta</string>
+    <string name="title_hint">Titolo</string>
+    <string name="start_typing_hint">Inizia a scrivere...</string>
+    <string name="inline_math">Matematica in riga $...$</string>
+    <string name="block_math">Blocco matematico $$...$$</string>
+</resources>

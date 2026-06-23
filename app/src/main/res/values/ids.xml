@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="preview_control_touch_tag" type="id" />
+    <item name="preview_search_query_tag" type="id" />
+    <item name="preview_heading_scroll_token_tag" type="id" />
+</resources>
