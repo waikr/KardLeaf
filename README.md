@@ -1,5 +1,7 @@
 # KardLeaf / 卡叶笔记
 
+![GitHub Downloads](https://img.shields.io/github/downloads/waikr/KardLeaf/total?label=Downloads)
+
 KardLeaf 是一款轻量、简洁、以本地文件为核心的 Android Markdown 笔记应用。
 
 它的目标是让用户把笔记保存在自己选择的本地目录中，而不是锁定在应用私有数据库里。笔记内容以 `.md` / `.txt` 文件形式保存，应用内部使用 Room 数据库建立索引和缓存，从而兼顾数据可迁移性与移动端加载性能。
