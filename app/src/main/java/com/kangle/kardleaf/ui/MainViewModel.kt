@@ -14,6 +14,7 @@ import com.kangle.kardleaf.data.repository.MetadataManager
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.repository.RoomNoteRepository
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
+import com.kangle.kardleaf.data.utils.NoteTextStats
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +38,7 @@ private const val DASHBOARD_NOTE_PREVIEW_LIMIT = 200
 private const val EDITOR_TRACE_TAG = "KardLeafEditorTrace"
 private const val STARTUP_PERF_TRACE_TAG = "KardLeafStartupPerf"
 private const val YAML_TAG_TRACE_TAG = "KardLeafYamlTags"
+private const val CUSTOM_SORT_TRACE_TAG = "KardLeafCustomSort"
 
 class MainViewModel(
     private val repository: RoomNoteRepository,
@@ -68,6 +70,55 @@ class MainViewModel(
 
     private fun List<Note>.withoutHiddenFolders(): List<Note> =
         filterNot { isHiddenFolderPath(it.folder) }
+
+    private fun normalizeNotePath(path: String): String =
+        path.trim().replace("\\", "/").trim('/')
+
+    private fun customSortPathSummary(paths: Collection<String>, limit: Int = 5): String {
+        val normalized = paths.map(::normalizeNotePath)
+        val suffix = if (normalized.size > limit) ", ..." else ""
+        return "size=${normalized.size} head=${normalized.take(limit)}$suffix"
+    }
+
+    private fun customSortNoteSummary(notes: Collection<Note>, limit: Int = 5): String =
+        customSortPathSummary(notes.map { it.file.path }, limit)
+
+    private fun sortByCustomFolderOrder(
+        notes: List<Note>,
+        folder: String,
+    ): List<Note> {
+        val rawOrder = prefsManager.getFolderCustomOrder(folder)
+        val orderIndex = rawOrder
+            .map(::normalizeNotePath)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .withIndex()
+            .associate { it.value to it.index }
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "sortByCustomFolderOrder enter folder=$folder notes=${customSortNoteSummary(notes)} order=${customSortPathSummary(rawOrder)}",
+        )
+        if (orderIndex.isEmpty()) {
+            val fallback = notes.sortedByDescending { it.lastModified.time }
+            Log.d(
+                CUSTOM_SORT_TRACE_TAG,
+                "sortByCustomFolderOrder fallback folder=$folder result=${customSortNoteSummary(fallback)}",
+            )
+            return fallback
+        }
+
+        val sorted = notes.sortedWith(
+            compareBy<Note> { orderIndex[normalizeNotePath(it.file.path)] ?: Int.MAX_VALUE }
+                .thenByDescending { it.lastModified.time }
+                .thenBy { it.title.lowercase() }
+                .thenBy { normalizeNotePath(it.file.path) },
+        )
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "sortByCustomFolderOrder result folder=$folder result=${customSortNoteSummary(sorted)}",
+        )
+        return sorted
+    }
 
     private data class SearchIndex(
         val histories: List<NoteHistory>,
@@ -110,6 +161,8 @@ class MainViewModel(
 
         object Tags : Screen
 
+        object Folders : Screen
+
         object Settings : Screen
     }
 
@@ -130,6 +183,10 @@ class MainViewModel(
     val sortDirection: StateFlow<PrefsManager.SortDirection> = _sortDirection.asStateFlow()
 
     private val _folderSortVersion = MutableStateFlow(0)
+    val folderSortVersion: StateFlow<Int> = _folderSortVersion.asStateFlow()
+
+    private val _folderManagerOrderVersion = MutableStateFlow(0)
+    val folderManagerOrderVersion: StateFlow<Int> = _folderManagerOrderVersion.asStateFlow()
 
     private val _viewMode = MutableStateFlow(prefsManager.getViewMode())
     val viewMode: StateFlow<PrefsManager.ViewMode> = _viewMode.asStateFlow()
@@ -142,6 +199,24 @@ class MainViewModel(
 
     private val _showYamlTagsOnLooseCards = MutableStateFlow(prefsManager.isLooseCardYamlTagsVisible())
     val showYamlTagsOnLooseCards: StateFlow<Boolean> = _showYamlTagsOnLooseCards.asStateFlow()
+
+    private val _showModifiedDateOnCards = MutableStateFlow(prefsManager.isModifiedDateOnCardsVisible())
+    val showModifiedDateOnCards: StateFlow<Boolean> = _showModifiedDateOnCards.asStateFlow()
+
+    private val _showNoteTitleOnCards = MutableStateFlow(prefsManager.isNoteTitleOnCardsVisible())
+    val showNoteTitleOnCards: StateFlow<Boolean> = _showNoteTitleOnCards.asStateFlow()
+
+    private val _showDateFilenameTitleOnCards = MutableStateFlow(prefsManager.isDateFilenameTitleOnCardsVisible())
+    val showDateFilenameTitleOnCards: StateFlow<Boolean> = _showDateFilenameTitleOnCards.asStateFlow()
+
+    private val _customHiddenFilenamePatterns = MutableStateFlow(prefsManager.getCustomHiddenFilenamePatterns())
+    val customHiddenFilenamePatterns: StateFlow<List<String>> = _customHiddenFilenamePatterns.asStateFlow()
+
+    private val _selectionToolbarItemOrder = MutableStateFlow(prefsManager.getSelectionToolbarItemOrder())
+    val selectionToolbarItemOrder: StateFlow<List<PrefsManager.SelectionToolbarItemId>> = _selectionToolbarItemOrder.asStateFlow()
+
+    private val _selectionToolbarMoreItems = MutableStateFlow(prefsManager.getSelectionToolbarMoreItems())
+    val selectionToolbarMoreItems: StateFlow<Set<PrefsManager.SelectionToolbarItemId>> = _selectionToolbarMoreItems.asStateFlow()
 
     val yamlTags: StateFlow<List<String>> =
         repository.getYamlTags().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -266,9 +341,12 @@ class MainViewModel(
                     }
                 }
 
-            val folderSortSettings = (currentFilterValue as? NoteFilter.Label)?.name?.let { prefsManager.getFolderSortSettings(it) }
+            val folderFilter = currentFilterValue as? NoteFilter.Label
+            val folderSortSettings = folderFilter?.name?.let { prefsManager.getFolderSortSettings(it) }
             val effectiveSortOrder = folderSortSettings?.order ?: sorting.order
             val effectiveSortDirection = folderSortSettings?.direction ?: sorting.direction
+            val useCustomSort =
+                folderFilter != null && !folderFilter.recursive && effectiveSortOrder == PrefsManager.SortOrder.CUSTOM
 
             val sorted =
                 if (currentFilterValue is NoteFilter.Recent) {
@@ -278,15 +356,18 @@ class MainViewModel(
                         PrefsManager.TrashSortOrder.FILE_NAME -> searched.sortedBy { it.file.name.lowercase() }
                         PrefsManager.TrashSortOrder.DELETED_TIME -> searched.sortedBy { it.deletedAt ?: it.lastModified }
                     }
+                } else if (useCustomSort && folderFilter != null) {
+                    sortByCustomFolderOrder(searched, folderFilter.name)
                 } else {
                     when (effectiveSortOrder) {
-                        PrefsManager.SortOrder.DATE_MODIFIED -> searched.sortedBy { it.lastModified }
+                        PrefsManager.SortOrder.DATE_MODIFIED,
+                        PrefsManager.SortOrder.CUSTOM -> searched.sortedBy { it.lastModified }
                         PrefsManager.SortOrder.TITLE -> searched.sortedBy { it.title.lowercase() }
                     }
                 }
 
             val directed =
-                if (currentFilterValue is NoteFilter.Recent || effectiveSortDirection == PrefsManager.SortDirection.DESCENDING) {
+                if (!useCustomSort && (currentFilterValue is NoteFilter.Recent || effectiveSortDirection == PrefsManager.SortDirection.DESCENDING)) {
                     sorted.reversed()
                 } else {
                     sorted
@@ -417,6 +498,9 @@ class MainViewModel(
 
     private val _isEditorOpen = MutableStateFlow(false)
     val isEditorOpen: StateFlow<Boolean> = _isEditorOpen.asStateFlow()
+
+    private val _isOpeningNoteContent = MutableStateFlow(false)
+    val isOpeningNoteContent: StateFlow<Boolean> = _isOpeningNoteContent.asStateFlow()
 
     // 编辑器是否有未保存的修改；用于判断外部文件变化时是否触发冲突提醒
     private val _editorDirty = MutableStateFlow(false)
@@ -560,7 +644,7 @@ class MainViewModel(
                         }
 
                         if (_isEditorOpen.value && openNotePath != null && _currentNote.value?.file?.path == openNotePath) {
-                            val latest = repository.getNote(openNotePath)
+                            val latest = repository.getNoteForEditor(openNotePath)
                             latest?.let { latestNote ->
                                 if (_currentNote.value?.file?.path == openNotePath) {
                                     _currentNote.value = latestNote
@@ -599,8 +683,8 @@ class MainViewModel(
         _externalConflict.value = null
 
         viewModelScope.launch {
-            // Quillpad-like path: initialize the editor from the full Room row,
-            // never from the dashboard projection and never from a blank placeholder.
+            // Initialize from a full editor row when it is already available.
+            // Otherwise open a lightweight loading shell, never the dashboard preview text.
             val cachedNote =
                 try {
                     repository.getCachedNote(notePath)
@@ -631,20 +715,26 @@ class MainViewModel(
                     "openNote show initial request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
                         "initial=${initialNote.traceSummary()}",
                 )
+                _isOpeningNoteContent.value = false
                 _currentNote.value = initialNote
                 _isEditorOpen.value = true
                 markOpenNoteShown(initialNote)
             } else {
+                val shellNote = note.copy(content = "", contentPreview = "")
                 Log.w(
                     EDITOR_TRACE_TAG,
-                    "openNote no safe initial content request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                    "openNote show loading shell request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
                         "sourceContentLen=${note.content.length} sourcePreviewLen=${note.contentPreview.length}",
                 )
+                _isOpeningNoteContent.value = true
+                _currentNote.value = shellNote
+                _isEditorOpen.value = true
+                markOpenNoteShown(shellNote)
             }
 
             val fullNote =
                 try {
-                    repository.getNote(notePath)
+                    repository.getNoteForEditor(notePath)
                 } catch (e: Exception) {
                     Log.e(EDITOR_TRACE_TAG, "openNote full load failed request=$requestVersion path=$notePath", e)
                     null
@@ -669,6 +759,7 @@ class MainViewModel(
                     fullNote.looksLikeEmptyPlaceholder(current) ||
                         (fullNote.content.isEmpty() && fullNote.contentPreview.isEmpty() && note.contentPreview.isNotEmpty())
 
+                _isOpeningNoteContent.value = false
                 if (!fullNoteIsSuspiciousBlank &&
                     (hasNotOpenedYet || (isSameOpenedNote && (!_editorDirty.value || currentContentEmpty)))
                 ) {
@@ -688,7 +779,11 @@ class MainViewModel(
                             "dirty=${_editorDirty.value} currentEmpty=$currentContentEmpty",
                     )
                 }
-            } else if (!_isEditorOpen.value) {
+            } else {
+                _isOpeningNoteContent.value = false
+            }
+
+            if (fullNote == null && !_isEditorOpen.value) {
                 // Do not open the editor with the dashboard preview or an empty placeholder.
                 // Keeping the dashboard visible is better than entering a permanently blank note.
                 val emptyCachedNote = cachedNote?.takeIf { it.content.isEmpty() && it.contentPreview.isEmpty() }
@@ -740,6 +835,7 @@ class MainViewModel(
         openNoteRequestVersion++
         _externalNoteDraft.value = draft
         _currentNote.value = null
+        _isOpeningNoteContent.value = false
         _isEditorOpen.value = true
         _editorDirty.value = false
         _externalConflict.value = null
@@ -761,9 +857,9 @@ class MainViewModel(
         _isEditorOpen.value = false
         _currentNote.value = null
         _externalNoteDraft.value = null
+        _isOpeningNoteContent.value = false
         _editorDirty.value = false
         _externalConflict.value = null
-        _homeScrollToTopEvents.value += 1
     }
 
     /** 编辑器标记是否有未保存修改，用于外部文件变化时的冲突检测 */
@@ -895,10 +991,18 @@ class MainViewModel(
 
                     val current = _currentNote.value
                     val editorOpen = _isEditorOpen.value
-                    val wasNewNote = current == null && oldFile == null && editorOpen
+                    val wasNewNote = oldFile == null
+                    val finalFolder = normalizeFolderPath(finalNote.folder)
+                    val finalPath = normalizeNotePath(finalNote.file.path)
+                    val finalFolderSettings = prefsManager.getFolderSortSettings(finalFolder)
+                    val finalCustomOrder = prefsManager.getFolderCustomOrder(finalFolder)
+                    Log.d(
+                        CUSTOM_SORT_TRACE_TAG,
+                        "saveNote outer savedPath=$savedPath finalFolder=$finalFolder finalPath=$finalPath oldFile=${oldFile?.path} current=${current?.file?.path} editorOpen=$editorOpen wasNewNote=$wasNewNote settings=$finalFolderSettings orderBefore=${customSortPathSummary(finalCustomOrder)}",
+                    )
                     if (current != null && current.file.path == oldFile?.path) {
                         _currentNote.value = finalNote
-                    } else if (wasNewNote) {
+                    } else if (wasNewNote && editorOpen) {
                         _currentNote.value = finalNote
                     }
                     _externalNoteDraft.value = null
@@ -906,7 +1010,17 @@ class MainViewModel(
                     _editorDirty.value = false
                     _externalConflict.value = null
                     if (wasNewNote) {
+                        Log.d(
+                            CUSTOM_SORT_TRACE_TAG,
+                            "saveNote outer trigger prepend folder=${finalNote.folder} path=${finalNote.file.path}",
+                        )
+                        prependNewNoteToFolderCustomOrder(finalNote.folder, finalNote.file.path)
                         _homeScrollToTopEvents.value += 1
+                    } else {
+                        Log.d(
+                            CUSTOM_SORT_TRACE_TAG,
+                            "saveNote outer skip prepend wasNewNote=false folder=${finalNote.folder} path=${finalNote.file.path}",
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -915,16 +1029,134 @@ class MainViewModel(
         }
     }
 
+    private fun prependNewNoteToFolderCustomOrder(
+        folder: String,
+        newPath: String,
+    ) {
+        val normalizedFolder = normalizeFolderPath(folder)
+        val normalizedPath = normalizeNotePath(newPath)
+        val settings = prefsManager.getFolderSortSettings(normalizedFolder)
+        val currentOrder = prefsManager.getFolderCustomOrder(normalizedFolder)
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "prepend enter folder=$folder normalizedFolder=$normalizedFolder path=$newPath normalizedPath=$normalizedPath settings=$settings orderBefore=${customSortPathSummary(currentOrder)}",
+        )
+        if (normalizedPath.isBlank()) {
+            Log.d(CUSTOM_SORT_TRACE_TAG, "prepend skip blank path folder=$normalizedFolder")
+            return
+        }
+        if (settings?.order != PrefsManager.SortOrder.CUSTOM) {
+            Log.d(
+                CUSTOM_SORT_TRACE_TAG,
+                "prepend skip not custom folder=$normalizedFolder settings=$settings",
+            )
+            return
+        }
+
+        val nextOrder = mutableListOf(normalizedPath)
+        currentOrder
+            .map(::normalizeNotePath)
+            .filter { it.isNotBlank() && it != normalizedPath }
+            .distinct()
+            .forEach { nextOrder += it }
+
+        prefsManager.saveFolderCustomOrder(normalizedFolder, nextOrder)
+        _folderSortVersion.value += 1
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "prepend saved folder=$normalizedFolder orderAfter=${customSortPathSummary(nextOrder)} folderSortVersion=${_folderSortVersion.value}",
+        )
+    }
+
     fun setSortOrder(order: PrefsManager.SortOrder) {
-        val folder = (_currentFilter.value as? NoteFilter.Label)?.name
+        val folderFilter = _currentFilter.value as? NoteFilter.Label
+        val folder = folderFilter?.name
         val folderSettings = folder?.let { prefsManager.getFolderSortSettings(it) }
-        if (folder != null && folderSettings != null) {
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "setSortOrder request order=$order folder=$folder recursive=${folderFilter?.recursive} folderSettings=$folderSettings globalOrder=${_sortOrder.value} globalDirection=${_sortDirection.value}",
+        )
+        if (order == PrefsManager.SortOrder.CUSTOM && folderFilter != null && folder != null && !folderFilter.recursive) {
+            enableCurrentFolderCustomSort(emptyList())
+        } else if (folder != null && folderSettings != null) {
             prefsManager.saveFolderSortSettings(folder, folderSettings.copy(order = order))
             _folderSortVersion.value += 1
-        } else {
+        } else if (order != PrefsManager.SortOrder.CUSTOM) {
             _sortOrder.value = order
             prefsManager.saveSortOrder(order)
         }
+    }
+
+    fun enableCurrentFolderCustomSort(initialPaths: Collection<String>) {
+        val folderFilter = _currentFilter.value as? NoteFilter.Label ?: return
+        if (folderFilter.recursive) {
+            Log.d(CUSTOM_SORT_TRACE_TAG, "enableCurrentFolderCustomSort skip recursive folder=${folderFilter.name}")
+            return
+        }
+        val folder = folderFilter.name
+        val beforeOrder = prefsManager.getFolderCustomOrder(folder)
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "enableCurrentFolderCustomSort enter folder=$folder initial=${customSortPathSummary(initialPaths)} orderBefore=${customSortPathSummary(beforeOrder)} settingsBefore=${prefsManager.getFolderSortSettings(folder)}",
+        )
+        if (beforeOrder.isEmpty() && initialPaths.isNotEmpty()) {
+            prefsManager.saveFolderCustomOrder(folder, initialPaths)
+        }
+        val current = prefsManager.getFolderSortSettings(folder)
+        val next = (current ?: PrefsManager.FolderSortSettings(PrefsManager.SortOrder.CUSTOM, _sortDirection.value))
+            .copy(order = PrefsManager.SortOrder.CUSTOM)
+        prefsManager.saveFolderSortSettings(folder, next)
+        _folderSortVersion.value += 1
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "enableCurrentFolderCustomSort saved folder=$folder settingsAfter=$next orderAfter=${customSortPathSummary(prefsManager.getFolderCustomOrder(folder))} folderSortVersion=${_folderSortVersion.value}",
+        )
+    }
+
+    fun saveCurrentFolderCustomSortOrder(paths: Collection<String>) {
+        val folderFilter = _currentFilter.value as? NoteFilter.Label ?: return
+        if (folderFilter.recursive) {
+            Log.d(CUSTOM_SORT_TRACE_TAG, "saveCurrentFolderCustomSortOrder skip recursive folder=${folderFilter.name}")
+            return
+        }
+        val folder = folderFilter.name
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "saveCurrentFolderCustomSortOrder enter folder=$folder paths=${customSortPathSummary(paths)} settingsBefore=${prefsManager.getFolderSortSettings(folder)}",
+        )
+        prefsManager.saveFolderCustomOrder(folder, paths)
+        val current = prefsManager.getFolderSortSettings(folder)
+        val next = (current ?: PrefsManager.FolderSortSettings(PrefsManager.SortOrder.CUSTOM, _sortDirection.value))
+            .copy(order = PrefsManager.SortOrder.CUSTOM)
+        prefsManager.saveFolderSortSettings(folder, next)
+        _folderSortVersion.value += 1
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "saveCurrentFolderCustomSortOrder saved folder=$folder settingsAfter=$next orderAfter=${customSortPathSummary(prefsManager.getFolderCustomOrder(folder))} folderSortVersion=${_folderSortVersion.value}",
+        )
+    }
+
+    fun getFolderSortSettings(folder: String): PrefsManager.FolderSortSettings? =
+        prefsManager.getFolderSortSettings(folder)
+
+    fun getFolderCustomSortOrder(folder: String): List<String> {
+        val order = prefsManager.getFolderCustomOrder(folder)
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "getFolderCustomSortOrder folder=$folder order=${customSortPathSummary(order)} settings=${prefsManager.getFolderSortSettings(folder)}",
+        )
+        return order
+    }
+
+    fun getFolderDisplayOrder(parentFolder: String): List<String> =
+        prefsManager.getFolderDisplayOrder(parentFolder)
+
+    fun saveFolderDisplayOrder(
+        parentFolder: String,
+        folderPaths: Collection<String>,
+    ) {
+        prefsManager.saveFolderDisplayOrder(parentFolder, folderPaths)
+        _folderManagerOrderVersion.value += 1
     }
 
     fun setSortDirection(direction: PrefsManager.SortDirection) {
@@ -965,6 +1197,12 @@ class MainViewModel(
         _viewMode.value = prefsManager.getViewMode()
         _cardDensity.value = prefsManager.getCardDensity()
         _showYamlTagsOnLooseCards.value = prefsManager.isLooseCardYamlTagsVisible()
+        _showModifiedDateOnCards.value = prefsManager.isModifiedDateOnCardsVisible()
+        _showNoteTitleOnCards.value = prefsManager.isNoteTitleOnCardsVisible()
+        _showDateFilenameTitleOnCards.value = prefsManager.isDateFilenameTitleOnCardsVisible()
+        _customHiddenFilenamePatterns.value = prefsManager.getCustomHiddenFilenamePatterns()
+        _selectionToolbarItemOrder.value = prefsManager.getSelectionToolbarItemOrder()
+        _selectionToolbarMoreItems.value = prefsManager.getSelectionToolbarMoreItems()
         _hiddenFoldersVersion.value += 1
         viewModelScope.launch {
             repository.refreshNotes()
@@ -1057,6 +1295,149 @@ class MainViewModel(
         }
     }
 
+
+    fun duplicateSelectedNotes(
+        targetFolder: String,
+        onDone: (Int) -> Unit = {},
+    ) {
+        val selectedIds = _selectedNotes.value.toSet()
+        if (selectedIds.isEmpty()) return
+        clearSelection()
+
+        viewModelScope.launch {
+            val normalizedTargetFolder = normalizeFolderPath(targetFolder)
+            val allNotesList = allNotes.first()
+            val selectedNotes = allNotesList.filter { it.file.path in selectedIds && !it.isArchived && !it.isTrashed }
+            val existingTitles = allNotesList
+                .filter { normalizeFolderPath(it.folder) == normalizedTargetFolder && !it.isTrashed }
+                .map { it.title }
+                .toMutableSet()
+            var copiedCount = 0
+            val copiedPathPairs = mutableListOf<Pair<String, String>>()
+            val folderNotesBeforeCopy = allNotesList.filter { note ->
+                normalizeFolderPath(note.folder) == normalizedTargetFolder && !note.isArchived && !note.isTrashed
+            }
+
+            selectedNotes.forEach { note ->
+                val baseTitle = note.title.trim().replace(Regex("~副本\\d+$"), "").ifBlank { "Untitled" }
+                var index = 1
+                var copyTitle = "$baseTitle~副本$index"
+                while (copyTitle in existingTitles) {
+                    index += 1
+                    copyTitle = "$baseTitle~副本$index"
+                }
+                existingTitles.add(copyTitle)
+                val copiedPath = joinPath(normalizedTargetFolder, "$copyTitle.md")
+                val savedPath = repository.saveNote(
+                    note.copy(
+                        file = java.io.File(copiedPath),
+                        title = copyTitle,
+                        isArchived = false,
+                        isTrashed = false,
+                        deletedAt = null,
+                    ),
+                    oldFile = null,
+                    saveHistory = false,
+                )
+                if (savedPath.isNotEmpty()) {
+                    copiedCount += 1
+                    copiedPathPairs += normalizeNotePath(note.file.path) to normalizeNotePath(savedPath)
+                }
+            }
+
+            if (copiedPathPairs.isNotEmpty()) {
+                appendCopiedNotesToFolderCustomOrder(
+                    folder = normalizedTargetFolder,
+                    folderNotesBeforeCopy = folderNotesBeforeCopy,
+                    copiedPathPairs = copiedPathPairs,
+                )
+            }
+
+            if (normalizedTargetFolder.isNotBlank() && copiedCount > 0) {
+                val current = _tempLabels.value.toMutableSet()
+                current.add(normalizedTargetFolder)
+                _tempLabels.value = current
+            }
+            onDone(copiedCount)
+        }
+    }
+
+    private fun appendCopiedNotesToFolderCustomOrder(
+        folder: String,
+        folderNotesBeforeCopy: List<Note>,
+        copiedPathPairs: List<Pair<String, String>>,
+    ) {
+        val currentOrder = prefsManager.getFolderCustomOrder(folder)
+        val isCustomSortFolder =
+            prefsManager.getFolderSortSettings(folder)?.order == PrefsManager.SortOrder.CUSTOM
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "appendCopy enter folder=$folder isCustomSortFolder=$isCustomSortFolder beforeNotes=${customSortNoteSummary(folderNotesBeforeCopy)} copied=$copiedPathPairs orderBefore=${customSortPathSummary(currentOrder)}",
+        )
+        if (currentOrder.isEmpty() && !isCustomSortFolder) {
+            Log.d(CUSTOM_SORT_TRACE_TAG, "appendCopy skip folder=$folder orderEmpty=true notCustom=true")
+            return
+        }
+
+        val visibleOrder = sortByCustomFolderOrder(folderNotesBeforeCopy, folder)
+            .map { normalizeNotePath(it.file.path) }
+            .filter { it.isNotBlank() }
+            .distinct()
+        val nextOrder = if (currentOrder.isEmpty() && isCustomSortFolder) {
+            visibleOrder.toMutableList()
+        } else {
+            currentOrder
+                .map(::normalizeNotePath)
+                .filter { it.isNotBlank() }
+                .distinct()
+                .toMutableList()
+        }
+
+        copiedPathPairs.forEach { (sourcePathRaw, copyPathRaw) ->
+            val sourcePath = normalizeNotePath(sourcePathRaw)
+            val copyPath = normalizeNotePath(copyPathRaw)
+            if (sourcePath.isBlank() || copyPath.isBlank()) return@forEach
+
+            nextOrder.remove(copyPath)
+            val sourceIndex = nextOrder.indexOf(sourcePath).takeIf { it >= 0 }
+                ?: insertMissingSourceIntoCustomOrder(
+                    nextOrder = nextOrder,
+                    visibleOrder = visibleOrder,
+                    sourcePath = sourcePath,
+                )
+
+            val insertIndex = (sourceIndex + 1).coerceAtMost(nextOrder.size)
+            nextOrder.add(insertIndex, copyPath)
+        }
+
+        prefsManager.saveFolderCustomOrder(folder, nextOrder)
+        _folderSortVersion.value += 1
+        Log.d(
+            CUSTOM_SORT_TRACE_TAG,
+            "appendCopy saved folder=$folder orderAfter=${customSortPathSummary(nextOrder)} folderSortVersion=${_folderSortVersion.value}",
+        )
+    }
+
+    private fun insertMissingSourceIntoCustomOrder(
+        nextOrder: MutableList<String>,
+        visibleOrder: List<String>,
+        sourcePath: String,
+    ): Int {
+        val visibleIndex = visibleOrder.indexOf(sourcePath)
+        if (visibleIndex < 0) {
+            nextOrder += sourcePath
+            return nextOrder.lastIndex
+        }
+
+        val nextVisiblePath = visibleOrder
+            .drop(visibleIndex + 1)
+            .firstOrNull { it in nextOrder }
+        val insertIndex = nextVisiblePath
+            ?.let { nextOrder.indexOf(it).takeIf { index -> index >= 0 } }
+            ?: nextOrder.size
+        nextOrder.add(insertIndex, sourcePath)
+        return insertIndex
+    }
 
     fun moveNoteToPrivacy(
         note: Note,
@@ -1174,6 +1555,12 @@ class MainViewModel(
 
     suspend fun getNoteFrontMatterProperties(noteId: String): List<NoteFormatUtils.FrontMatterProperty> =
         repository.getNoteFrontMatterProperties(noteId)
+
+    suspend fun getNoteForProperties(noteId: String): Note? =
+        repository.getNote(noteId)
+
+    suspend fun getNoteTextStatsForProperties(noteId: String): NoteTextStats =
+        repository.getNoteTextStatsForProperties(noteId)
 
     fun addNoteRemark(
         noteId: String,

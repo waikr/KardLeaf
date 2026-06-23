@@ -199,7 +199,7 @@ fun DateNotesScreen(
                                 alignment = Alignment.TopEnd,
                                 offset = IntOffset(0, with(LocalDensity.current) { 44.dp.roundToPx() }),
                                 onDismissRequest = { showDateScopeMenu = false },
-                                properties = PopupProperties(focusable = true),
+                                properties = PopupProperties(focusable = false),
                             ) {
                                 Column(
                                     horizontalAlignment = Alignment.End,

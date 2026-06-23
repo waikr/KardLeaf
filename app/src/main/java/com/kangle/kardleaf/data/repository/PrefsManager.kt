@@ -30,6 +30,8 @@ class PrefsManager(context: Context) {
         private const val KEY_SORT_ORDER = "sort_order"
         private const val KEY_SORT_DIRECTION = "sort_direction"
         private const val KEY_FOLDER_SORT_PREFIX = "folder_sort_"
+        private const val KEY_FOLDER_CUSTOM_ORDER_PREFIX = "folder_custom_order_"
+        private const val KEY_FOLDER_DISPLAY_ORDER_PREFIX = "folder_display_order_"
         private const val KEY_PINNED_NOTE_PATHS = "pinned_note_paths"
         private const val KEY_FAVORITE_NOTE_PATHS = "favorite_note_paths"
         private const val KEY_VIEW_MODE = "view_mode"
@@ -50,6 +52,8 @@ class PrefsManager(context: Context) {
         private const val KEY_DRAWER_ITEM_ORDER = "drawer_item_order"
         private const val KEY_DRAWER_HIDDEN_ITEMS = "drawer_hidden_items"
         private const val KEY_DRAWER_ITEM_LABEL_PREFIX = "drawer_item_label_"
+        private const val KEY_SELECTION_TOOLBAR_ITEM_ORDER = "selection_toolbar_item_order"
+        private const val KEY_SELECTION_TOOLBAR_MORE_ITEMS = "selection_toolbar_more_items"
         private const val KEY_APP_PASSWORD = "app_password_hash"
         private const val KEY_PRIVACY_PASSWORD = "privacy_password_hash"
         private const val KEY_SAFETY_WORD = "safety_word_hash"
@@ -66,6 +70,10 @@ class PrefsManager(context: Context) {
         private const val KEY_TRASH_AUTO_CLEAN_DAYS = "trash_auto_clean_days"
         private const val KEY_PASSWORD_INPUT_MODE = "password_input_mode"
         private const val KEY_SHOW_YAML_TAGS_ON_LOOSE_CARDS = "show_yaml_tags_on_loose_cards"
+        private const val KEY_SHOW_MODIFIED_DATE_ON_CARDS = "show_modified_date_on_cards"
+        private const val KEY_SHOW_NOTE_TITLE_ON_CARDS = "show_note_title_on_cards"
+        private const val KEY_SHOW_DATE_FILENAME_TITLE_ON_CARDS = "show_date_filename_title_on_cards"
+        private const val KEY_CUSTOM_HIDDEN_FILENAME_PATTERNS = "custom_hidden_filename_patterns"
         const val DEFAULT_TRASH_FOLDER_NAME = ".trash"
         const val DEFAULT_DRAFT_FOLDER_NAME = "草稿"
         const val DEFAULT_IMAGE_FOLDER = "attachments"
@@ -73,6 +81,8 @@ class PrefsManager(context: Context) {
         const val DEFAULT_HISTORY_VERSION_LIMIT = 20
         const val DEFAULT_NOTE_SIDE_PANELS_ENABLED = true
         const val DEFAULT_PREVIEW_DOUBLE_TAP_INTERVAL_MS = 180
+        const val DEFAULT_HIDDEN_DATE_FILENAME_PATTERN = "yyyy.MM.dd.HHmmss"
+        const val DEFAULT_HIDDEN_COPY_FILENAME_PATTERN = "yyyy.MM.dd.HHmmss~副本"
         const val DEFAULT_TRASH_AUTO_CLEAN_DAYS = 0
         const val MIN_HISTORY_VERSION_LIMIT = 1
         const val MAX_HISTORY_VERSION_LIMIT = 500
@@ -83,6 +93,7 @@ class PrefsManager(context: Context) {
     enum class SortOrder {
         DATE_MODIFIED,
         TITLE,
+        CUSTOM,
     }
 
     enum class SortDirection {
@@ -141,7 +152,8 @@ class PrefsManager(context: Context) {
     fun getSortOrder(): SortOrder {
         val name = prefs.getString(KEY_SORT_ORDER, SortOrder.DATE_MODIFIED.name)
         return try {
-            SortOrder.valueOf(name ?: SortOrder.DATE_MODIFIED.name)
+            val order = SortOrder.valueOf(name ?: SortOrder.DATE_MODIFIED.name)
+            if (order == SortOrder.CUSTOM) SortOrder.DATE_MODIFIED else order
         } catch (e: Exception) {
             SortOrder.DATE_MODIFIED
         }
@@ -182,6 +194,60 @@ class PrefsManager(context: Context) {
 
     fun clearFolderSortSettings(folder: String) {
         prefs.edit().remove(folderSortKey(folder)).apply()
+    }
+
+    fun saveFolderCustomOrder(
+        folder: String,
+        paths: Collection<String>,
+    ) {
+        val normalizedPaths = paths
+            .map(::normalizeNotePath)
+            .filter { it.isNotBlank() }
+            .distinct()
+        prefs.edit()
+            .putString(folderCustomOrderKey(folder), normalizedPaths.joinToString("\n"))
+            .apply()
+    }
+
+    fun getFolderCustomOrder(folder: String): List<String> {
+        return prefs.getString(folderCustomOrderKey(folder), null)
+            .orEmpty()
+            .lineSequence()
+            .map(::normalizeNotePath)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+    }
+
+    fun clearFolderCustomOrder(folder: String) {
+        prefs.edit().remove(folderCustomOrderKey(folder)).apply()
+    }
+
+    fun saveFolderDisplayOrder(
+        parentFolder: String,
+        folderPaths: Collection<String>,
+    ) {
+        val normalizedPaths = folderPaths
+            .map(::normalizeNotePath)
+            .filter { it.isNotBlank() }
+            .distinct()
+        prefs.edit()
+            .putString(folderDisplayOrderKey(parentFolder), normalizedPaths.joinToString("\n"))
+            .apply()
+    }
+
+    fun getFolderDisplayOrder(parentFolder: String): List<String> {
+        return prefs.getString(folderDisplayOrderKey(parentFolder), null)
+            .orEmpty()
+            .lineSequence()
+            .map(::normalizeNotePath)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+    }
+
+    fun clearFolderDisplayOrder(parentFolder: String) {
+        prefs.edit().remove(folderDisplayOrderKey(parentFolder)).apply()
     }
 
     fun getPinnedNotePaths(): Set<String> {
@@ -415,7 +481,11 @@ class PrefsManager(context: Context) {
             .ifBlank { DEFAULT_IMAGE_FOLDER }
     }
 
-    private fun folderSortKey(folder: String): String = KEY_FOLDER_SORT_PREFIX + folder.trim().replace("\\", "/")
+    private fun folderSortKey(folder: String): String = KEY_FOLDER_SORT_PREFIX + normalizeNotePath(folder)
+
+    private fun folderCustomOrderKey(folder: String): String = KEY_FOLDER_CUSTOM_ORDER_PREFIX + normalizeNotePath(folder)
+
+    private fun folderDisplayOrderKey(parentFolder: String): String = KEY_FOLDER_DISPLAY_ORDER_PREFIX + normalizeNotePath(parentFolder)
 
     private fun normalizeNotePath(path: String): String =
         path
@@ -506,6 +576,42 @@ class PrefsManager(context: Context) {
     }
 
     private fun drawerItemLabelKey(itemId: DrawerItemId): String = KEY_DRAWER_ITEM_LABEL_PREFIX + itemId.name
+    // endregion
+
+    // region 长按选择栏功能项编辑
+    enum class SelectionToolbarItemId {
+        MOVE, COPY, PIN, FAVORITE, TAG, ARCHIVE, PROPERTIES, SHARE, PRIVACY, DELETE;
+
+        companion object {
+            val DEFAULT_ORDER: List<SelectionToolbarItemId> =
+                listOf(MOVE, COPY, PIN, FAVORITE, TAG, ARCHIVE, PROPERTIES, SHARE, PRIVACY, DELETE)
+            val DEFAULT_MORE_ITEMS: Set<SelectionToolbarItemId> =
+                setOf(ARCHIVE, PROPERTIES, SHARE, PRIVACY, DELETE)
+        }
+    }
+
+    fun getSelectionToolbarItemOrder(): List<SelectionToolbarItemId> {
+        val raw = prefs.getString(KEY_SELECTION_TOOLBAR_ITEM_ORDER, null) ?: return SelectionToolbarItemId.DEFAULT_ORDER
+        val ids = raw.split(",").mapNotNull { runCatching { SelectionToolbarItemId.valueOf(it) }.getOrNull() }
+        val result = ids.toMutableList()
+        SelectionToolbarItemId.DEFAULT_ORDER.forEach { if (it !in result) result.add(it) }
+        return result
+    }
+
+    fun saveSelectionToolbarItemOrder(order: List<SelectionToolbarItemId>) {
+        val normalized = order.distinct().toMutableList()
+        SelectionToolbarItemId.DEFAULT_ORDER.forEach { if (it !in normalized) normalized.add(it) }
+        prefs.edit().putString(KEY_SELECTION_TOOLBAR_ITEM_ORDER, normalized.joinToString(",") { it.name }).apply()
+    }
+
+    fun getSelectionToolbarMoreItems(): Set<SelectionToolbarItemId> =
+        prefs.getStringSet(KEY_SELECTION_TOOLBAR_MORE_ITEMS, null)
+            ?.mapNotNull { runCatching { SelectionToolbarItemId.valueOf(it) }.getOrNull() }
+            ?.toSet() ?: SelectionToolbarItemId.DEFAULT_MORE_ITEMS
+
+    fun saveSelectionToolbarMoreItems(items: Set<SelectionToolbarItemId>) {
+        prefs.edit().putStringSet(KEY_SELECTION_TOOLBAR_MORE_ITEMS, items.map { it.name }.toSet()).apply()
+    }
     // endregion
 
     // region 应用密码 / 隐私密码
@@ -644,9 +750,9 @@ class PrefsManager(context: Context) {
 
     // region 密码输入方式
     fun getPasswordInputMode(): PasswordInputMode {
-        val name = prefs.getString(KEY_PASSWORD_INPUT_MODE, PasswordInputMode.COMPLEX.name)
-        return runCatching { PasswordInputMode.valueOf(name ?: PasswordInputMode.COMPLEX.name) }
-            .getOrDefault(PasswordInputMode.COMPLEX)
+        val name = prefs.getString(KEY_PASSWORD_INPUT_MODE, PasswordInputMode.SIMPLE.name)
+        return runCatching { PasswordInputMode.valueOf(name ?: PasswordInputMode.SIMPLE.name) }
+            .getOrDefault(PasswordInputMode.SIMPLE)
     }
 
     fun savePasswordInputMode(mode: PasswordInputMode) {
@@ -654,12 +760,57 @@ class PrefsManager(context: Context) {
     }
     // endregion
 
-    // region 首页标签显示
+    // region 首页卡片显示
     fun isLooseCardYamlTagsVisible(): Boolean = prefs.getBoolean(KEY_SHOW_YAML_TAGS_ON_LOOSE_CARDS, false)
 
     fun saveLooseCardYamlTagsVisible(visible: Boolean) {
         prefs.edit().putBoolean(KEY_SHOW_YAML_TAGS_ON_LOOSE_CARDS, visible).apply()
     }
+
+    fun isModifiedDateOnCardsVisible(): Boolean = prefs.getBoolean(KEY_SHOW_MODIFIED_DATE_ON_CARDS, false)
+
+    fun saveModifiedDateOnCardsVisible(visible: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_MODIFIED_DATE_ON_CARDS, visible).apply()
+    }
+
+    fun isNoteTitleOnCardsVisible(): Boolean = prefs.getBoolean(KEY_SHOW_NOTE_TITLE_ON_CARDS, true)
+
+    fun saveNoteTitleOnCardsVisible(visible: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_NOTE_TITLE_ON_CARDS, visible).apply()
+    }
+
+    fun isDateFilenameTitleOnCardsVisible(): Boolean = prefs.getBoolean(KEY_SHOW_DATE_FILENAME_TITLE_ON_CARDS, true)
+
+    fun saveDateFilenameTitleOnCardsVisible(visible: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_DATE_FILENAME_TITLE_ON_CARDS, visible).apply()
+    }
+
+    fun getCustomHiddenFilenamePatterns(): List<String> {
+        val saved = prefs.getString(KEY_CUSTOM_HIDDEN_FILENAME_PATTERNS, null)
+        return saved
+            ?.lineSequence()
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?.distinct()
+            ?.toList()
+            ?.takeIf { it.isNotEmpty() }
+            ?: defaultHiddenFilenamePatterns()
+    }
+
+    fun saveCustomHiddenFilenamePatterns(patterns: List<String>) {
+        prefs.edit()
+            .putString(
+                KEY_CUSTOM_HIDDEN_FILENAME_PATTERNS,
+                patterns.map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .joinToString("\n"),
+            )
+            .apply()
+    }
+
+    fun defaultHiddenFilenamePatterns(): List<String> =
+        listOf(DEFAULT_HIDDEN_DATE_FILENAME_PATTERN, DEFAULT_HIDDEN_COPY_FILENAME_PATTERN)
     // endregion
 
     private fun Collection<String>.normalizedNotePathSet(): Set<String> =

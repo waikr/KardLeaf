@@ -16,6 +16,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
+import com.kangle.kardleaf.data.utils.NoteTextStats
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -57,11 +58,12 @@ fun CreateLabelDialog(
 @Composable
 fun NotePropertiesDialog(
     note: Note,
+    textStats: NoteTextStats? = null,
     onDismiss: () -> Unit,
 ) {
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
     val numberFormat = remember { NumberFormat.getIntegerInstance(Locale.getDefault()) }
-    val wordCount = remember(note.content) { countWords(note.content) }
+    val pendingText = "统计中…"
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -71,7 +73,11 @@ fun NotePropertiesDialog(
                 PropertyRow("文件名", note.file.name)
                 PropertyRow("文件夹", note.folder.ifBlank { "根目录" })
                 PropertyRow("路径", note.file.path)
-                PropertyRow("字数", numberFormat.format(wordCount))
+                PropertyRow("字符数", textStats?.let { numberFormat.format(it.characterCount) } ?: pendingText)
+                PropertyRow("词数", textStats?.let { numberFormat.format(it.wordCountWithPunctuation) } ?: pendingText)
+                PropertyRow("词数（不带标点）", textStats?.let { numberFormat.format(it.wordCountWithoutPunctuation) } ?: pendingText)
+                PropertyRow("行数", textStats?.let { numberFormat.format(it.lineCount) } ?: pendingText)
+                PropertyRow("段落数", textStats?.let { numberFormat.format(it.paragraphCount) } ?: pendingText)
                 PropertyRow("创建时间", dateFormat.format(note.createdAt))
                 PropertyRow("修改时间", dateFormat.format(note.lastModified))
             }
@@ -102,8 +108,3 @@ private fun PropertyRow(
     }
 }
 
-private fun countWords(text: String): Int {
-    val cjkCount = Regex("""[\u4E00-\u9FFF]""").findAll(text).count()
-    val latinCount = Regex("""[A-Za-z0-9]+(?:['_-][A-Za-z0-9]+)*""").findAll(text).count()
-    return cjkCount + latinCount
-}

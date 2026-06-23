@@ -22,6 +22,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,6 +32,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.data.model.NoteRemark
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
+import com.kangle.kardleaf.data.utils.NoteTextStats
+import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -101,6 +104,7 @@ internal fun NoteOutlineSidePanel(
 @Composable
 internal fun NoteRemarkSidePanel(
     frontMatterProperties: List<NoteFormatUtils.FrontMatterProperty>,
+    textStats: NoteTextStats?,
     remarks: List<NoteRemark>,
     draft: String,
     onDraftChange: (String) -> Unit,
@@ -128,6 +132,7 @@ internal fun NoteRemarkSidePanel(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+            NoteTextStatsCard(textStats)
             NoteFrontMatterPropertiesCard(frontMatterProperties)
             BasicTextField(
                 value = draft,
@@ -200,6 +205,68 @@ internal fun NoteRemarkSidePanel(
     }
 }
 
+
+@Composable
+private fun NoteTextStatsCard(textStats: NoteTextStats?) {
+    val numberFormat = remember { NumberFormat.getIntegerInstance(Locale.getDefault()) }
+    val pendingText = "统计中…"
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f))
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(14.dp),
+            )
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "统计",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        NoteStatsRow("字符数", textStats?.let { numberFormat.format(it.characterCount) } ?: pendingText)
+        NoteStatsRow("词数", textStats?.let { numberFormat.format(it.wordCountWithPunctuation) } ?: pendingText)
+        NoteStatsRow("词数（不带标点）", textStats?.let { numberFormat.format(it.wordCountWithoutPunctuation) } ?: pendingText)
+        NoteStatsRow("行数", textStats?.let { numberFormat.format(it.lineCount) } ?: pendingText)
+        NoteStatsRow("段落数", textStats?.let { numberFormat.format(it.paragraphCount) } ?: pendingText)
+    }
+}
+
+@Composable
+private fun NoteStatsRow(
+    label: String,
+    value: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(0.42f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(0.58f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 @Composable
 private fun NoteFrontMatterPropertiesCard(properties: List<NoteFormatUtils.FrontMatterProperty>) {
     if (properties.isEmpty()) return
@@ -226,23 +293,23 @@ private fun NoteFrontMatterPropertiesCard(properties: List<NoteFormatUtils.Front
         properties.forEach { property ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.Top,
             ) {
                 Text(
                     text = frontMatterDisplayName(property.key),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(0.42f),
-                    maxLines = 2,
+                    modifier = Modifier.weight(0.28f),
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = frontMatterDisplayValue(property),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(0.58f),
-                    maxLines = 3,
+                    modifier = Modifier.weight(0.72f),
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -254,7 +321,7 @@ private fun frontMatterDisplayName(key: String): String =
     when (key.trim()) {
         "tags" -> "标签"
         "aliases" -> "别名"
-        "kardleaf_id" -> "KardLeaf ID"
+        "kardleaf_id" -> "ID"
         "title" -> "标题"
         "path" -> "位置"
         "created" -> "创建时间"

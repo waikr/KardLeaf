@@ -180,6 +180,13 @@ class KardLeafEditorController {
         radiusPx: Float,
     ): Boolean = currentEditorView()?.shouldReserveContentTouchForEditing(windowX, windowY, radiusPx) ?: false
 
+    fun getFastScrollMetrics(): EditorFastScrollMetrics =
+        currentEditorView()?.getFastScrollMetrics() ?: EditorFastScrollMetrics()
+
+    fun fastScrollToRatio(ratio: Float) {
+        currentEditorView()?.fastScrollToRatio(ratio)
+    }
+
     fun insertAtCursor(
         prefix: String,
         suffix: String = "",
@@ -307,6 +314,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
 
     private var titleChangedCallback: (() -> Unit)? = null
     private var userInteractionCallback: (() -> Unit)? = null
+    private var scrollChangedCallback: (() -> Unit)? = null
 
     var boundDocumentKey: String? = null
         private set
@@ -343,6 +351,8 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
             isFillViewport = true
             clipToPadding = false
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -416,6 +426,9 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         titleEditText.setOnTouchListener { _, event -> notifyUserInteractionOnTouch(event) }
         contentEditText.setOnTouchListener { _, event -> notifyUserInteractionOnTouch(event) }
         scrollView.setOnTouchListener { _, event -> notifyUserInteractionOnTouch(event) }
+        scrollView.setOnScrollChangeListener { _, _, _, _, _ ->
+            scrollChangedCallback?.invoke()
+        }
 
         editorColumn.addView(titleEditText)
         editorColumn.addView(contentEditText)
@@ -444,9 +457,11 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         onSelectionChanged: (Int, Int) -> Unit,
         onUndoRedoChanged: () -> Unit,
         onUserInteraction: () -> Unit,
+        onFastScrollSourceScrolled: () -> Unit,
     ) {
         titleChangedCallback = onTitleChanged
         userInteractionCallback = onUserInteraction
+        scrollChangedCallback = onFastScrollSourceScrolled
         titleEditText.hint = titleHint
         titleEditText.setTextColor(textColor)
         titleEditText.setHintTextColor(hintColor)
@@ -540,6 +555,29 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
     fun contentLength(): Int = contentEditText.length()
 
     fun getContentSelection(): TextRange = contentEditText.getSelectionRange()
+
+    fun getFastScrollMetrics(): EditorFastScrollMetrics {
+        val maxScrollY = maxScrollY()
+        if (scrollView.height <= 0 || maxScrollY <= 0) return EditorFastScrollMetrics()
+        val contentHeight = scrollView.height + maxScrollY
+        return EditorFastScrollMetrics(
+            canScroll = true,
+            ratio = (scrollView.scrollY.toFloat() / maxScrollY).coerceIn(0f, 1f),
+            thumbFraction = (scrollView.height.toFloat() / contentHeight).coerceIn(0f, 1f),
+        )
+    }
+
+    fun fastScrollToRatio(ratio: Float) {
+        val maxScrollY = maxScrollY()
+        if (maxScrollY <= 0) return
+        val targetScrollY = (ratio.coerceIn(0f, 1f) * maxScrollY).roundToInt()
+        scrollView.scrollTo(0, targetScrollY.coerceIn(0, maxScrollY))
+    }
+
+    private fun maxScrollY(): Int {
+        val contentHeight = scrollView.getChildAt(0)?.height ?: 0
+        return (contentHeight - scrollView.height).coerceAtLeast(0)
+    }
 
     fun shouldReserveContentTouchForEditing(
         windowX: Float,
@@ -696,6 +734,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         isDisposed = true
         titleChangedCallback = null
         userInteractionCallback = null
+        scrollChangedCallback = null
         titleEditText.removeTextChangedListener(titleWatcher)
         contentEditText.configureMarkdownWatcher(null)
         contentEditText.releaseInlineImagePreviews()
@@ -718,6 +757,7 @@ fun KardLeafNativeEditor(
     onContentChanged: () -> Unit,
     onUndoRedoChanged: () -> Unit,
     onUserInteraction: () -> Unit = {},
+    onFastScrollSourceScrolled: () -> Unit = {},
     modifier: Modifier = Modifier,
     titleHint: String = "",
     contentHint: String = "",
@@ -735,6 +775,7 @@ fun KardLeafNativeEditor(
     val currentOnContentChanged = rememberUpdatedState(onContentChanged)
     val currentOnUndoRedoChanged = rememberUpdatedState(onUndoRedoChanged)
     val currentOnUserInteraction = rememberUpdatedState(onUserInteraction)
+    val currentOnFastScrollSourceScrolled = rememberUpdatedState(onFastScrollSourceScrolled)
     val handledFocusToken = remember { AtomicInteger(-1) }
     val lastAppliedUpdateSignature = remember { AtomicReference("") }
     val skippedUpdateCount = remember { AtomicInteger(0) }
@@ -797,6 +838,7 @@ fun KardLeafNativeEditor(
                     onSelectionChanged = { start, end -> controller.updateCachedSelection(start, end) },
                     onUndoRedoChanged = { currentOnUndoRedoChanged.value() },
                     onUserInteraction = { currentOnUserInteraction.value() },
+                    onFastScrollSourceScrolled = { currentOnFastScrollSourceScrolled.value() },
                 )
                 view.bindDocument(
                     documentKey = documentKey,

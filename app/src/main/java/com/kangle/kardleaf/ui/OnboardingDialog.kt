@@ -528,7 +528,7 @@ private fun AppIntroScene() {
             }
             Spacer(modifier = Modifier.height(cardSpacer))
             IntroInfoCard("定位", "卡片式 Markdown 笔记软件", stacked = largeTextMode)
-            IntroInfoCard("主要能力", "Markdown、目录管理、图片、隐私仓库、历史版本", stacked = largeTextMode)
+            IntroInfoCard("设计重点", "本地优先、文件开放、轻量编辑", stacked = largeTextMode)
         }
     }
 }

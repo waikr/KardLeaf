@@ -60,6 +60,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -108,6 +109,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
@@ -119,13 +121,16 @@ import com.kangle.kardleaf.data.model.NoteHistory
 import com.kangle.kardleaf.data.model.NoteRemark
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
+import com.kangle.kardleaf.data.utils.NoteTextStats
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -133,6 +138,7 @@ private const val EDITOR_TRACE_TAG = "KardLeafEditorTrace"
 private const val EDITOR_GESTURE_TAG = "KardLeafGestureTrace"
 private const val BACK_TRACE_TAG = "KardLeafBackTrace"
 private const val MENU_REOPEN_GUARD_MS = 250L
+private const val DIRECT_EDIT_MAX_CHARS = 600_000
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
@@ -152,6 +158,7 @@ fun EditorScreen(
     val allNotes by viewModel.allNotes.collectAsState(initial = emptyList())
     val externalDraft by viewModel.externalNoteDraft.collectAsState()
     val isEditorOpen by viewModel.isEditorOpen.collectAsState()
+    val isOpeningNoteContent by viewModel.isOpeningNoteContent.collectAsState()
     val isPrivacyEditor = privacyDocumentKey != null
     val effectiveEditorOpen = isPrivacyEditor || isEditorOpen
     val labels by viewModel.labels.collectAsState()
@@ -188,7 +195,10 @@ fun EditorScreen(
     // The complete editor body lives inside KardLeafNativeEditorView. Compose keeps
     // only lightweight chrome state and reads a full snapshot on save/preview/search/outline.
     val editorController = remember { KardLeafEditorController() }
+    val previewController = remember { PreviewWebViewController() }
+    val fastScrollSignal = remember { EditorFastScrollSignal() }
     val editorDocumentKey = privacyDocumentKey ?: currentNote?.id ?: "external:${externalDraft.hashCode()}:$initialLabel"
+    var noteTextStats by remember(editorDocumentKey) { mutableStateOf<NoteTextStats?>(null) }
     var effectivePrivacyNoteId by remember(privacyDocumentKey) { mutableStateOf(privacyNoteId ?: 0L) }
     var privacyEditorDirty by remember(privacyDocumentKey) { mutableStateOf(false) }
     editorController.acceptInitialSnapshot(editorDocumentKey, initialTitle, initialContent)
@@ -206,17 +216,20 @@ fun EditorScreen(
             },
         )
     }
-    var renderedPreview by remember { mutableStateOf("") }
-    var previewRenderToken by remember { mutableStateOf(0) }
+    var renderedPreview by remember(editorDocumentKey) { mutableStateOf("") }
+    var previewRenderToken by remember(editorDocumentKey) { mutableStateOf(0) }
     var previewScrollRatio by remember(editorDocumentKey) { mutableStateOf(0f) }
     var pendingEditScrollRatio by remember(editorDocumentKey) { mutableStateOf<Float?>(null) }
+    var pendingEditScrollOffset by remember(editorDocumentKey) { mutableStateOf<Int?>(null) }
 
     val isNewPrivacyNote = isPrivacyEditor && (privacyNoteId ?: 0L) <= 0L
-    var isEditing by remember(editorDocumentKey, defaultOpenNoteMode) {
+    val blocksDirectEditForLargeNote = !isNewPrivacyNote && initialContent.length > DIRECT_EDIT_MAX_CHARS
+    var isEditing by remember(editorDocumentKey, defaultOpenNoteMode, blocksDirectEditForLargeNote) {
         mutableStateOf(
-            isNewPrivacyNote ||
-                (!isPrivacyEditor && currentNote == null) ||
-                defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT,
+            !blocksDirectEditForLargeNote &&
+                (isNewPrivacyNote ||
+                    (!isPrivacyEditor && currentNote == null) ||
+                    defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT),
         )
     }
 
@@ -923,26 +936,79 @@ fun EditorScreen(
         isEditing = false
     }
 
-    fun enterEditMode(preservePreviewPosition: Boolean = false) {
+    fun showLargeNoteEditBlockedToast() {
+        Toast.makeText(
+            context,
+            "当前笔记过大，暂时只能快速预览，避免编辑器卡死",
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    fun enterEditMode(
+        preservePreviewPosition: Boolean = false,
+        previewMarkdownOffset: Int? = null,
+    ) {
+        val snapshot = editorController.getSnapshot()
+        val currentTextLength = maxOf(initialContent.length, snapshot.content.length)
+        if (!isNewPrivacyNote && currentTextLength > DIRECT_EDIT_MAX_CHARS) {
+            showLargeNoteEditBlockedToast()
+            requestKeyboardOnEdit = false
+            pendingEditScrollRatio = null
+            pendingEditScrollOffset = null
+            isEditing = false
+            return
+        }
         if (preservePreviewPosition) {
-            val textLength = editorController.getText().length
-            val targetOffset = (textLength * previewScrollRatio).toInt().coerceIn(0, textLength)
+            val textLength = snapshot.content.length
+            val titlePrefixLength = "# ${snapshot.title}\n\n".length
+            val targetOffset = previewMarkdownOffset
+                ?.minus(titlePrefixLength)
+                ?.coerceIn(0, textLength)
+                ?: (textLength * previewScrollRatio).toInt().coerceIn(0, textLength)
             editorController.setSelection(targetOffset)
-            pendingEditScrollRatio = previewScrollRatio
+            pendingEditScrollOffset = targetOffset
+            pendingEditScrollRatio = if (previewMarkdownOffset == null) previewScrollRatio else null
         }
         isLeavingEditor = false
         requestKeyboardOnEdit = true
         isEditing = true
     }
 
-    LaunchedEffect(isEditing, pendingEditScrollRatio) {
+    LaunchedEffect(blocksDirectEditForLargeNote, isOpeningNoteContent, isEditing) {
+        if ((blocksDirectEditForLargeNote || isOpeningNoteContent) && isEditing) {
+            requestKeyboardOnEdit = false
+            pendingEditScrollRatio = null
+            pendingEditScrollOffset = null
+            isEditing = false
+        }
+    }
+
+    LaunchedEffect(isOpeningNoteContent, currentNote?.file?.path, blocksDirectEditForLargeNote, defaultOpenNoteMode) {
+        if (!isOpeningNoteContent &&
+            !blocksDirectEditForLargeNote &&
+            !isPrivacyEditor &&
+            currentNote != null &&
+            defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT
+        ) {
+            isEditing = true
+        }
+    }
+
+    LaunchedEffect(isEditing, pendingEditScrollRatio, pendingEditScrollOffset) {
+        val targetOffset = pendingEditScrollOffset
         val targetRatio = pendingEditScrollRatio
+        if (isEditing && targetOffset != null) {
+            withFrameNanos { }
+            editorController.setSelection(targetOffset)
+            editorController.scrollToOffset(targetOffset)
+            pendingEditScrollOffset = null
+            return@LaunchedEffect
+        }
         if (isEditing && targetRatio != null) {
             withFrameNanos { }
-            delay(220)
             val textLength = editorController.getText().length
-            val targetOffset = (textLength * targetRatio).toInt().coerceIn(0, textLength)
-            editorController.setSelection(targetOffset)
+            val ratioOffset = (textLength * targetRatio).toInt().coerceIn(0, textLength)
+            editorController.setSelection(ratioOffset)
             editorController.scrollToProgress(targetRatio)
             pendingEditScrollRatio = null
         }
@@ -963,8 +1029,9 @@ fun EditorScreen(
         }
     }
 
-    LaunchedEffect(isEditing, folder, editorDocumentKey, initialTitle, initialContent) {
-        if (!isEditing) {
+    LaunchedEffect(isEditing, isOpeningNoteContent, folder, editorDocumentKey, initialTitle, initialContent) {
+        if (!isEditing && !isOpeningNoteContent) {
+            withFrameNanos { }
             renderPreviewSnapshot(editorController.getSnapshot())
         }
     }
@@ -973,6 +1040,21 @@ fun EditorScreen(
     LaunchedEffect(shouldRefreshOutline) {
         if (shouldRefreshOutline) {
             outlineHeadings = extractMarkdownHeadings(editorController.getText())
+        }
+    }
+
+    val shouldRefreshNoteTextStats =
+        noteSidePanelsActive &&
+            !isNoteSidePanelDragging &&
+            noteSidePanelTargetPx <= -noteSidePanelWidthPx + 1f &&
+            noteSidePanelOffsetPx <= -noteSidePanelWidthPx * 0.96f
+    LaunchedEffect(editorDocumentKey, shouldRefreshNoteTextStats) {
+        if (shouldRefreshNoteTextStats) {
+            noteTextStats = null
+            val textSnapshot = editorController.getText()
+            noteTextStats = withContext(Dispatchers.Default) {
+                NoteTextStats.fromText(textSnapshot)
+            }
         }
     }
 
@@ -1161,8 +1243,8 @@ fun EditorScreen(
                                     showLabelMenu = false
                                 },
                                 properties = PopupProperties(
-                                    focusable = true,
-                                    dismissOnBackPress = true,
+                                    focusable = false,
+                                    dismissOnBackPress = false,
                                     dismissOnClickOutside = true,
                                 ),
                             ) {
@@ -1253,8 +1335,8 @@ fun EditorScreen(
                                     showMoreMenu = false
                                 },
                                 properties = PopupProperties(
-                                    focusable = true,
-                                    dismissOnBackPress = true,
+                                    focusable = false,
+                                    dismissOnBackPress = false,
                                     dismissOnClickOutside = true,
                                 ),
                             ) {
@@ -1309,8 +1391,8 @@ fun EditorScreen(
                                     showMoreMenu = false
                                 },
                                 properties = PopupProperties(
-                                    focusable = true,
-                                    dismissOnBackPress = true,
+                                    focusable = false,
+                                    dismissOnBackPress = false,
                                     dismissOnClickOutside = true,
                                 ),
                             ) {
@@ -1324,7 +1406,7 @@ fun EditorScreen(
                                         },
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("添加到隐私库") },
+                                        text = { Text("保护") },
                                         leadingIcon = { Icon(Icons.Outlined.Lock, null) },
                                         onClick = {
                                             addCurrentNoteToPrivacy(currentNoteObj) { leaveEditor() }
@@ -1555,8 +1637,8 @@ fun EditorScreen(
                                                         showHeadingMenu = false
                                                     },
                                                     properties = PopupProperties(
-                                                        focusable = true,
-                                                        dismissOnBackPress = true,
+                                                        focusable = false,
+                                                        dismissOnBackPress = false,
                                                         dismissOnClickOutside = true,
                                                     ),
                                                 ) {
@@ -1616,8 +1698,8 @@ fun EditorScreen(
                                                         showMathMenu = false
                                                     },
                                                     properties = PopupProperties(
-                                                        focusable = true,
-                                                        dismissOnBackPress = true,
+                                                        focusable = false,
+                                                        dismissOnBackPress = false,
                                                         dismissOnClickOutside = true,
                                                     ),
                                                 ) {
@@ -1666,7 +1748,7 @@ fun EditorScreen(
                     .then(noteSidePanelContentDragModifier)
                     .then(noteSidePanelActiveDragModifier),
         ) {
-            if (isEditing) {
+            if (isEditing && !blocksDirectEditForLargeNote) {
                 KardLeafNativeEditor(
                     initialTitle = initialTitle,
                     initialContent = initialContent,
@@ -1679,6 +1761,7 @@ fun EditorScreen(
                     },
                     onUndoRedoChanged = { syncUndoRedoState() },
                     onUserInteraction = { hideNoteSearchCursor("editor content touch") },
+                    onFastScrollSourceScrolled = { fastScrollSignal.notifyScrollChanged() },
                     titleHint = stringResource(R.string.title_hint),
                     contentHint = stringResource(R.string.start_typing_hint),
                     textColor = MaterialTheme.colorScheme.onBackground,
@@ -1692,39 +1775,58 @@ fun EditorScreen(
                 )
             } else {
                 PreviewWebView(
-                    content = renderedPreview.ifBlank {
-                        val snapshot = editorController.getSnapshot()
-                        "# ${snapshot.title}\n\n${snapshot.content}"
-                    },
+                    content = if (isOpeningNoteContent) "" else renderedPreview,
                     isDark = isDark,
+                    controller = previewController,
                     modifier = Modifier.fillMaxSize(),
                     searchQuery = if (showNoteSearch) noteSearchQuery else "",
                     headingScrollText = previewHeadingScrollText,
                     headingScrollLevel = previewHeadingScrollLevel,
                     headingScrollToken = previewHeadingScrollToken,
-                    onDoubleTap = { enterEditMode(preservePreviewPosition = true) },
+                    onDoubleTap = { offset -> enterEditMode(preservePreviewPosition = true, previewMarkdownOffset = offset) },
                     onUserInteraction = { hideNoteSearchCursor("preview touch") },
                     onScrollRatioChanged = { previewScrollRatio = it },
+                    onFastScrollSourceScrolled = { fastScrollSignal.notifyScrollChanged() },
                     doubleTapIntervalMs = previewDoubleTapIntervalMs,
                     onCheckboxToggled = { index, checked ->
-                        val snapshot = editorController.getSnapshot()
-                        val newText = toggleTask(snapshot.content, index, checked)
-                        val updatedSnapshot = snapshot.copy(content = newText)
-                        editorController.replaceAll(newText)
-                        renderPreviewSnapshot(updatedSnapshot)
-                        if (isPrivacyEditor) {
-                            val privacyTitle = snapshot.title.ifBlank { "未命名" }
-                            onSavePrivacyNote?.invoke(effectivePrivacyNoteId, privacyTitle, newText) { savedId ->
-                                effectivePrivacyNoteId = savedId
+                        if (!isOpeningNoteContent) {
+                            val snapshot = editorController.getSnapshot()
+                            val newText = toggleTask(snapshot.content, index, checked)
+                            val updatedSnapshot = snapshot.copy(content = newText)
+                            editorController.replaceAll(newText)
+                            renderPreviewSnapshot(updatedSnapshot)
+                            if (isPrivacyEditor) {
+                                val privacyTitle = snapshot.title.ifBlank { "未命名" }
+                                onSavePrivacyNote?.invoke(effectivePrivacyNoteId, privacyTitle, newText) { savedId ->
+                                    effectivePrivacyNoteId = savedId
+                                }
+                            } else {
+                                viewModel.saveNote(
+                                    buildCurrentNote().copy(content = newText),
+                                    currentNote?.file,
+                                )
                             }
-                        } else {
-                            viewModel.saveNote(
-                                buildCurrentNote().copy(content = newText),
-                                currentNote?.file,
-                            )
                         }
                     },
                 )
+                if (isOpeningNoteContent) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                            Text(
+                                text = "正在加载正文",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
             }
             if (noteSidePanelsActive && (!noteSidePanelHasOffset || isNoteSidePanelDragging)) {
                 Box(
@@ -1744,6 +1846,46 @@ fun EditorScreen(
                             .width(noteSidePanelEdgeWidth)
                             .zIndex(if (isNoteSidePanelDragging) 3f else 0.5f)
                             .then(noteSidePanelEdgeDragModifier),
+                )
+            }
+            if (!noteSidePanelHasOffset || isNoteSidePanelDragging) {
+                AndroidView(
+                    modifier =
+                        Modifier
+                            .align(Alignment.CenterEnd)
+                            .fillMaxHeight()
+                            .width(noteSidePanelEdgeWidth)
+                            .zIndex(4f),
+                    factory = { fastScrollContext -> EditorFastScrollEdgeView(fastScrollContext) },
+                    update = { fastScrollView ->
+                        fastScrollSignal.setListener { fastScrollView.showForScroll() }
+                        fastScrollView.configure(
+                            metricsProvider = {
+                                if (isEditing) {
+                                    editorController.getFastScrollMetrics()
+                                } else {
+                                    previewController.getFastScrollMetrics()
+                                }
+                            },
+                            onScrollToRatio = { ratio ->
+                                if (isEditing) {
+                                    editorController.fastScrollToRatio(ratio)
+                                } else {
+                                    previewController.fastScrollToRatio(ratio)
+                                }
+                            },
+                            onFastScrollInteraction = {
+                                hideNoteSearchCursor(if (isEditing) "editor fast scroll" else "preview fast scroll")
+                            },
+                            sidePanelDragEnabled = {
+                                noteSidePanelsActive && (!noteSidePanelHasOffset || isNoteSidePanelDragging)
+                            },
+                            onSidePanelDragStart = { startNoteSidePanelDrag() },
+                            onSidePanelDragBy = { dragAmount -> dragNoteSidePanelBy(dragAmount) },
+                            onSidePanelDragEnd = { settleNoteSidePanelDrag() },
+                            onSidePanelDragCancel = { cancelNoteSidePanelDrag() },
+                        )
+                    },
                 )
             }
         }
@@ -1784,6 +1926,7 @@ fun EditorScreen(
             )
             NoteRemarkSidePanel(
                 frontMatterProperties = noteSidePanelProperties,
+                textStats = noteTextStats,
                 remarks = noteRemarks,
                 draft = noteRemarkDraft,
                 onDraftChange = { noteRemarkDraft = it },

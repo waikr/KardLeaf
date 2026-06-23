@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -46,7 +47,18 @@ import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.repository.PrefsManager
+import java.text.ParsePosition
+import java.text.SimpleDateFormat
+import java.util.Locale
 import kotlinx.coroutines.withTimeoutOrNull
+
+private val CardPreviewWikiImageRegex = Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
+private val CardPreviewMarkdownImageRegex = Regex("""!\[[^]]*]\(([^)]+)\)""")
+private val CardPreviewHeadingRegex = Regex("""^#{1,6}\s+""")
+private val CardPreviewTaskRegex = Regex("""^\s*[-*+]\s+\[[ xX]]\s+""")
+private val CardPreviewBulletRegex = Regex("""^\s*[-*+]\s+""")
+private val CardPreviewOrderedListRegex = Regex("""^\s*\d+\.\s+""")
+private val CardPreviewMarkdownMarksRegex = Regex("""[*_`~>#]""")
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -56,6 +68,11 @@ fun NoteCard(
     cardDensity: PrefsManager.CardDensity,
     showFolderTag: Boolean,
     showYamlTags: Boolean = false,
+    showModifiedDate: Boolean = false,
+    showNoteTitle: Boolean = true,
+    showDateFilenameTitle: Boolean = true,
+    customHiddenFilenamePatterns: List<String> = emptyList(),
+    unnamedNoteDateFormat: String = KardLeafCustomFeatures.DefaultUnnamedNoteDateFormat,
     searchQuery: String = "",
     searchMatch: SearchMatch? = null,
     showImagePreview: Boolean = false,
@@ -88,16 +105,35 @@ fun NoteCard(
             null
         }
     }
+    val displayTitle = remember(note.title, showNoteTitle, showDateFilenameTitle, customHiddenFilenamePatterns, unnamedNoteDateFormat) {
+        note.title
+            .takeIf { it.isNotBlank() && showNoteTitle }
+            ?.takeUnless { title ->
+                !showDateFilenameTitle && shouldHideDateFilenameTitle(
+                    title = title,
+                    dateFormat = unnamedNoteDateFormat,
+                    hiddenFilenamePatterns = customHiddenFilenamePatterns,
+                )
+            }
+    }
+    val modifiedDateText = remember(note.lastModified.time) {
+        SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()).format(note.lastModified)
+    }
     val imageReference = note.firstImageReference?.takeIf { it.isNotBlank() }
     val shouldLoadThumbnail = showImagePreview && searchMatch == null && imageReference != null
     var thumbnailBitmap by remember(note.id, imageReference, note.lastModified.time) { mutableStateOf<Bitmap?>(null) }
 
-    LaunchedEffect(shouldLoadThumbnail, note.id, imageReference, note.lastModified.time) {
-        thumbnailBitmap = null
-        if (shouldLoadThumbnail) {
-            thumbnailBitmap = withTimeoutOrNull(2000L) {
-                runCatching { loadImageThumbnail(note) }.getOrNull()
-            }
+    LaunchedEffect(shouldLoadThumbnail, note.id, imageReference, note.lastModified.time, loadImageThumbnail) {
+        if (!shouldLoadThumbnail) {
+            thumbnailBitmap = null
+            return@LaunchedEffect
+        }
+
+        val loadedBitmap = withTimeoutOrNull(2000L) {
+            runCatching { loadImageThumbnail(note) }.getOrNull()
+        }
+        if (loadedBitmap != null || thumbnailBitmap == null) {
+            thumbnailBitmap = loadedBitmap
         }
     }
 
@@ -136,13 +172,13 @@ fun NoteCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    if (note.title.isNotEmpty()) {
+                    displayTitle?.let { title ->
                         Text(
                             text =
                                 if (searchQuery.isNotBlank()) {
-                                    highlightedText(note.title, searchQuery)
+                                    highlightedText(title, searchQuery)
                                 } else {
-                                    buildAnnotatedString { append(note.title) }
+                                    buildAnnotatedString { append(title) }
                                 },
                             style = titleStyle,
                             modifier = Modifier.padding(bottom = titleBottomPadding),
@@ -225,20 +261,37 @@ fun NoteCard(
             }
 
             val visibleYamlTags = if (!isCompact && showYamlTags) note.tags.take(3) else emptyList()
-            if (folderTag != null || visibleYamlTags.isNotEmpty()) {
+            val showModifiedDateText = !isCompact && showModifiedDate
+            if (folderTag != null || visibleYamlTags.isNotEmpty() || showModifiedDateText) {
                 Row(
                     modifier =
                         Modifier
                             .fillMaxWidth()
                             .padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    folderTag?.let { tag ->
-                        NoteCardTagChip(tag)
+                    if (folderTag != null || visibleYamlTags.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            folderTag?.let { tag ->
+                                NoteCardTagChip(tag)
+                            }
+                            visibleYamlTags.forEach { tag ->
+                                NoteCardTagChip("#$tag")
+                            }
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.weight(1f))
                     }
-                    visibleYamlTags.forEach { tag ->
-                        NoteCardTagChip("#$tag")
+                    if (showModifiedDateText) {
+                        Text(
+                            text = modifiedDateText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -287,6 +340,62 @@ private fun highlightedText(
 }
 
 
+private fun shouldHideDateFilenameTitle(
+    title: String,
+    dateFormat: String,
+    hiddenFilenamePatterns: List<String>,
+): Boolean {
+    val patterns = hiddenFilenamePatterns.ifEmpty {
+        listOf(
+            PrefsManager.DEFAULT_HIDDEN_DATE_FILENAME_PATTERN,
+            PrefsManager.DEFAULT_HIDDEN_COPY_FILENAME_PATTERN,
+        )
+    }
+    return isPureDateTitle(title, dateFormat) || patterns.any { pattern ->
+        isHiddenFilenamePatternMatch(title, pattern)
+    }
+}
+
+private fun isHiddenFilenamePatternMatch(
+    title: String,
+    pattern: String,
+): Boolean {
+    val trimmedTitle = title.trim()
+    val trimmedPattern = pattern.trim()
+    if (trimmedTitle.isBlank() || trimmedPattern.isBlank()) return false
+    if (trimmedTitle == trimmedPattern) return true
+    if (isPureDateTitle(trimmedTitle, trimmedPattern)) return true
+
+    val copyMarkerIndex = trimmedPattern.indexOf("~副本")
+    if (copyMarkerIndex <= 0) return false
+
+    val datePattern = trimmedPattern.substring(0, copyMarkerIndex)
+    return runCatching {
+        val formatter = SimpleDateFormat(datePattern, Locale.getDefault()).apply { isLenient = false }
+        val position = ParsePosition(0)
+        val parsedDate = formatter.parse(trimmedTitle, position)
+        if (parsedDate == null || position.index <= 0) {
+            false
+        } else {
+            val suffix = trimmedTitle.substring(position.index)
+            suffix == "~副本" || suffix.matches(Regex("""~副本\d*"""))
+        }
+    }.getOrDefault(false)
+}
+
+private fun isPureDateTitle(
+    title: String,
+    dateFormat: String,
+): Boolean {
+    val trimmed = title.trim()
+    if (trimmed.isBlank() || dateFormat.isBlank()) return false
+    return runCatching {
+        val formatter = SimpleDateFormat(dateFormat, Locale.getDefault()).apply { isLenient = false }
+        val position = ParsePosition(0)
+        formatter.parse(trimmed, position) != null && position.index == trimmed.length
+    }.getOrDefault(false)
+}
+
 private fun plainCardPreview(
     content: String,
     hideImagePlaceholders: Boolean = false,
@@ -297,19 +406,19 @@ private fun plainCardPreview(
             val withoutImages =
                 if (hideImagePlaceholders) {
                     line
-                        .replace(Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]"""), "")
-                        .replace(Regex("""!\[[^]]*]\(([^)]+)\)"""), "")
+                        .replace(CardPreviewWikiImageRegex, "")
+                        .replace(CardPreviewMarkdownImageRegex, "")
                 } else {
                     line
-                        .replace(Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]"""), "[图片: $1]")
-                        .replace(Regex("""!\[[^]]*]\(([^)]+)\)"""), "[图片]")
+                        .replace(CardPreviewWikiImageRegex, "[图片: $1]")
+                        .replace(CardPreviewMarkdownImageRegex, "[图片]")
                 }
             withoutImages
-                .replace(Regex("""^#{1,6}\s+"""), "")
-                .replace(Regex("""^\s*[-*+]\s+\[[ xX]]\s+"""), "")
-                .replace(Regex("""^\s*[-*+]\s+"""), "")
-                .replace(Regex("""^\s*\d+\.\s+"""), "")
-                .replace(Regex("""[*_`~>#]"""), "")
+                .replace(CardPreviewHeadingRegex, "")
+                .replace(CardPreviewTaskRegex, "")
+                .replace(CardPreviewBulletRegex, "")
+                .replace(CardPreviewOrderedListRegex, "")
+                .replace(CardPreviewMarkdownMarksRegex, "")
                 .trim()
         }
         .filter { it.isNotBlank() }

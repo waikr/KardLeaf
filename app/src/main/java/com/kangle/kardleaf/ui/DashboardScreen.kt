@@ -2,6 +2,7 @@ package com.kangle.kardleaf.ui
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent as AndroidKeyEvent
@@ -128,10 +129,9 @@ import androidx.core.content.FileProvider
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.utils.NoteTextStats
 import java.io.File
-import java.text.NumberFormat
 import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -140,6 +140,9 @@ import kotlinx.coroutines.flow.first
 private const val STARTUP_PERF_TRACE_TAG = "KardLeafStartupPerf"
 private const val BACK_TRACE_TAG = "KardLeafBackTrace"
 private const val MENU_REOPEN_GUARD_MS = 250L
+
+@Suppress("UNUSED_PARAMETER")
+private suspend fun pausedDashboardThumbnailLoader(note: Note): Bitmap? = null
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -162,18 +165,23 @@ fun DashboardScreen(
     val viewMode by viewModel.viewMode.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
     val sortDirection by viewModel.sortDirection.collectAsState()
-    val folderSortSettings by viewModel.currentFolderSortSettings.collectAsState()
+    val folderSortVersion by viewModel.folderSortVersion.collectAsState()
     val cardDensity by viewModel.cardDensity.collectAsState()
     val showYamlTagsOnLooseCards by viewModel.showYamlTagsOnLooseCards.collectAsState()
+    val showModifiedDateOnCards by viewModel.showModifiedDateOnCards.collectAsState()
+    val showNoteTitleOnCards by viewModel.showNoteTitleOnCards.collectAsState()
+    val showDateFilenameTitleOnCards by viewModel.showDateFilenameTitleOnCards.collectAsState()
+    val customHiddenFilenamePatterns by viewModel.customHiddenFilenamePatterns.collectAsState()
     val yamlTags by viewModel.yamlTags.collectAsState()
+    val selectionToolbarItemOrder by viewModel.selectionToolbarItemOrder.collectAsState()
+    val selectionToolbarMoreItems by viewModel.selectionToolbarMoreItems.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val scrollToTopEvents by viewModel.homeScrollToTopEvents.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val context = LocalContext.current
+    val unnamedNoteDateFormat = KardLeafCustomFeatures.getUnnamedNoteDateFormat(context)
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
-    val effectiveSortOrder = folderSortSettings?.order ?: sortOrder
-    val effectiveSortDirection = folderSortSettings?.direction ?: sortDirection
     val listStates = remember { mutableMapOf<MainViewModel.NoteFilter, LazyStaggeredGridState>() }
     val listState = remember(currentFilter) {
         listStates.getOrPut(currentFilter) { LazyStaggeredGridState() }
@@ -181,6 +189,15 @@ fun DashboardScreen(
     val dashboardStartMs = remember { SystemClock.elapsedRealtime() }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+    val activeThumbnailLoader: suspend (Note) -> Bitmap? = remember(viewModel) {
+        viewModel::resolveNoteThumbnailBitmap
+    }
+    val pausedThumbnailLoader: suspend (Note) -> Bitmap? = remember {
+        ::pausedDashboardThumbnailLoader
+    }
+
+    fun thumbnailLoader(enabled: Boolean): suspend (Note) -> Bitmap? =
+        if (enabled) activeThumbnailLoader else pausedThumbnailLoader
 
     fun showUndoSnackbar(message: String) {
         coroutineScope.launch {
@@ -314,11 +331,28 @@ fun DashboardScreen(
     val allSelectedActive = selectedNotesList.isNotEmpty() && selectedNotesList.all { !it.isArchived && !it.isTrashed }
     val allSelectedFavorite = selectedNotesList.isNotEmpty() && selectedNotesList.all { it.isFavorite }
     var propertyNote by remember { mutableStateOf<Note?>(null) }
+    var propertyTextStats by remember { mutableStateOf<NoteTextStats?>(null) }
+
+    fun showProperties(note: Note) {
+        val noteId = note.id
+        propertyNote = note
+        propertyTextStats = null
+        coroutineScope.launch {
+            val stats = viewModel.getNoteTextStatsForProperties(noteId)
+            if (propertyNote?.id == noteId) {
+                propertyTextStats = stats
+            }
+        }
+    }
 
     propertyNote?.let { note ->
         NotePropertiesDialog(
             note = note,
-            onDismiss = { propertyNote = null },
+            textStats = propertyTextStats,
+            onDismiss = {
+                propertyNote = null
+                propertyTextStats = null
+            },
         )
     }
 
@@ -410,6 +444,8 @@ fun DashboardScreen(
                     onPin = { viewModel.togglePinSelectedNotes() },
                     onFavorite = { viewModel.toggleFavoriteSelectedNotes() },
                     availableLabels = labels,
+                    selectionToolbarItemOrder = selectionToolbarItemOrder,
+                    selectionToolbarMoreItems = selectionToolbarMoreItems,
                     selectedNoteForProperties = selectedNotesList.singleOrNull(),
                     selectedNotesForTags = selectedNotesList,
                     availableYamlTags = yamlTags,
@@ -418,7 +454,21 @@ fun DashboardScreen(
                             Toast.makeText(context, "已更新标签", Toast.LENGTH_SHORT).show()
                         }
                     },
-                    onShowProperties = { propertyNote = it },
+                    onShowProperties = ::showProperties,
+                    onDuplicate = {
+                        val targetFolder = when (val filter = currentFilter) {
+                            is MainViewModel.NoteFilter.Label -> filter.name
+                            is MainViewModel.NoteFilter.Drafts -> PrefsManager.DEFAULT_DRAFT_FOLDER_NAME
+                            else -> ""
+                        }
+                        viewModel.duplicateSelectedNotes(targetFolder) { count ->
+                            Toast.makeText(
+                                context,
+                                if (count > 0) "已复制 $count 篇笔记" else "复制失败",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    },
                     onShare = {
                         shareSelectedNotes(context, selectedNotesList)
                     },
@@ -513,8 +563,8 @@ fun DashboardScreen(
                                         showMoreMenu = false
                                     },
                                     properties = PopupProperties(
-                                        focusable = true,
-                                        dismissOnBackPress = true,
+                                        focusable = false,
+                                        dismissOnBackPress = false,
                                         dismissOnClickOutside = true,
                                     ),
                                 ) {
@@ -1007,9 +1057,17 @@ fun DashboardScreen(
                                         cardDensity = cardDensity,
                                         showFolderTags = currentFilter is MainViewModel.NoteFilter.All || currentFilter is MainViewModel.NoteFilter.Favorites,
                                         showYamlTags = showYamlTagsOnLooseCards,
+                                        showModifiedDate = showModifiedDateOnCards,
+                                        showNoteTitle = showNoteTitleOnCards,
+                                        showDateFilenameTitle = showDateFilenameTitleOnCards,
+                                        customHiddenFilenamePatterns = customHiddenFilenamePatterns,
+                                        unnamedNoteDateFormat = unnamedNoteDateFormat,
                                         searchQuery = searchQuery,
                                         listState = listState,
-                                        loadImageThumbnail = { note -> viewModel.resolveNoteThumbnailBitmap(note) },
+                                        loadImageThumbnail = thumbnailLoader(
+                                            page == folderPagerState.currentPage &&
+                                                !listState.isScrollInProgress,
+                                        ),
                                         onNoteClick = { note ->
                                             if (isInSelectionMode) {
                                                 viewModel.toggleSelection(note)
@@ -1025,18 +1083,32 @@ fun DashboardScreen(
                                     val isCurrentPage = pagePath == currentFolderPath
                                     val isRecursive =
                                         (currentFilter as? MainViewModel.NoteFilter.Label)?.recursive == true
+                                    val pageFolderSortSettings = remember(pagePath, folderSortVersion) {
+                                        viewModel.getFolderSortSettings(pagePath)
+                                    }
+                                    val pageSortOrder = pageFolderSortSettings?.order ?: sortOrder
+                                    val pageSortDirection = pageFolderSortSettings?.direction ?: sortDirection
+                                    val pageCustomOrder = remember(pagePath, folderSortVersion, pageSortOrder) {
+                                        if (pageSortOrder == PrefsManager.SortOrder.CUSTOM) {
+                                            viewModel.getFolderCustomSortOrder(pagePath)
+                                        } else {
+                                            emptyList()
+                                        }
+                                    }
                                     val preciseItems =
                                         remember(
                                             allNotes,
                                             pagePath,
-                                            effectiveSortOrder,
-                                            effectiveSortDirection,
+                                            pageSortOrder,
+                                            pageSortDirection,
+                                            pageCustomOrder,
                                         ) {
                                             buildGesturePreviewItems(
                                                 notes = allNotes,
                                                 folder = pagePath,
-                                                sortOrder = effectiveSortOrder,
-                                                sortDirection = effectiveSortDirection,
+                                                sortOrder = pageSortOrder,
+                                                sortDirection = pageSortDirection,
+                                                customOrder = pageCustomOrder,
                                             )
                                         }
                                     // recursive 模式下当前页显示该文件夹及全部子文件夹的笔记（复用 uiItems），
@@ -1062,9 +1134,17 @@ fun DashboardScreen(
                                         cardDensity = cardDensity,
                                         showFolderTags = isCurrentPage && isRecursive,
                                         showYamlTags = showYamlTagsOnLooseCards,
+                                        showModifiedDate = showModifiedDateOnCards,
+                                        showNoteTitle = showNoteTitleOnCards,
+                                        showDateFilenameTitle = showDateFilenameTitleOnCards,
+                                        customHiddenFilenamePatterns = customHiddenFilenamePatterns,
+                                        unnamedNoteDateFormat = unnamedNoteDateFormat,
                                         searchQuery = searchQuery,
                                         listState = pageListState,
-                                        loadImageThumbnail = { note -> viewModel.resolveNoteThumbnailBitmap(note) },
+                                        loadImageThumbnail = thumbnailLoader(
+                                            page == folderPagerState.currentPage &&
+                                                !pageListState.isScrollInProgress,
+                                        ),
                                         onNoteClick = { note ->
                                             if (isInSelectionMode) {
                                                 viewModel.toggleSelection(note)
@@ -1088,9 +1168,14 @@ fun DashboardScreen(
                                 cardDensity = cardDensity,
                                 showFolderTags = currentFilter is MainViewModel.NoteFilter.All || currentFilter is MainViewModel.NoteFilter.Favorites,
                                 showYamlTags = showYamlTagsOnLooseCards,
+                                showModifiedDate = showModifiedDateOnCards,
+                                showNoteTitle = showNoteTitleOnCards,
+                                showDateFilenameTitle = showDateFilenameTitleOnCards,
+                                customHiddenFilenamePatterns = customHiddenFilenamePatterns,
+                                unnamedNoteDateFormat = unnamedNoteDateFormat,
                                 searchQuery = searchQuery,
                                 listState = listState,
-                                loadImageThumbnail = { note -> viewModel.resolveNoteThumbnailBitmap(note) },
+                                loadImageThumbnail = thumbnailLoader(!listState.isScrollInProgress),
                                 onNoteClick = { note ->
                                     if (isInSelectionMode) {
                                         viewModel.toggleSelection(note)

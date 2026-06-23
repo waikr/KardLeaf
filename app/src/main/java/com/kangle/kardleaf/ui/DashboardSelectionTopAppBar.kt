@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Info
@@ -46,12 +47,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
+import com.kangle.kardleaf.data.repository.PrefsManager
 
 private const val BACK_TRACE_TAG = "KardLeafBackTrace"
 private const val MENU_REOPEN_GUARD_MS = 250L
@@ -70,6 +73,34 @@ private fun appendYamlTagInput(current: String, tag: String): String {
     }
 }
 
+private fun selectionToolbarActionLabel(item: PrefsManager.SelectionToolbarItemId): String =
+    when (item) {
+        PrefsManager.SelectionToolbarItemId.MOVE -> "移动"
+        PrefsManager.SelectionToolbarItemId.COPY -> "复制"
+        PrefsManager.SelectionToolbarItemId.PIN -> "置顶/取消置顶"
+        PrefsManager.SelectionToolbarItemId.FAVORITE -> "收藏/取消收藏"
+        PrefsManager.SelectionToolbarItemId.TAG -> "添加标签"
+        PrefsManager.SelectionToolbarItemId.ARCHIVE -> "归档"
+        PrefsManager.SelectionToolbarItemId.PROPERTIES -> "属性"
+        PrefsManager.SelectionToolbarItemId.SHARE -> "分享"
+        PrefsManager.SelectionToolbarItemId.PRIVACY -> "保护"
+        PrefsManager.SelectionToolbarItemId.DELETE -> "删除"
+    }
+
+private fun selectionToolbarActionIcon(item: PrefsManager.SelectionToolbarItemId): ImageVector =
+    when (item) {
+        PrefsManager.SelectionToolbarItemId.MOVE -> Icons.AutoMirrored.Outlined.DriveFileMove
+        PrefsManager.SelectionToolbarItemId.COPY -> Icons.Outlined.ContentCopy
+        PrefsManager.SelectionToolbarItemId.PIN -> Icons.Outlined.PushPin
+        PrefsManager.SelectionToolbarItemId.FAVORITE -> Icons.Outlined.FavoriteBorder
+        PrefsManager.SelectionToolbarItemId.TAG -> Icons.Outlined.Label
+        PrefsManager.SelectionToolbarItemId.ARCHIVE -> Icons.Outlined.Archive
+        PrefsManager.SelectionToolbarItemId.PROPERTIES -> Icons.Outlined.Info
+        PrefsManager.SelectionToolbarItemId.SHARE -> Icons.Outlined.Share
+        PrefsManager.SelectionToolbarItemId.PRIVACY -> Icons.Outlined.Lock
+        PrefsManager.SelectionToolbarItemId.DELETE -> Icons.Outlined.Delete
+    }
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SelectionTopAppBar(
@@ -86,11 +117,14 @@ fun SelectionTopAppBar(
     onPin: () -> Unit,
     onFavorite: () -> Unit,
     availableLabels: List<String>,
+    selectionToolbarItemOrder: List<PrefsManager.SelectionToolbarItemId> = PrefsManager.SelectionToolbarItemId.DEFAULT_ORDER,
+    selectionToolbarMoreItems: Set<PrefsManager.SelectionToolbarItemId> = PrefsManager.SelectionToolbarItemId.DEFAULT_MORE_ITEMS,
     selectedNoteForProperties: Note? = null,
     selectedNotesForTags: List<Note> = emptyList(),
     availableYamlTags: List<String> = emptyList(),
     onApplyTags: (List<String>) -> Unit = {},
     onShowProperties: (Note) -> Unit = {},
+    onDuplicate: () -> Unit = {},
     onShare: () -> Unit = {},
     onMoveToPrivacy: () -> Unit = {},
 ) {
@@ -225,97 +259,141 @@ fun SelectionTopAppBar(
             }
         },
         actions = {
+            fun isActionAvailable(item: PrefsManager.SelectionToolbarItemId): Boolean =
+                when (item) {
+                    PrefsManager.SelectionToolbarItemId.MOVE -> !isTrash
+                    PrefsManager.SelectionToolbarItemId.COPY -> !isTrash && allSelectedActive
+                    PrefsManager.SelectionToolbarItemId.PIN -> !isTrash && allSelectedActive
+                    PrefsManager.SelectionToolbarItemId.FAVORITE -> !isTrash
+                    PrefsManager.SelectionToolbarItemId.TAG -> !isTrash && selectedNotesForTags.isNotEmpty()
+                    PrefsManager.SelectionToolbarItemId.ARCHIVE -> !isTrash && allSelectedActive
+                    PrefsManager.SelectionToolbarItemId.PROPERTIES -> selectedNoteForProperties != null
+                    PrefsManager.SelectionToolbarItemId.SHARE -> true
+                    PrefsManager.SelectionToolbarItemId.PRIVACY -> !isTrash && allSelectedActive
+                    PrefsManager.SelectionToolbarItemId.DELETE -> true
+                }
+
+            fun actionIcon(item: PrefsManager.SelectionToolbarItemId): ImageVector =
+                when (item) {
+                    PrefsManager.SelectionToolbarItemId.FAVORITE ->
+                        if (allSelectedFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder
+                    else -> selectionToolbarActionIcon(item)
+                }
+
+            fun performAction(item: PrefsManager.SelectionToolbarItemId) {
+                when (item) {
+                    PrefsManager.SelectionToolbarItemId.MOVE -> {
+                        val now = SystemClock.uptimeMillis()
+                        val ignoreReopen = !showMoveMenu && now - lastMoveMenuDismissAt < MENU_REOPEN_GUARD_MS
+                        Log.d(BACK_TRACE_TAG, "SelectionTopAppBar move click toggle menu showMoveMenu=$showMoveMenu showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
+                        if (!ignoreReopen) {
+                            showMoreMenu = false
+                            showMoveMenu = !showMoveMenu
+                        }
+                    }
+                    PrefsManager.SelectionToolbarItemId.COPY -> onDuplicate()
+                    PrefsManager.SelectionToolbarItemId.PIN -> onPin()
+                    PrefsManager.SelectionToolbarItemId.FAVORITE -> onFavorite()
+                    PrefsManager.SelectionToolbarItemId.TAG -> {
+                        tagText = ""
+                        showTagDialog = true
+                    }
+                    PrefsManager.SelectionToolbarItemId.ARCHIVE -> onArchive()
+                    PrefsManager.SelectionToolbarItemId.PROPERTIES -> selectedNoteForProperties?.let(onShowProperties)
+                    PrefsManager.SelectionToolbarItemId.SHARE -> onShare()
+                    PrefsManager.SelectionToolbarItemId.PRIVACY -> onMoveToPrivacy()
+                    PrefsManager.SelectionToolbarItemId.DELETE -> showDeleteDialog = true
+                }
+            }
+
+            @Composable
+            fun MoveActionAnchor(showIcon: Boolean) {
+                Box {
+                    if (showIcon) {
+                        IconButton(onClick = { performAction(PrefsManager.SelectionToolbarItemId.MOVE) }) {
+                            Icon(Icons.AutoMirrored.Outlined.DriveFileMove, contentDescription = stringResource(R.string.move))
+                        }
+                    }
+                    DropdownMenu(
+                        modifier =
+                            Modifier.onPreviewKeyEvent { event ->
+                                if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
+                                    Log.d(
+                                        BACK_TRACE_TAG,
+                                        "SelectionTopAppBar move popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showMoveMenu=$showMoveMenu",
+                                    )
+                                }
+                                false
+                            },
+                        expanded = showMoveMenu,
+                        onDismissRequest = {
+                            Log.d(BACK_TRACE_TAG, "SelectionTopAppBar move onDismissRequest showMoveMenu=$showMoveMenu")
+                            lastMoveMenuDismissAt = SystemClock.uptimeMillis()
+                            showMoveMenu = false
+                        },
+                        properties = PopupProperties(
+                            focusable = false,
+                            dismissOnBackPress = false,
+                            dismissOnClickOutside = true,
+                        ),
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.root_folder)) },
+                            onClick = {
+                                onMove("")
+                                showMoveMenu = false
+                            },
+                        )
+                        availableLabels.forEach { label ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    onMove(label)
+                                    showMoveMenu = false
+                                },
+                            )
+                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.create_new_label)) },
+                            leadingIcon = { Icon(Icons.Default.Add, null) },
+                            onClick = {
+                                showMoveMenu = false
+                                showCreateLabelDialog = true
+                            },
+                        )
+                    }
+                }
+            }
+
+            @Composable
+            fun ToolbarIconAction(item: PrefsManager.SelectionToolbarItemId) {
+                if (item == PrefsManager.SelectionToolbarItemId.MOVE) {
+                    MoveActionAnchor(showIcon = true)
+                } else {
+                    IconButton(onClick = { performAction(item) }) {
+                        Icon(actionIcon(item), contentDescription = selectionToolbarActionLabel(item))
+                    }
+                }
+            }
+
+            val normalizedOrder = selectionToolbarItemOrder.distinct().toMutableList().also { order ->
+                PrefsManager.SelectionToolbarItemId.DEFAULT_ORDER.forEach { if (it !in order) order.add(it) }
+            }
+            val topItems = normalizedOrder.filter { it !in selectionToolbarMoreItems && isActionAvailable(it) }
+            val moreItems = normalizedOrder.filter { it in selectionToolbarMoreItems && isActionAvailable(it) }
+
             if (isTrash || allSelectedArchived) {
                 IconButton(onClick = onRestore) {
                     Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.restore))
                 }
             }
 
-            if (!isTrash) {
-                IconButton(onClick = {
-                    val now = SystemClock.uptimeMillis()
-                    val ignoreReopen = !showMoveMenu && now - lastMoveMenuDismissAt < MENU_REOPEN_GUARD_MS
-                    Log.d(BACK_TRACE_TAG, "SelectionTopAppBar move click toggle menu showMoveMenu=$showMoveMenu showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
-                    if (!ignoreReopen) {
-                        showMoreMenu = false
-                        showMoveMenu = !showMoveMenu
-                    }
-                }) {
-                    Icon(Icons.AutoMirrored.Outlined.DriveFileMove, contentDescription = stringResource(R.string.move))
-                }
-                DropdownMenu(
-                    modifier =
-                        Modifier.onPreviewKeyEvent { event ->
-                            if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
-                                Log.d(
-                                    BACK_TRACE_TAG,
-                                    "SelectionTopAppBar move popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showMoveMenu=$showMoveMenu",
-                                )
-                            }
-                            false
-                        },
-                    expanded = showMoveMenu,
-                    onDismissRequest = {
-                        Log.d(BACK_TRACE_TAG, "SelectionTopAppBar move onDismissRequest showMoveMenu=$showMoveMenu")
-                        lastMoveMenuDismissAt = SystemClock.uptimeMillis()
-                        showMoveMenu = false
-                    },
-                    properties = PopupProperties(
-                        focusable = true,
-                        dismissOnBackPress = true,
-                        dismissOnClickOutside = true,
-                    ),
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.root_folder)) },
-                        onClick = {
-                            onMove("")
-                            showMoveMenu = false
-                        },
-                    )
-                    availableLabels.forEach { label ->
-                        DropdownMenuItem(
-                            text = { Text(label) },
-                            onClick = {
-                                onMove(label)
-                                showMoveMenu = false
-                            },
-                        )
-                    }
-                    HorizontalDivider()
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.create_new_label)) },
-                        leadingIcon = { Icon(Icons.Default.Add, null) },
-                        onClick = {
-                            showMoveMenu = false
-                            showCreateLabelDialog = true
-                        },
-                    )
-                }
+            topItems.forEach { item ->
+                ToolbarIconAction(item)
             }
-
-            if (!isTrash && allSelectedActive) {
-                IconButton(onClick = onPin) {
-                    Icon(Icons.Outlined.PushPin, contentDescription = stringResource(R.string.pin_unpin))
-                }
-            }
-
-            if (!isTrash) {
-                IconButton(onClick = onFavorite) {
-                    Icon(
-                        imageVector = if (allSelectedFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                        contentDescription = "收藏/取消收藏",
-                    )
-                }
-            }
-
-            if (!isTrash && selectedNotesForTags.isNotEmpty()) {
-                IconButton(onClick = {
-                    tagText = ""
-                    showTagDialog = true
-                }) {
-                    Icon(Icons.Outlined.Label, contentDescription = "添加标签")
-                }
+            if (PrefsManager.SelectionToolbarItemId.MOVE in moreItems) {
+                MoveActionAnchor(showIcon = false)
             }
 
             Box {
@@ -348,57 +426,21 @@ fun SelectionTopAppBar(
                         showMoreMenu = false
                     },
                     properties = PopupProperties(
-                        focusable = true,
-                        dismissOnBackPress = true,
+                        focusable = false,
+                        dismissOnBackPress = false,
                         dismissOnClickOutside = true,
                     ),
                 ) {
-                    if (!isTrash && allSelectedActive) {
+                    moreItems.forEach { item ->
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.archive)) },
-                            leadingIcon = { Icon(Icons.Outlined.Archive, null) },
+                            text = { Text(selectionToolbarActionLabel(item)) },
+                            leadingIcon = { Icon(actionIcon(item), null) },
                             onClick = {
-                                onArchive()
                                 showMoreMenu = false
+                                performAction(item)
                             },
                         )
                     }
-                    if (selectedNoteForProperties != null) {
-                        DropdownMenuItem(
-                            text = { Text("属性") },
-                            leadingIcon = { Icon(Icons.Outlined.Info, null) },
-                            onClick = {
-                                onShowProperties(selectedNoteForProperties)
-                                showMoreMenu = false
-                            },
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text("分享") },
-                        leadingIcon = { Icon(Icons.Outlined.Share, null) },
-                        onClick = {
-                            onShare()
-                            showMoreMenu = false
-                        },
-                    )
-                    if (!isTrash && allSelectedActive) {
-                        DropdownMenuItem(
-                            text = { Text("添加到隐私库") },
-                            leadingIcon = { Icon(Icons.Outlined.Lock, null) },
-                            onClick = {
-                                onMoveToPrivacy()
-                                showMoreMenu = false
-                            },
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.delete)) },
-                        leadingIcon = { Icon(Icons.Outlined.Delete, null) },
-                        onClick = {
-                            showDeleteDialog = true
-                            showMoreMenu = false
-                        },
-                    )
                 }
             }
         },

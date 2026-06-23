@@ -96,12 +96,28 @@ fun SortButton(viewModel: MainViewModel) {
     val sortOrder by viewModel.sortOrder.collectAsState()
     val sortDirection by viewModel.sortDirection.collectAsState()
     val currentFilter by viewModel.currentFilter.collectAsState()
+    val notes by viewModel.notes.collectAsState()
     val folderSortSettings by viewModel.currentFolderSortSettings.collectAsState()
     var showSortMenu by remember { mutableStateOf(false) }
+    var showCustomSortDialog by remember { mutableStateOf(false) }
     var lastSortMenuDismissAt by remember { mutableStateOf(0L) }
-    val isFolderView = currentFilter is MainViewModel.NoteFilter.Label
-    val effectiveSortOrder = folderSortSettings?.order ?: sortOrder
+    val folderFilter = currentFilter as? MainViewModel.NoteFilter.Label
+    val isFolderView = folderFilter != null
+    val canCustomSort = folderFilter != null && !folderFilter.recursive
+    val savedEffectiveSortOrder = folderSortSettings?.order ?: sortOrder
+    val effectiveSortOrder =
+        if (!canCustomSort && savedEffectiveSortOrder == PrefsManager.SortOrder.CUSTOM) {
+            sortOrder
+        } else {
+            savedEffectiveSortOrder
+        }
     val effectiveSortDirection = folderSortSettings?.direction ?: sortDirection
+    val customSortNotes =
+        if (canCustomSort && folderFilter != null) {
+            notes.filter { !it.isTrashed && it.folder == folderFilter.name }
+        } else {
+            emptyList()
+        }
 
     LaunchedEffect(showSortMenu) {
         Log.d(BACK_TRACE_TAG, "SortButton state changed showSortMenu=$showSortMenu")
@@ -141,8 +157,8 @@ fun SortButton(viewModel: MainViewModel) {
                 showSortMenu = false
             },
             properties = PopupProperties(
-                focusable = true,
-                dismissOnBackPress = true,
+                focusable = false,
+                dismissOnBackPress = false,
                 dismissOnClickOutside = true,
             ),
         ) {
@@ -177,21 +193,54 @@ fun SortButton(viewModel: MainViewModel) {
                     showSortMenu = false
                 },
             )
-            HorizontalDivider()
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.sort_ascending)) },
-                trailingIcon = { if (effectiveSortDirection == PrefsManager.SortDirection.ASCENDING) Icon(Icons.Default.Check, null) },
-                onClick = {
-                    viewModel.setSortDirection(PrefsManager.SortDirection.ASCENDING)
-                    showSortMenu = false
-                },
-            )
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.sort_descending)) },
-                trailingIcon = { if (effectiveSortDirection == PrefsManager.SortDirection.DESCENDING) Icon(Icons.Default.Check, null) },
-                onClick = {
-                    viewModel.setSortDirection(PrefsManager.SortDirection.DESCENDING)
-                    showSortMenu = false
+            if (canCustomSort) {
+                DropdownMenuItem(
+                    text = { Text("自定义") },
+                    trailingIcon = { if (effectiveSortOrder == PrefsManager.SortOrder.CUSTOM) Icon(Icons.Default.Check, null) },
+                    onClick = {
+                        viewModel.enableCurrentFolderCustomSort(customSortNotes.map { it.file.path })
+                    },
+                )
+                if (effectiveSortOrder == PrefsManager.SortOrder.CUSTOM) {
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("调整自定义顺序") },
+                        onClick = {
+                            showSortMenu = false
+                            showCustomSortDialog = true
+                        },
+                    )
+                }
+            }
+            if (effectiveSortOrder != PrefsManager.SortOrder.CUSTOM) {
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.sort_ascending)) },
+                    trailingIcon = { if (effectiveSortDirection == PrefsManager.SortDirection.ASCENDING) Icon(Icons.Default.Check, null) },
+                    onClick = {
+                        viewModel.setSortDirection(PrefsManager.SortDirection.ASCENDING)
+                        showSortMenu = false
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.sort_descending)) },
+                    trailingIcon = { if (effectiveSortDirection == PrefsManager.SortDirection.DESCENDING) Icon(Icons.Default.Check, null) },
+                    onClick = {
+                        viewModel.setSortDirection(PrefsManager.SortDirection.DESCENDING)
+                        showSortMenu = false
+                    },
+                )
+            }
+        }
+
+        if (showCustomSortDialog && canCustomSort && folderFilter != null) {
+            CustomSortDialog(
+                folderName = folderFilter.name,
+                notes = customSortNotes,
+                onDismiss = { showCustomSortDialog = false },
+                onSave = { paths ->
+                    viewModel.saveCurrentFolderCustomSortOrder(paths)
+                    showCustomSortDialog = false
                 },
             )
         }

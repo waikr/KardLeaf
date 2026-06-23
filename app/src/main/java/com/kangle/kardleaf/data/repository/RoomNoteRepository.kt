@@ -27,6 +27,7 @@ import com.kangle.kardleaf.data.model.NoteHistory
 import com.kangle.kardleaf.data.model.NoteRecordSummary
 import com.kangle.kardleaf.data.model.NoteRemark
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
+import com.kangle.kardleaf.data.utils.NoteTextStats
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -45,6 +46,7 @@ import java.io.BufferedReader
 import java.io.OutputStreamWriter
 import android.os.SystemClock
 import android.util.Base64
+import android.util.LruCache
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -69,7 +71,7 @@ class RoomNoteRepository(
         private const val NOTE_PREVIEW_CHAR_LIMIT = 200
         private const val LOCAL_WRITE_OBSERVER_COOLDOWN_MS = 1500L
         private const val STARTUP_PERF_TRACE_TAG = "KardLeafStartupPerf"
-        private const val NOTE_THUMBNAIL_CACHE_LIMIT = 80
+        private const val NOTE_THUMBNAIL_CACHE_MAX_BYTES = 12 * 1024 * 1024
         private const val YAML_TAG_TRACE_TAG = "KardLeafYamlTags"
     }
 
@@ -123,7 +125,11 @@ class RoomNoteRepository(
     private val contentCache = LinkedHashMap<String, CachedText>(64, 0.75f, true)
     private val fileSignatures = mutableMapOf<String, FileSignature>()
     private val flowEmissionCounts = ConcurrentHashMap<String, Int>()
-    private val noteThumbnailCache = ConcurrentHashMap<String, Bitmap>()
+    private val noteThumbnailCache =
+        object : LruCache<String, Bitmap>(NOTE_THUMBNAIL_CACHE_MAX_BYTES) {
+            override fun sizeOf(key: String, value: Bitmap): Int =
+                value.byteCount.coerceAtLeast(1)
+        }
     private val _isIndexing = MutableStateFlow(false)
     val isIndexing: StateFlow<Boolean> = _isIndexing.asStateFlow()
     private var lastLocalWriteElapsedMs = 0L
@@ -431,34 +437,40 @@ class RoomNoteRepository(
      */
     suspend fun getCachedNote(id: String): Note? {
         return withContext(Dispatchers.IO) {
-            noteDao.getNoteByPath(id)?.toNote()
+            // Do not read the full `content` column here. Very large notes can exceed
+            // Android CursorWindow's per-row limit when Room executes SELECT *.
+            noteDao.getNoteShellByPath(id)?.toNote()
+        }
+    }
+
+    suspend fun getNoteForEditor(id: String): Note? {
+        return withContext(Dispatchers.IO) {
+            // Editor opening should load metadata from Room and full text from the
+            // markdown file, instead of selecting a huge cached content column.
+            val entity = noteDao.getNoteShellByPath(id) ?: return@withContext null
+            val file = findNoteDocument(entity) ?: findDocumentByPath(id) ?: run {
+                return@withContext entity.toNote()
+            }
+            readNoteFromFileForEditor(entity, file).toNote()
         }
     }
 
     override suspend fun getNote(id: String): Note? {
         return withContext(Dispatchers.IO) {
-            val entity = noteDao.getNoteByPath(id) ?: return@withContext null
-            val file = findNoteDocument(entity) ?: run {
+            // Do not SELECT * here. This method is also used by editor side panels
+            // and external-open paths, and large cached content can exceed CursorWindow.
+            val entity = noteDao.getNoteShellByPath(id) ?: return@withContext null
+            val file = findNoteDocument(entity) ?: findDocumentByPath(id) ?: run {
                 return@withContext entity.toNote()
             }
             val fileModified = file.lastModified()
-            val fileLength = file.length()
-            val contentBytes = entity.content.toByteArray(Charsets.UTF_8).size.toLong()
-            val hasNoLoadedContent = entity.content.isEmpty() && fileLength > 0L
-            val contentLooksLikeDashboardPreview =
-                entity.content.length >= NOTE_PREVIEW_CHAR_LIMIT &&
-                    entity.content == entity.contentPreview &&
-                    fileLength > contentBytes
-            val shouldReload =
-                (fileModified > 0L && fileModified != entity.lastModifiedMs) ||
-                    hasNoLoadedContent ||
-                    contentLooksLikeDashboardPreview
-
-            if (shouldReload) {
-                return@withContext readLatestNoteFromFile(entity, file, fileModified).toNote()
+            val updated = readNoteFromFileForEditor(entity, file).copy(
+                lastModifiedMs = fileModified.takeIf { it > 0L } ?: System.currentTimeMillis(),
+            )
+            if (fileModified > 0L && fileModified != entity.lastModifiedMs) {
+                noteDao.insertNote(updated)
             }
-
-            entity.toNote()
+            updated.toNote()
         }
     }
 
@@ -797,10 +809,36 @@ class RoomNoteRepository(
 
     suspend fun getNoteFrontMatterProperties(noteId: String): List<NoteFormatUtils.FrontMatterProperty> =
         withContext(Dispatchers.IO) {
-            val entity = noteDao.getNoteByPath(noteId) ?: return@withContext emptyList()
-            val file = findNoteDocument(entity) ?: return@withContext emptyList()
+            val entity = noteDao.getNoteShellByPath(noteId) ?: return@withContext emptyList()
+            val file = findNoteDocument(entity) ?: findDocumentByPath(noteId) ?: return@withContext emptyList()
             NoteFormatUtils.extractFrontMatterProperties(readText(file))
         }
+
+
+    suspend fun getNoteTextStatsForProperties(noteId: String): NoteTextStats =
+        withContext(Dispatchers.IO) {
+            val entity = noteDao.getNoteShellByPath(noteId) ?: return@withContext NoteTextStats()
+            val file = findNoteDocument(entity) ?: findDocumentByPath(noteId)
+            if (file != null) {
+                countTextStatsFromDocument(file)
+            } else {
+                NoteTextStats.fromText(entity.contentPreview)
+            }
+        }
+
+
+    private fun countTextStatsFromDocument(file: DocumentFile): NoteTextStats {
+        return try {
+            context.contentResolver.openInputStream(file.uri)?.use { inputStream ->
+                BufferedReader(inputStream.reader()).use { reader ->
+                    NoteTextStats.fromLines(reader.lineSequence())
+                }
+            } ?: NoteTextStats()
+        } catch (e: Exception) {
+            android.util.Log.e("RoomNoteRepository", "Exception counting markdown text stats.", e)
+            NoteTextStats()
+        }
+    }
 
     suspend fun addNoteRemark(noteId: String, content: String): String? =
         withContext(Dispatchers.IO) {
@@ -1959,24 +1997,32 @@ class RoomNoteRepository(
         }
     }
 
+    private suspend fun readNoteFromFileForEditor(
+        entity: NoteEntity,
+        file: DocumentFile,
+    ): NoteEntity {
+        val rawContent = readText(file)
+        val frontMatter = NoteFormatUtils.parseFrontMatter(rawContent)
+        return entity.copy(
+            title = file.name?.substringBeforeLast(".") ?: entity.title,
+            contentPreview = frontMatter.cleanContent.take(200),
+            content = frontMatter.cleanContent,
+            lastModifiedMs = file.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis(),
+            color = 0xFFFFFFFF,
+            reminder = frontMatter.reminder,
+            firstImageReference = extractFirstImageReference(frontMatter.cleanContent).orEmpty(),
+            yamlTags = NoteFormatUtils.tagsToStorage(NoteFormatUtils.extractTags(rawContent)),
+        )
+    }
+
     private suspend fun readLatestNoteFromFile(
         entity: NoteEntity,
         file: DocumentFile,
         fileModified: Long,
     ): NoteEntity {
-        val rawContent = readText(file)
-        val frontMatter = NoteFormatUtils.parseFrontMatter(rawContent)
-        val updated =
-            entity.copy(
-                title = file.name?.substringBeforeLast(".") ?: entity.title,
-                contentPreview = frontMatter.cleanContent.take(200),
-                content = frontMatter.cleanContent,
-                lastModifiedMs = fileModified.takeIf { it > 0L } ?: System.currentTimeMillis(),
-                color = 0xFFFFFFFF,
-                reminder = frontMatter.reminder,
-                firstImageReference = extractFirstImageReference(frontMatter.cleanContent).orEmpty(),
-                yamlTags = NoteFormatUtils.tagsToStorage(NoteFormatUtils.extractTags(rawContent)),
-            )
+        val updated = readNoteFromFileForEditor(entity, file).copy(
+            lastModifiedMs = fileModified.takeIf { it > 0L } ?: System.currentTimeMillis(),
+        )
         noteDao.insertNote(updated)
         return updated
     }
@@ -2153,15 +2199,19 @@ class RoomNoteRepository(
                 ?: extractFirstImageReference(note.content)
                 ?: return@withContext null
             val cacheKey = "${note.file.path}|${note.lastModified.time}|$reference"
-            noteThumbnailCache[cacheKey]?.takeIf { !it.isRecycled }?.let { cached ->
-                return@withContext cached
+            val cached = synchronized(noteThumbnailCache) { noteThumbnailCache.get(cacheKey) }
+            if (cached != null) {
+                if (!cached.isRecycled) {
+                    return@withContext cached
+                }
+                synchronized(noteThumbnailCache) { noteThumbnailCache.remove(cacheKey) }
             }
+
             val imageFile = findImageFile(note.folder, reference) ?: return@withContext null
             val bitmap = decodeSampledBitmap(imageFile, maxWidthPx = 240, maxHeightPx = 200) ?: return@withContext null
-            if (noteThumbnailCache.size >= NOTE_THUMBNAIL_CACHE_LIMIT) {
-                noteThumbnailCache.clear()
+            synchronized(noteThumbnailCache) {
+                noteThumbnailCache.put(cacheKey, bitmap)
             }
-            noteThumbnailCache[cacheKey] = bitmap
             bitmap
         }
 
@@ -2332,8 +2382,8 @@ class RoomNoteRepository(
 
     private suspend fun resolveNoteRecordId(notePath: String): String {
         if (notePath.isBlank()) return notePath
-        val entity = noteDao.getNoteByPath(notePath) ?: return notePath
-        val rawContent = findNoteDocument(entity)?.let { readText(it) }
+        val entity = noteDao.getNoteShellByPath(notePath) ?: return notePath
+        val rawContent = (findNoteDocument(entity) ?: findDocumentByPath(notePath))?.let { readText(it) }
         val kardLeafId = rawContent?.let { NoteFormatUtils.extractKardLeafId(it) }?.takeIf { it.isNotBlank() }
         val recordId = kardLeafId ?: notePath
         syncNoteRecordsWithResolvedId(notePath, recordId)
@@ -2342,8 +2392,8 @@ class RoomNoteRepository(
 
     private suspend fun resolveOrCreateNoteRecordIdForRemark(notePath: String): String {
         if (notePath.isBlank()) return notePath
-        val entity = noteDao.getNoteByPath(notePath) ?: return notePath
-        val file = findNoteDocument(entity) ?: return notePath
+        val entity = noteDao.getNoteShellByPath(notePath) ?: return notePath
+        val file = findNoteDocument(entity) ?: findDocumentByPath(notePath) ?: return notePath
         val rawContent = readText(file)
         NoteFormatUtils.extractKardLeafId(rawContent)?.takeIf { it.isNotBlank() }?.let { recordId ->
             syncNoteRecordsWithResolvedId(notePath, recordId)
@@ -2365,7 +2415,8 @@ class RoomNoteRepository(
         updateTextCache(file, fullContent)
 
         val writtenLastModified = file.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
-        noteDao.insertNote(entity.copy(lastModifiedMs = writtenLastModified))
+        val updatedEntity = readNoteFromFileForEditor(entity, file).copy(lastModifiedMs = writtenLastModified)
+        noteDao.insertNote(updatedEntity)
         fileSignatures[notePath] = FileSignature(writtenLastModified, file.length())
         syncNoteRecordsWithResolvedId(notePath, recordId)
         return recordId

@@ -50,6 +50,11 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE filePath = :filePath")
     suspend fun getNoteByPath(filePath: String): NoteEntity?
 
+    @Query(
+        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE filePath = :filePath",
+    )
+    suspend fun getNoteShellByPath(filePath: String): NoteEntity?
+
     @Query("SELECT * FROM notes WHERE filePath IN (:filePaths)")
     suspend fun getNotesByPaths(filePaths: List<String>): List<NoteEntity>
 

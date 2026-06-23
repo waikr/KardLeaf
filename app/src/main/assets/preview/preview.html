@@ -29,6 +29,11 @@
             word-break: break-word;
         }
 
+        #content.large-plain-preview {
+            white-space: pre-wrap;
+            font-family: sans-serif;
+        }
+
         h1 {
             font-size: 1.45rem;
             line-height: 1.25;
@@ -266,19 +271,128 @@
 
         // Store content
         const contentDiv = document.getElementById('content');
+        const LARGE_MARKDOWN_RENDER_LIMIT = 600000;
+        let currentMarkdownSource = '';
+        let currentLineStartOffsets = [0];
+
+        function rebuildLineStartOffsets(source) {
+            currentLineStartOffsets = [0];
+            for (let i = 0; i < source.length; i++) {
+                if (source.charCodeAt(i) === 10) currentLineStartOffsets.push(i + 1);
+            }
+        }
+
+        function offsetForLine(line) {
+            if (line <= 0) return 0;
+            if (line >= currentLineStartOffsets.length) return currentMarkdownSource.length;
+            return currentLineStartOffsets[line];
+        }
+
+        function assignSourceOffsets(source) {
+            const tokens = md.parse(source, {});
+            const selectorByType = {
+                heading_open: 'h1,h2,h3,h4,h5,h6',
+                paragraph_open: 'p',
+                list_item_open: 'li',
+                fence: 'pre',
+                code_block: 'pre',
+                blockquote_open: 'blockquote',
+                table_open: 'table'
+            };
+            const used = new WeakSet();
+            tokens.forEach((token) => {
+                const selector = selectorByType[token.type];
+                if (!selector || !token.map) return;
+                const element = Array.from(contentDiv.querySelectorAll(selector)).find((candidate) => !used.has(candidate));
+                if (!element) return;
+                used.add(element);
+                element.dataset.sourceStart = String(offsetForLine(token.map[0]));
+                element.dataset.sourceEnd = String(offsetForLine(token.map[1]));
+            });
+        }
+
+        function textOffsetInElement(element, node, nodeOffset) {
+            let offset = 0;
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+                const current = walker.currentNode;
+                if (current === node) return offset + Math.max(0, nodeOffset);
+                offset += (current.nodeValue || '').length;
+            }
+            return -1;
+        }
+
+        function caretTextOffsetInElement(element, x, y) {
+            let node = null;
+            let offset = 0;
+            if (document.caretPositionFromPoint) {
+                const position = document.caretPositionFromPoint(x, y);
+                node = position && position.offsetNode;
+                offset = position ? position.offset : 0;
+            } else if (document.caretRangeFromPoint) {
+                const range = document.caretRangeFromPoint(x, y);
+                node = range && range.startContainer;
+                offset = range ? range.startOffset : 0;
+            }
+            if (!node || !element.contains(node)) return -1;
+            return textOffsetInElement(element, node, offset);
+        }
+
+        window.getMarkdownOffsetAtPoint = function (x, y) {
+            const sourceLength = currentMarkdownSource.length;
+            if (sourceLength <= 0) return 0;
+
+            const plainOffset = caretTextOffsetInElement(contentDiv, x, y);
+            if (contentDiv.classList.contains('large-plain-preview') && plainOffset >= 0) {
+                return Math.max(0, Math.min(sourceLength, plainOffset));
+            }
+
+            const hit = document.elementFromPoint(x, y);
+            const block = hit ? hit.closest('[data-source-start]') : null;
+            if (block) {
+                const start = parseInt(block.dataset.sourceStart || '0', 10);
+                const end = parseInt(block.dataset.sourceEnd || String(sourceLength), 10);
+                const textLength = Math.max(1, (block.innerText || block.textContent || '').length);
+                const blockTextOffset = caretTextOffsetInElement(block, x, y);
+                if (blockTextOffset >= 0) {
+                    const ratio = Math.max(0, Math.min(1, blockTextOffset / textLength));
+                    return Math.max(0, Math.min(sourceLength, Math.round(start + (end - start) * ratio)));
+                }
+
+                const rect = block.getBoundingClientRect();
+                const ratio = rect.height > 1 ? Math.max(0, Math.min(1, (y - rect.top) / rect.height)) : 0;
+                return Math.max(0, Math.min(sourceLength, Math.round(start + (end - start) * ratio)));
+            }
+
+            const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+            const ratio = Math.max(0, Math.min(1, window.scrollY / maxScroll));
+            return Math.round(sourceLength * ratio);
+        };
 
         // Main Update Function
         window.updateContent = function (markdown, isDark) {
             if (isDark) document.body.classList.add('dark-mode');
             else document.body.classList.remove('dark-mode');
 
+            const source = markdown || '';
+            currentMarkdownSource = source;
+            rebuildLineStartOffsets(source);
+            if (source.length > LARGE_MARKDOWN_RENDER_LIMIT) {
+                contentDiv.classList.add('large-plain-preview');
+                contentDiv.textContent = source;
+                return;
+            }
+
+            contentDiv.classList.remove('large-plain-preview');
             try {
-                contentDiv.innerHTML = md.render(markdown || '');
+                contentDiv.innerHTML = md.render(source);
+                assignSourceOffsets(source);
                 attachCheckboxListeners();
                 attachCodeBlockCopyButtons();
             } catch (error) {
                 console.error('Preview render failed: ' + error);
-                contentDiv.textContent = markdown || '';
+                contentDiv.classList.add('large-plain-preview');
+                contentDiv.textContent = source;
             }
         };
 

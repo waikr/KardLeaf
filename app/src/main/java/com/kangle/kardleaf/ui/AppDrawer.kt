@@ -81,6 +81,7 @@ fun AppDrawerContent(
     onDeleteLabel: (String) -> Unit,
     onRenameLabel: (String, String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenFolderManagement: () -> Unit,
     onBackActionChanged: ((() -> Boolean)?) -> Unit = {},
     onShowOnboarding: () -> Unit = {},
     onOpenPrivacy: () -> Unit = {},
@@ -165,73 +166,14 @@ fun AppDrawerContent(
                 drawerOrder.forEach { itemId ->
                     if (itemId in hiddenItems) return@forEach
                     if (itemId == PrefsManager.DrawerItemId.FILES) {
-                        val allCollapsed =
-                            visibleLabels.isNotEmpty() && visibleLabels.all { it in collapsedFolders }
                         NavigationDrawerItem(
                             label = { Text(drawerPrefs.getDrawerItemLabel(itemId, defaultDrawerItemLabel(itemId))) },
                             icon = { Icon(Icons.Outlined.Folder, contentDescription = null) },
-                            selected = showFiles,
-                            onClick = {
-                                pushDrawerUiState()
-                                showFiles = !showFiles
-                            },
+                            selected = currentScreen is MainViewModel.Screen.Folders,
+                            onClick = { onOpenFolderManagement() },
                             modifier = Modifier.padding(horizontal = 12.dp),
                             colors = drawerItemColors(),
-                            badge = if (showFiles) {
-                                {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        IconButton(
-                                            onClick = { onCreateLabel(selectedFolderPath.orEmpty()) },
-                                            modifier = Modifier.size(32.dp),
-                                        ) {
-                                            Icon(Icons.Default.Add, contentDescription = "新建子文件夹")
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                pushDrawerUiState()
-                                                collapsedFolders =
-                                                    if (allCollapsed) emptySet() else visibleLabels.toSet()
-                                            },
-                                            modifier = Modifier.size(32.dp),
-                                        ) {
-                                            Icon(
-                                                imageVector = if (allCollapsed) Icons.Outlined.UnfoldMore else Icons.Outlined.UnfoldLess,
-                                                contentDescription = if (allCollapsed) "展开全部" else "折叠全部",
-                                            )
-                                        }
-                                    }
-                                }
-                            } else {
-                                null
-                            },
                         )
-                        if (showFiles) {
-                            FileDrawerSection(
-                                visibleLabels = visibleLabels,
-                                currentScreen = currentScreen,
-                                currentFilter = currentFilter,
-                                collapsedFolders = collapsedFolders,
-                                selectedFolderPath = selectedFolderPath,
-                                onToggleFolder = { path ->
-                                    pushDrawerUiState()
-                                    collapsedFolders =
-                                        if (path in collapsedFolders) {
-                                            collapsedFolders - path
-                                        } else {
-                                            collapsedFolders + path
-                                        }
-                                },
-                                onDashboardFilterSelect = onDashboardFilterSelect,
-                                onDeleteLabel = onDeleteLabel,
-                                onRenameLabel = onRenameLabel,
-                                onSelectFolder = { path ->
-                                    if (selectedFolderPath != path) {
-                                        pushDrawerUiState()
-                                        selectedFolderPath = path
-                                    }
-                                },
-                            )
-                        }
                     } else {
                         DrawerEntry(
                             itemId = itemId,

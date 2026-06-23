@@ -17,8 +17,3 @@ app/build/
 .github_creds/
 dev_docs/
 .gemini_tools/
-keystore.properties
-*.jks
-*.keystore
-app/release/
-*.aab

@@ -527,6 +527,12 @@ class MainActivity : FragmentActivity() {
                                         viewModel.navigateTo(MainViewModel.Screen.Settings)
                                     }
                                 },
+                                onOpenFolderManagement = {
+                                    clearTemporaryDashboardReturn()
+                                    closeDrawerThen {
+                                        viewModel.navigateTo(MainViewModel.Screen.Folders)
+                                    }
+                                },
                                 onBackActionChanged = { drawerBackAction = it },
                                 onShowOnboarding = {
                                     closeDrawerThen { showOnboarding = true }
@@ -602,7 +608,8 @@ class MainActivity : FragmentActivity() {
                                 enabled = !drawerState.isOpen &&
                                     (currentScreen is MainViewModel.Screen.Dates ||
                                         currentScreen is MainViewModel.Screen.Images ||
-                                        currentScreen is MainViewModel.Screen.Tags),
+                                        currentScreen is MainViewModel.Screen.Tags ||
+                                        currentScreen is MainViewModel.Screen.Folders),
                             ) {
                                 Log.d(BACK_TRACE_TAG, "Main screen BackHandler hit screen=$currentScreen -> Dashboard")
                                 viewModel.navigateTo(MainViewModel.Screen.Dashboard)
@@ -685,7 +692,15 @@ class MainActivity : FragmentActivity() {
                                         onDeleteTag = { tag -> viewModel.deleteYamlTag(tag) },
                                     )
                                 }
-                            MainViewModel.Screen.Settings -> {
+                                MainViewModel.Screen.Folders -> {
+                                    com.kangle.kardleaf.ui.FolderManagementScreen(
+                                        viewModel = viewModel,
+                                        isDrawerOpen = drawerState.isOpen,
+                                        onOpenDrawer = { openDrawerIfAllowed() },
+                                        onBack = { viewModel.navigateTo(MainViewModel.Screen.Dashboard) },
+                                    )
+                                }
+                                MainViewModel.Screen.Settings -> {
                                 com.kangle.kardleaf.ui.KardLeafSettingsScreen(
                                     onBack = { viewModel.navigateTo(MainViewModel.Screen.Dashboard) },
                                     onSelectDatabase = {

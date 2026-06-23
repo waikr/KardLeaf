@@ -38,6 +38,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.CalendarToday
@@ -428,11 +429,18 @@ fun KardLeafSettingsScreen(
     var drawerEdgeWidthText by remember { mutableStateOf(prefsManager.getDrawerEdgeWidthDp().toString()) }
     var noteSidePanelsEnabled by remember { mutableStateOf(prefsManager.isNoteSidePanelsEnabled()) }
     var showYamlTagsOnLooseCards by remember { mutableStateOf(prefsManager.isLooseCardYamlTagsVisible()) }
+    var showModifiedDateOnCards by remember { mutableStateOf(prefsManager.isModifiedDateOnCardsVisible()) }
+    var showNoteTitleOnCards by remember { mutableStateOf(prefsManager.isNoteTitleOnCardsVisible()) }
+    var showDateFilenameTitleOnCards by remember { mutableStateOf(prefsManager.isDateFilenameTitleOnCardsVisible()) }
+    var customHiddenFilenamePatterns by remember { mutableStateOf(prefsManager.getCustomHiddenFilenamePatterns()) }
+    var customHiddenFilenameText by remember { mutableStateOf(customHiddenFilenamePatterns.joinToString("\n")) }
     var historyLimitText by remember { mutableStateOf(prefsManager.getHistoryVersionLimit().toString()) }
     var doubleTapIntervalText by remember { mutableStateOf(prefsManager.getPreviewDoubleTapIntervalMs().toString()) }
     var trashAutoCleanDaysText by remember { mutableStateOf(prefsManager.getTrashAutoCleanDays().toString()) }
     var passwordInputMode by remember { mutableStateOf(prefsManager.getPasswordInputMode()) }
     var toolbarOrder by remember { mutableStateOf(KardLeafCustomFeatures.getToolbarOrder(context)) }
+    var selectionToolbarOrder by remember { mutableStateOf(prefsManager.getSelectionToolbarItemOrder()) }
+    var selectionToolbarMoreItems by remember { mutableStateOf(prefsManager.getSelectionToolbarMoreItems()) }
     var restoreLastFilter by remember { mutableStateOf(prefsManager.isRestoreLastFilterEnabled()) }
     var defaultStartLabel by remember { mutableStateOf(prefsManager.getDefaultStartLabel()) }
     var showLabelPicker by remember { mutableStateOf(false) }
@@ -660,14 +668,23 @@ fun KardLeafSettingsScreen(
         drawerEdgeWidthText = PrefsManager.DEFAULT_DRAWER_EDGE_WIDTH_DP.toString()
         noteSidePanelsEnabled = PrefsManager.DEFAULT_NOTE_SIDE_PANELS_ENABLED
         showYamlTagsOnLooseCards = false
+        showModifiedDateOnCards = false
+        showNoteTitleOnCards = true
+        showDateFilenameTitleOnCards = true
+        customHiddenFilenamePatterns = prefsManager.defaultHiddenFilenamePatterns()
+        customHiddenFilenameText = customHiddenFilenamePatterns.joinToString("\n")
         historyLimitText = PrefsManager.DEFAULT_HISTORY_VERSION_LIMIT.toString()
         cardDensity = PrefsManager.CardDensity.LOOSE
         toolbarOrder = KardLeafCustomFeatures.DefaultToolbarOrder
+        selectionToolbarOrder = PrefsManager.SelectionToolbarItemId.DEFAULT_ORDER
+        selectionToolbarMoreItems = PrefsManager.SelectionToolbarItemId.DEFAULT_MORE_ITEMS
         restoreLastFilter = true
         defaultStartLabel = ""
         KardLeafCustomFeatures.saveUnnamedNoteDateFormat(context, dateFormat)
         KardLeafCustomFeatures.saveOpenNoteMode(context, openNoteMode)
         KardLeafCustomFeatures.saveToolbarOrder(context, toolbarOrder)
+        prefsManager.saveSelectionToolbarItemOrder(selectionToolbarOrder)
+        prefsManager.saveSelectionToolbarMoreItems(selectionToolbarMoreItems)
         prefsManager.saveTrashFolderName(trashFolderName)
         prefsManager.saveTrashSortOrder(trashSortOrder)
         prefsManager.saveViewMode(viewMode)
@@ -681,6 +698,10 @@ fun KardLeafSettingsScreen(
         prefsManager.saveDrawerEdgeWidthDp(PrefsManager.DEFAULT_DRAWER_EDGE_WIDTH_DP)
         prefsManager.saveNoteSidePanelsEnabled(noteSidePanelsEnabled)
         prefsManager.saveLooseCardYamlTagsVisible(showYamlTagsOnLooseCards)
+        prefsManager.saveModifiedDateOnCardsVisible(showModifiedDateOnCards)
+        prefsManager.saveNoteTitleOnCardsVisible(showNoteTitleOnCards)
+        prefsManager.saveDateFilenameTitleOnCardsVisible(showDateFilenameTitleOnCards)
+        prefsManager.saveCustomHiddenFilenamePatterns(customHiddenFilenamePatterns)
         prefsManager.saveHistoryVersionLimit(PrefsManager.DEFAULT_HISTORY_VERSION_LIMIT)
         doubleTapIntervalText = PrefsManager.DEFAULT_PREVIEW_DOUBLE_TAP_INTERVAL_MS.toString()
         prefsManager.savePreviewDoubleTapIntervalMs(PrefsManager.DEFAULT_PREVIEW_DOUBLE_TAP_INTERVAL_MS)
@@ -783,9 +804,32 @@ fun KardLeafSettingsScreen(
                                 },
                             )
                         }
+                        "hiddenFilenames" -> {
+                            SettingsSectionTitle("自定义隐藏文件名")
+                            OutlinedTextField(
+                                value = customHiddenFilenameText,
+                                onValueChange = { value ->
+                                    customHiddenFilenameText = value
+                                    customHiddenFilenamePatterns = value
+                                        .lineSequence()
+                                        .map { it.trim() }
+                                        .filter { it.isNotBlank() }
+                                        .distinct()
+                                        .toList()
+                                    prefsManager.saveCustomHiddenFilenamePatterns(customHiddenFilenamePatterns)
+                                    onSettingsChanged()
+                                },
+                                label = { Text("每行一个文件名或日期格式") },
+                                minLines = 3,
+                                maxLines = 8,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            SettingsPageText("隐藏纯日期文件名时生效。默认第一行：${PrefsManager.DEFAULT_HIDDEN_DATE_FILENAME_PATTERN}")
+                            SettingsPageText("默认第二行：${PrefsManager.DEFAULT_HIDDEN_COPY_FILENAME_PATTERN}")
+                        }
                         "sort" -> {
                             SettingsSectionTitle("排序字段")
-                            PrefsManager.SortOrder.values().forEach { order ->
+                            PrefsManager.SortOrder.values().filter { it != PrefsManager.SortOrder.CUSTOM }.forEach { order ->
                                 SettingsChoiceRow(
                                     icon = Icons.Outlined.SortByAlpha,
                                     title = if (order == PrefsManager.SortOrder.DATE_MODIFIED) "修改日期" else "标题",
@@ -1081,7 +1125,7 @@ fun KardLeafSettingsScreen(
                 }
                 "sort" -> {
                     SettingsSectionTitle("排序字段")
-                    PrefsManager.SortOrder.values().forEach { order ->
+                    PrefsManager.SortOrder.values().filter { it != PrefsManager.SortOrder.CUSTOM }.forEach { order ->
                         SettingsChoiceRow(
                             icon = Icons.Outlined.Description,
                             title = if (order == PrefsManager.SortOrder.DATE_MODIFIED) "修改日期" else "标题",
@@ -1354,6 +1398,73 @@ fun KardLeafSettingsScreen(
                             KardLeafCustomFeatures.saveToolbarOrder(context, toolbarOrder)
                         },
                     )
+                }
+                "selectionToolbar" -> {
+                    var itemOrder by remember { mutableStateOf(prefsManager.getSelectionToolbarItemOrder()) }
+                    var moreItems by remember { mutableStateOf(prefsManager.getSelectionToolbarMoreItems()) }
+
+                    fun saveSelectionToolbarState(
+                        newOrder: List<PrefsManager.SelectionToolbarItemId> = itemOrder,
+                        newMoreItems: Set<PrefsManager.SelectionToolbarItemId> = moreItems,
+                    ) {
+                        itemOrder = newOrder
+                        moreItems = newMoreItems
+                        selectionToolbarOrder = newOrder
+                        selectionToolbarMoreItems = newMoreItems
+                        prefsManager.saveSelectionToolbarItemOrder(newOrder)
+                        prefsManager.saveSelectionToolbarMoreItems(newMoreItems)
+                        onSettingsChanged()
+                    }
+
+                    fun saveSelectionToolbarSections(
+                        topItems: List<PrefsManager.SelectionToolbarItemId>,
+                        moreDisplayItems: List<PrefsManager.SelectionToolbarItemId>,
+                    ) {
+                        saveSelectionToolbarState(topItems + moreDisplayItems, moreItems)
+                    }
+
+                    val topItems = itemOrder.filter { it !in moreItems }
+                    val moreDisplayItems = itemOrder.filter { it in moreItems }
+
+                    SettingsPageText("长按拖动调整顺序，点击按钮可在顶部和更多之间移动")
+                    SettingsSectionTitle("顶部展示")
+                    if (topItems.isEmpty()) {
+                        SettingsPageText("暂无顶部按钮")
+                    } else {
+                        SettingsSelectionToolbarDragList(
+                            items = topItems,
+                            moreItems = moreItems,
+                            onOrderChange = { newTopItems ->
+                                saveSelectionToolbarSections(newTopItems, moreDisplayItems)
+                            },
+                            onToggleArea = { itemId ->
+                                val newMoreItems = moreItems + itemId
+                                val newTopItems = itemOrder.filter { it !in newMoreItems }
+                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems }
+                                saveSelectionToolbarState(newTopItems + newMoreDisplayItems, newMoreItems)
+                            },
+                        )
+                    }
+
+                    SettingsSectionDivider()
+                    SettingsSectionTitle("更多选项展示")
+                    if (moreDisplayItems.isEmpty()) {
+                        SettingsPageText("暂无更多选项")
+                    } else {
+                        SettingsSelectionToolbarDragList(
+                            items = moreDisplayItems,
+                            moreItems = moreItems,
+                            onOrderChange = { newMoreDisplayItems ->
+                                saveSelectionToolbarSections(topItems, newMoreDisplayItems)
+                            },
+                            onToggleArea = { itemId ->
+                                val newMoreItems = moreItems - itemId
+                                val newTopItems = itemOrder.filter { it !in newMoreItems }
+                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems }
+                                saveSelectionToolbarState(newTopItems + newMoreDisplayItems, newMoreItems)
+                            },
+                        )
+                    }
                 }
                 "drawerEdit" -> {
                     var drawerOrder by remember { mutableStateOf(prefsManager.getDrawerItemOrder()) }
@@ -1628,66 +1739,10 @@ fun KardLeafSettingsScreen(
                     SettingsActionRow(
                         icon = if (passwordInputMode == PrefsManager.PasswordInputMode.SIMPLE) Icons.Outlined.Lock else Icons.Outlined.Lock,
                         title = "密码类型",
-                        subtitle = if (passwordInputMode == PrefsManager.PasswordInputMode.SIMPLE) "简单密码：数字键盘" else "复杂密码：系统键盘",
+                        subtitle = if (passwordInputMode == PrefsManager.PasswordInputMode.SIMPLE) "推荐：4 位数字密码" else "复杂密码：系统键盘",
                         onClick = { settingsDialog = "passwordMode" },
                     )
-
-                    SettingsSectionDivider()
-                    SettingsSectionTitle("安全词", if (hasSafetyWord) "已设置安全词" else "未设置安全词")
-                    SettingsPageText("忘记密码时，可用安全词作为备用验证")
-                    OutlinedTextField(
-                        value = safetyWord,
-                        onValueChange = { value ->
-                            safetyWord = value
-                            safetyWordError = null
-                        },
-                        label = { Text(if (hasSafetyWord) "输入新安全词" else "设置安全词") },
-                        singleLine = true,
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = safetyWordConfirm,
-                        onValueChange = { value ->
-                            safetyWordConfirm = value
-                            safetyWordError = null
-                        },
-                        label = { Text("再次输入安全词") },
-                        singleLine = true,
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (safetyWordError != null) {
-                        Text(safetyWordError.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        TextButton(
-                            enabled = safetyWord.isNotBlank() || safetyWordConfirm.isNotBlank(),
-                            onClick = {
-                                when {
-                                    safetyWord.isBlank() || safetyWordConfirm.isBlank() -> safetyWordError = "请完整输入两次安全词"
-                                    safetyWord != safetyWordConfirm -> safetyWordError = "两次输入的安全词不一致"
-                                    else -> {
-                                        prefsManager.saveSafetyWordHash(hashPassword(safetyWord))
-                                        hasSafetyWord = true
-                                        safetyWord = ""
-                                        safetyWordConfirm = ""
-                                        safetyWordError = null
-                                    }
-                                }
-                            },
-                        ) { Text(if (hasSafetyWord) "修改安全词" else "保存安全词") }
-                        TextButton(
-                            enabled = hasSafetyWord,
-                            onClick = {
-                                prefsManager.saveSafetyWordHash(null)
-                                hasSafetyWord = false
-                                safetyWord = ""
-                                safetyWordConfirm = ""
-                                safetyWordError = null
-                            },
-                        ) { Text("清除") }
-                    }
+                    SettingsPageText("建议先设置应用锁；忘记密码备用的安全词放在页面底部。")
 
                     SettingsSectionDivider()
                     SettingsSectionTitle("应用锁", if (hasPwd) "已设置应用密码" else "未设置应用密码")
@@ -1840,6 +1895,63 @@ fun KardLeafSettingsScreen(
                             prefsManager.savePrivacyBiometricUnlockEnabled(privacyBiometricEnabled)
                         },
                     )
+                    SettingsSectionDivider()
+                    SettingsSectionTitle("安全词", if (hasSafetyWord) "已设置安全词" else "未设置安全词")
+                    SettingsPageText("忘记密码时，可用安全词作为备用验证")
+                    OutlinedTextField(
+                        value = safetyWord,
+                        onValueChange = { value ->
+                            safetyWord = value
+                            safetyWordError = null
+                        },
+                        label = { Text(if (hasSafetyWord) "输入新安全词" else "设置安全词") },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = safetyWordConfirm,
+                        onValueChange = { value ->
+                            safetyWordConfirm = value
+                            safetyWordError = null
+                        },
+                        label = { Text("再次输入安全词") },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (safetyWordError != null) {
+                        Text(safetyWordError.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        TextButton(
+                            enabled = safetyWord.isNotBlank() || safetyWordConfirm.isNotBlank(),
+                            onClick = {
+                                when {
+                                    safetyWord.isBlank() || safetyWordConfirm.isBlank() -> safetyWordError = "请完整输入两次安全词"
+                                    safetyWord != safetyWordConfirm -> safetyWordError = "两次输入的安全词不一致"
+                                    else -> {
+                                        prefsManager.saveSafetyWordHash(hashPassword(safetyWord))
+                                        hasSafetyWord = true
+                                        safetyWord = ""
+                                        safetyWordConfirm = ""
+                                        safetyWordError = null
+                                    }
+                                }
+                            },
+                        ) { Text(if (hasSafetyWord) "修改安全词" else "保存安全词") }
+                        TextButton(
+                            enabled = hasSafetyWord,
+                            onClick = {
+                                prefsManager.saveSafetyWordHash(null)
+                                hasSafetyWord = false
+                                safetyWord = ""
+                                safetyWordConfirm = ""
+                                safetyWordError = null
+                            },
+                        ) { Text("清除") }
+                    }
+
                 }
                 "autoBackup" -> {
                     var intervalDays by remember { mutableStateOf(prefsManager.getAutoBackupIntervalDays()) }
@@ -1883,17 +1995,12 @@ fun KardLeafSettingsScreen(
                     val versionName = remember {
                         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty() }.getOrDefault("")
                     }
-                    SettingsSectionTitle("卡叶笔记", "卡片式 Markdown 笔记软件")
-                    SettingsActionRow(
-                        icon = Icons.Outlined.Info,
-                        title = "KardLeaf",
-                        subtitle = "中文名：卡叶笔记",
-                        onClick = {},
-                    )
+                    val githubUrl = "https://github.com/waikr/KardLeaf"
+                    SettingsSectionTitle("卡叶笔记", "本地优先的 Markdown 笔记软件")
                     SettingsActionRow(
                         icon = Icons.Outlined.Info,
                         title = "版本",
-                        subtitle = versionName.ifBlank { "4.0" },
+                        subtitle = versionName.ifBlank { "1.0.8" },
                         onClick = {},
                     )
                     SettingsActionRow(
@@ -1902,9 +2009,19 @@ fun KardLeafSettingsScreen(
                         subtitle = "kangle",
                         onClick = {},
                     )
+                    SettingsActionRow(
+                        icon = Icons.Outlined.Code,
+                        title = "GitHub 仓库",
+                        subtitle = githubUrl,
+                        onClick = {
+                            runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(githubUrl)))
+                            }
+                        },
+                    )
                     SettingsSectionDivider()
                     SettingsSectionTitle("说明")
-                    SettingsPageText("本地笔记、历史版本和隐私空间")
+                    SettingsPageText("支持本地 Markdown、目录分类、历史版本、隐私空间和图片预览。")
                 }
                 "interface" -> {
                     SettingsSectionTitle("首页显示")
@@ -1921,6 +2038,50 @@ fun KardLeafSettingsScreen(
                             onSettingsChanged()
                         },
                     )
+                    SettingsSwitchRow(
+                        icon = Icons.Outlined.Schedule,
+                        title = "显示修改日期",
+                        subtitle = if (showModifiedDateOnCards) "宽松卡片右下角显示修改日期" else "首页卡片不显示修改日期",
+                        checked = showModifiedDateOnCards,
+                        onCheckedChange = { enabled ->
+                            showModifiedDateOnCards = enabled
+                            prefsManager.saveModifiedDateOnCardsVisible(enabled)
+                            onSettingsChanged()
+                        },
+                    )
+                    SettingsSwitchRow(
+                        icon = Icons.Outlined.Title,
+                        title = "显示文件名（标题）",
+                        subtitle = if (showNoteTitleOnCards) "首页卡片显示标题" else "首页卡片隐藏标题",
+                        checked = showNoteTitleOnCards,
+                        onCheckedChange = { enabled ->
+                            showNoteTitleOnCards = enabled
+                            prefsManager.saveNoteTitleOnCardsVisible(enabled)
+                            onSettingsChanged()
+                        },
+                    )
+                    if (showNoteTitleOnCards) {
+                        SettingsSwitchRow(
+                            icon = Icons.Outlined.CalendarToday,
+                            title = "显示纯日期文件名",
+                            subtitle = if (showDateFilenameTitleOnCards) "日期格式标题正常显示" else "隐藏纯日期格式标题",
+                            checked = showDateFilenameTitleOnCards,
+                            onCheckedChange = { enabled ->
+                                showDateFilenameTitleOnCards = enabled
+                                prefsManager.saveDateFilenameTitleOnCardsVisible(enabled)
+                                onSettingsChanged()
+                            },
+                        )
+                        SettingsActionRow(
+                            icon = Icons.Outlined.VisibilityOff,
+                            title = "自定义隐藏文件名",
+                            subtitle = if (showDateFilenameTitleOnCards) "关闭显示纯日期文件名后生效" else "已设置 ${customHiddenFilenamePatterns.size} 条隐藏规则",
+                            onClick = {
+                                customHiddenFilenameText = customHiddenFilenamePatterns.joinToString("\n")
+                                settingsDialog = "hiddenFilenames"
+                            },
+                        )
+                    }
                     SettingsActionRow(Icons.Outlined.Sort, "排序方式", sortSummary(sortOrder, sortDirection), { settingsDialog = "sort" })
                     SettingsSectionDivider()
                     SettingsSectionTitle("启动位置")
@@ -1951,6 +2112,7 @@ fun KardLeafSettingsScreen(
                     SettingsSectionDivider()
                     SettingsSectionTitle("编辑器")
                     SettingsActionRow(Icons.Outlined.FormatListBulleted, "字符按钮位置", "调整工具按钮顺序", { openSettingsPage("toolbar") })
+                    SettingsActionRow(Icons.Outlined.Reorder, "长按选择栏", "调整顶部和更多按钮", { openSettingsPage("selectionToolbar") })
                     SettingsActionRow(Icons.Outlined.Visibility, "默认打开模式", if (openNoteMode == KardLeafCustomFeatures.OpenNoteMode.PREVIEW) "查看模式" else "编辑模式", { settingsDialog = "openNote" })
                     SettingsActionRow(
                         Icons.Outlined.TouchApp,
@@ -2020,6 +2182,7 @@ private fun settingsPageTitle(page: String): String =
         "historyLimit" -> "历史版本数量"
         "trash" -> "回收站"
         "toolbar" -> "字符按钮位置"
+        "selectionToolbar" -> "长按选择栏"
         "drawerEdit" -> "侧边栏调整"
         "interface" -> "应用界面"
         "imagePath" -> "图片路径格式"
@@ -2038,7 +2201,12 @@ private fun sortSummary(
     order: PrefsManager.SortOrder,
     direction: PrefsManager.SortDirection,
 ): String {
-    val orderText = if (order == PrefsManager.SortOrder.DATE_MODIFIED) "修改日期" else "标题"
+    val orderText =
+        when (order) {
+            PrefsManager.SortOrder.DATE_MODIFIED -> "修改日期"
+            PrefsManager.SortOrder.TITLE -> "标题"
+            PrefsManager.SortOrder.CUSTOM -> "自定义"
+        }
     val directionText = if (direction == PrefsManager.SortDirection.DESCENDING) "降序" else "升序"
     return "$orderText（$directionText）"
 }
@@ -2581,6 +2749,166 @@ private fun calculateToolbarAvoidanceOffset(
     return IntOffset(
         x = ((visualColumn - originalColumn) * cellSizePx).roundToInt(),
         y = ((visualRow - originalRow) * cellSizePx).roundToInt(),
+    )
+}
+
+private fun selectionToolbarItemLabel(item: PrefsManager.SelectionToolbarItemId): String =
+    when (item) {
+        PrefsManager.SelectionToolbarItemId.MOVE -> "移动"
+        PrefsManager.SelectionToolbarItemId.COPY -> "复制"
+        PrefsManager.SelectionToolbarItemId.PIN -> "置顶"
+        PrefsManager.SelectionToolbarItemId.FAVORITE -> "收藏"
+        PrefsManager.SelectionToolbarItemId.TAG -> "标签"
+        PrefsManager.SelectionToolbarItemId.ARCHIVE -> "归档"
+        PrefsManager.SelectionToolbarItemId.PROPERTIES -> "属性"
+        PrefsManager.SelectionToolbarItemId.SHARE -> "分享"
+        PrefsManager.SelectionToolbarItemId.PRIVACY -> "保护"
+        PrefsManager.SelectionToolbarItemId.DELETE -> "删除"
+    }
+
+private fun selectionToolbarItemIcon(item: PrefsManager.SelectionToolbarItemId): ImageVector =
+    when (item) {
+        PrefsManager.SelectionToolbarItemId.MOVE -> Icons.AutoMirrored.Outlined.DriveFileMove
+        PrefsManager.SelectionToolbarItemId.COPY -> Icons.Outlined.ContentCopy
+        PrefsManager.SelectionToolbarItemId.PIN -> Icons.Outlined.PushPin
+        PrefsManager.SelectionToolbarItemId.FAVORITE -> Icons.Outlined.FavoriteBorder
+        PrefsManager.SelectionToolbarItemId.TAG -> Icons.Outlined.Label
+        PrefsManager.SelectionToolbarItemId.ARCHIVE -> Icons.Outlined.Archive
+        PrefsManager.SelectionToolbarItemId.PROPERTIES -> Icons.Outlined.Info
+        PrefsManager.SelectionToolbarItemId.SHARE -> Icons.Outlined.Share
+        PrefsManager.SelectionToolbarItemId.PRIVACY -> Icons.Outlined.Lock
+        PrefsManager.SelectionToolbarItemId.DELETE -> Icons.Outlined.Delete
+    }
+
+@Composable
+private fun SettingsSelectionToolbarDragList(
+    items: List<PrefsManager.SelectionToolbarItemId>,
+    moreItems: Set<PrefsManager.SelectionToolbarItemId>,
+    onOrderChange: (List<PrefsManager.SelectionToolbarItemId>) -> Unit,
+    onToggleArea: (PrefsManager.SelectionToolbarItemId) -> Unit,
+) {
+    val rowHeight = 64.dp
+    val rowSpacing = 6.dp
+    val rowStepPx = with(LocalDensity.current) { (rowHeight + rowSpacing).toPx() }
+    var draggingItem by remember { mutableStateOf<PrefsManager.SelectionToolbarItemId?>(null) }
+    var draggingStartIndex by remember { mutableStateOf(-1) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
+
+    fun clearDragState() {
+        draggingItem = null
+        draggingStartIndex = -1
+        dragOffset = Offset.Zero
+        dragTargetIndex = null
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(rowSpacing)) {
+        items.forEachIndexed { index, itemId ->
+            val itemIsDragging = draggingItem == itemId
+            val targetIndex = dragTargetIndex
+            val isDropTarget = targetIndex == index && draggingItem != null && !itemIsDragging
+            val avoidanceOffset = if (!itemIsDragging && targetIndex != null) {
+                calculateDrawerAvoidanceOffset(
+                    index = index,
+                    fromIndex = draggingStartIndex,
+                    toIndex = targetIndex,
+                    rowStepPx = rowStepPx,
+                )
+            } else {
+                IntOffset.Zero
+            }
+
+            SettingsSelectionToolbarEditRow(
+                icon = selectionToolbarItemIcon(itemId),
+                title = selectionToolbarItemLabel(itemId),
+                isMore = itemId in moreItems,
+                isDragging = itemIsDragging,
+                isDropTarget = isDropTarget,
+                onToggleArea = { onToggleArea(itemId) },
+                modifier = Modifier
+                    .zIndex(if (itemIsDragging) 1f else 0f)
+                    .offset {
+                        if (itemIsDragging) {
+                            IntOffset(0, dragOffset.y.roundToInt())
+                        } else {
+                            avoidanceOffset
+                        }
+                    }
+                    .pointerInput(itemId, items.size, rowStepPx) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                draggingItem = itemId
+                                draggingStartIndex = index
+                                dragOffset = Offset.Zero
+                                dragTargetIndex = index
+                            },
+                            onDragCancel = { clearDragState() },
+                            onDragEnd = {
+                                val dragged = draggingItem
+                                val fromIndex = if (dragged == null) -1 else items.indexOf(dragged)
+                                val toIndex = dragTargetIndex
+                                if (fromIndex >= 0 && toIndex != null && toIndex != fromIndex) {
+                                    val newOrder = items.toMutableList().also { list ->
+                                        val moved = list.removeAt(fromIndex)
+                                        list.add(toIndex.coerceIn(0, list.size), moved)
+                                    }
+                                    onOrderChange(newOrder)
+                                }
+                                clearDragState()
+                            },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                dragOffset += dragAmount
+                                dragTargetIndex = calculateDrawerDragTarget(
+                                    startIndex = draggingStartIndex,
+                                    dragOffset = dragOffset,
+                                    rowHeightPx = rowStepPx,
+                                    itemCount = items.size,
+                                )
+                            },
+                        )
+                    },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsSelectionToolbarEditRow(
+    icon: ImageVector,
+    title: String,
+    isMore: Boolean,
+    isDragging: Boolean,
+    isDropTarget: Boolean,
+    onToggleArea: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val active = isDragging || isDropTarget
+    val shape = RoundedCornerShape(16.dp)
+    val backgroundColor = if (active) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    val borderColor = if (active) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outlineVariant
+    }
+
+    SettingsBaseRow(
+        icon = icon,
+        title = title,
+        subtitle = "",
+        onClick = {},
+        modifier = modifier
+            .clip(shape)
+            .background(backgroundColor)
+            .border(1.dp, borderColor, shape),
+        contentHorizontalPadding = 14.dp,
+        trailing = {
+            TextButton(onClick = onToggleArea) { Text(if (isMore) "顶部" else "更多") }
+        },
     )
 }
 

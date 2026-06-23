@@ -1,5 +1,6 @@
 package com.kangle.kardleaf.ui
 
+import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,8 @@ import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.repository.PrefsManager
 
+private const val DASHBOARD_CUSTOM_SORT_TRACE_TAG = "KardLeafCustomSort"
+
 @Composable
 fun NoteGrid(
     uiItems: List<DashboardUiItem>,
@@ -40,6 +43,11 @@ fun NoteGrid(
     cardDensity: PrefsManager.CardDensity,
     showFolderTags: Boolean,
     showYamlTags: Boolean,
+    showModifiedDate: Boolean,
+    showNoteTitle: Boolean,
+    showDateFilenameTitle: Boolean,
+    customHiddenFilenamePatterns: List<String>,
+    unnamedNoteDateFormat: String,
     searchQuery: String,
     listState: LazyStaggeredGridState,
     modifier: Modifier = Modifier,
@@ -129,6 +137,11 @@ fun NoteGrid(
                             cardDensity = cardDensity,
                             showFolderTag = showFolderTags,
                             showYamlTags = showYamlTags,
+                            showModifiedDate = showModifiedDate,
+                            showNoteTitle = showNoteTitle,
+                            showDateFilenameTitle = showDateFilenameTitle,
+                            customHiddenFilenamePatterns = customHiddenFilenamePatterns,
+                            unnamedNoteDateFormat = unnamedNoteDateFormat,
                             searchQuery = searchQuery,
                             searchMatch = item.searchMatch,
                             showImagePreview = viewMode == PrefsManager.ViewMode.LIST && cardDensity != PrefsManager.CardDensity.COMPACT && searchQuery.isBlank(),
@@ -156,6 +169,7 @@ internal fun buildGesturePreviewItems(
     folder: String,
     sortOrder: PrefsManager.SortOrder,
     sortDirection: PrefsManager.SortDirection,
+    customOrder: List<String> = emptyList(),
 ): List<DashboardUiItem> {
     val filtered =
         notes.filter {
@@ -165,8 +179,13 @@ internal fun buildGesturePreviewItems(
         when (sortOrder) {
             PrefsManager.SortOrder.DATE_MODIFIED -> filtered.sortedBy { it.lastModified }
             PrefsManager.SortOrder.TITLE -> filtered.sortedBy { it.title.lowercase() }
+            PrefsManager.SortOrder.CUSTOM -> sortByCustomOrder(filtered, customOrder)
         }.let {
-            if (sortDirection == PrefsManager.SortDirection.DESCENDING) it.reversed() else it
+            if (sortOrder != PrefsManager.SortOrder.CUSTOM && sortDirection == PrefsManager.SortDirection.DESCENDING) {
+                it.reversed()
+            } else {
+                it
+            }
         }.sortedByDescending { it.isPinned }
 
     val items = mutableListOf<DashboardUiItem>()
@@ -189,3 +208,52 @@ internal fun buildGesturePreviewItems(
     items += DashboardUiItem.SpacerItem
     return items
 }
+
+private fun sortByCustomOrder(
+    notes: List<Note>,
+    customOrder: List<String>,
+): List<Note> {
+    val normalizedOrder = customOrder
+        .map(::normalizeDashboardNotePath)
+        .filter { it.isNotBlank() }
+        .distinct()
+    val orderIndex = normalizedOrder
+        .withIndex()
+        .associate { it.value to it.index }
+    Log.d(
+        DASHBOARD_CUSTOM_SORT_TRACE_TAG,
+        "sortByCustomOrder enter notes=${dashboardNoteSummary(notes)} order=${dashboardPathSummary(normalizedOrder)}",
+    )
+    if (orderIndex.isEmpty()) {
+        val fallback = notes.sortedByDescending { it.lastModified.time }
+        Log.d(
+            DASHBOARD_CUSTOM_SORT_TRACE_TAG,
+            "sortByCustomOrder fallback result=${dashboardNoteSummary(fallback)}",
+        )
+        return fallback
+    }
+
+    val sorted = notes.sortedWith(
+        compareBy<Note> { orderIndex[normalizeDashboardNotePath(it.file.path)] ?: Int.MAX_VALUE }
+            .thenByDescending { it.lastModified.time }
+            .thenBy { it.title.lowercase() }
+            .thenBy { normalizeDashboardNotePath(it.file.path) },
+    )
+    Log.d(
+        DASHBOARD_CUSTOM_SORT_TRACE_TAG,
+        "sortByCustomOrder result=${dashboardNoteSummary(sorted)}",
+    )
+    return sorted
+}
+
+private fun dashboardPathSummary(paths: Collection<String>, limit: Int = 5): String {
+    val normalized = paths.map(::normalizeDashboardNotePath)
+    val suffix = if (normalized.size > limit) ", ..." else ""
+    return "size=${normalized.size} head=${normalized.take(limit)}$suffix"
+}
+
+private fun dashboardNoteSummary(notes: Collection<Note>, limit: Int = 5): String =
+    dashboardPathSummary(notes.map { it.file.path }, limit)
+
+private fun normalizeDashboardNotePath(path: String): String =
+    path.trim().replace("\\", "/").trim('/')

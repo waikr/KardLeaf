@@ -24,6 +24,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.kangle.kardleaf.R
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 private val toggleTaskRegex = Regex("- \\[[ xX]\\]")
 private data class PreviewRenderState(
@@ -31,6 +32,37 @@ private data class PreviewRenderState(
     val contentHash: Int,
     val isDark: Boolean,
 )
+
+class PreviewWebViewController {
+    private var webView: WebView? = null
+
+    fun attach(view: WebView) {
+        webView = view
+    }
+
+    fun getFastScrollMetrics(): EditorFastScrollMetrics {
+        val view = webView ?: return EditorFastScrollMetrics()
+        val maxScrollY = view.maxPreviewScrollY()
+        if (maxScrollY <= 0) return EditorFastScrollMetrics()
+        val contentHeight = view.height + maxScrollY
+        return EditorFastScrollMetrics(
+            canScroll = true,
+            ratio = (view.scrollY.toFloat() / maxScrollY).coerceIn(0f, 1f),
+            thumbFraction = (view.height.toFloat() / contentHeight).coerceIn(0f, 1f),
+        )
+    }
+
+    fun fastScrollToRatio(ratio: Float) {
+        val view = webView ?: return
+        val maxScrollY = view.maxPreviewScrollY()
+        if (maxScrollY <= 0) return
+        val targetScrollY = (ratio.coerceIn(0f, 1f) * maxScrollY).roundToInt()
+        view.scrollTo(0, targetScrollY.coerceIn(0, maxScrollY))
+    }
+
+    private fun WebView.maxPreviewScrollY(): Int =
+        (contentHeight * scale - height).roundToInt().coerceAtLeast(0)
+}
 
 /** Toggle a markdown checkbox at [index] to [checked] state. */
 fun toggleTask(
@@ -61,14 +93,16 @@ fun toggleTask(
 fun PreviewWebView(
     content: String,
     isDark: Boolean,
+    controller: PreviewWebViewController,
     modifier: Modifier = Modifier,
     searchQuery: String = "",
     headingScrollText: String = "",
     headingScrollLevel: Int = 0,
     headingScrollToken: Int = 0,
-    onDoubleTap: () -> Unit = {},
+    onDoubleTap: (Int?) -> Unit = {},
     onUserInteraction: () -> Unit = {},
     onScrollRatioChanged: (Float) -> Unit = {},
+    onFastScrollSourceScrolled: () -> Unit = {},
     onCheckboxToggled: (Int, Boolean) -> Unit,
     doubleTapIntervalMs: Int = 260,
 ) {
@@ -77,6 +111,7 @@ fun PreviewWebView(
     val currentOnDoubleTap = rememberUpdatedState(onDoubleTap)
     val currentOnUserInteraction = rememberUpdatedState(onUserInteraction)
     val currentOnScrollRatioChanged = rememberUpdatedState(onScrollRatioChanged)
+    val currentOnFastScrollSourceScrolled = rememberUpdatedState(onFastScrollSourceScrolled)
     val currentOnCheckboxToggled = rememberUpdatedState(onCheckboxToggled)
     val currentDoubleTapIntervalMs = rememberUpdatedState(doubleTapIntervalMs.coerceIn(120, 600))
     val currentSearchQuery = rememberUpdatedState(searchQuery)
@@ -107,7 +142,7 @@ fun PreviewWebView(
                 )
                 setBackgroundColor(0)
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                isVerticalScrollBarEnabled = true
+                isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
                 isNestedScrollingEnabled = true
                 overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
@@ -173,6 +208,7 @@ fun PreviewWebView(
                     val webView = view as? WebView ?: return@setOnScrollChangeListener
                     val maxScrollY = (webView.contentHeight * webView.scale - webView.height).coerceAtLeast(1f)
                     currentOnScrollRatioChanged.value((scrollY / maxScrollY).coerceIn(0f, 1f))
+                    currentOnFastScrollSourceScrolled.value()
                 }
 
                 setOnTouchListener { view, event ->
@@ -190,7 +226,14 @@ fun PreviewWebView(
                             val isDoubleTap = previousTap > 0L && now - previousTap <= currentDoubleTapIntervalMs.value
                             if (isDoubleTap && !controlTouchedRecently) {
                                 lastTapUpMs.set(0L)
-                                currentOnDoubleTap.value()
+                                val density = view.resources.displayMetrics.density.coerceAtLeast(1f)
+                                val tapX = event.x / density
+                                val tapY = event.y / density
+                                (view as? WebView)?.evaluateJavascript(
+                                    "getMarkdownOffsetAtPoint(${tapX}, ${tapY})",
+                                ) { result ->
+                                    currentOnDoubleTap.value(result?.toIntOrNull()?.takeIf { it >= 0 })
+                                } ?: currentOnDoubleTap.value(null)
                                 true
                             } else {
                                 lastTapUpMs.set(if (controlTouchedRecently) 0L else now)
@@ -235,6 +278,7 @@ fun PreviewWebView(
             }
         },
         update = { view ->
+            controller.attach(view)
             val previewState = PreviewRenderState(
                 contentLength = content.length,
                 contentHash = content.hashCode(),
