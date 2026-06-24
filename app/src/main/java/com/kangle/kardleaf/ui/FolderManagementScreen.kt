@@ -1,6 +1,5 @@
 package com.kangle.kardleaf.ui
 
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
@@ -21,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -48,6 +48,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -64,7 +68,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,7 +83,6 @@ fun FolderManagementScreen(
     onOpenDrawer: () -> Unit,
     onBack: () -> Unit,
 ) {
-    val context = LocalContext.current
     val labels by viewModel.labels.collectAsState()
     val notes by viewModel.allNotes.collectAsState(initial = emptyList())
     val orderVersion by viewModel.folderManagerOrderVersion.collectAsState()
@@ -91,8 +93,21 @@ fun FolderManagementScreen(
     var deleteTarget by remember { mutableStateOf<FolderManageItem?>(null) }
     var sortTargets by remember { mutableStateOf<List<FolderManageItem>?>(null) }
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    var toastMessage by remember { mutableStateOf<String?>(null) }
+
     fun showToast(message: String) {
-        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        toastMessage = message
+    }
+
+    LaunchedEffect(toastMessage) {
+        val message = toastMessage ?: return@LaunchedEffect
+        snackbarHostState.currentSnackbarData?.dismiss()
+        snackbarHostState.showSnackbar(
+            message = message,
+            duration = SnackbarDuration.Short,
+        )
+        toastMessage = null
     }
 
     LaunchedEffect(labels, currentPath) {
@@ -149,17 +164,26 @@ fun FolderManagementScreen(
                         )
                     }
                 },
-                actions = {
-                    IconButton(onClick = { showCreateDialog = true }) {
-                        Icon(Icons.Outlined.CreateNewFolder, contentDescription = "新建文件夹")
-                    }
-                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showCreateDialog = true }) {
+            FloatingActionButton(
+                onClick = { showCreateDialog = true },
+                shape = CircleShape,
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ) {
                 Icon(Icons.Outlined.Add, contentDescription = "新建文件夹")
+            }
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
             }
         },
     ) { paddingValues ->
@@ -294,14 +318,14 @@ fun FolderManagementScreen(
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("删除文件夹") },
-            text = { Text("只能删除空文件夹。确定删除“${folder.name}”吗？") },
+            text = { Text("将删除“${folder.name}”及其中的笔记和子文件夹。确定继续吗？") },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        viewModel.deleteLabel(
+                        viewModel.deleteLabelWithContents(
                             name = folder.path,
                             onSuccess = { showToast("已删除文件夹") },
-                            onError = { showToast("文件夹不是空的，不能删除") },
+                            onError = { showToast("删除文件夹失败") },
                         )
                         deleteTarget = null
                     },
@@ -440,7 +464,7 @@ private fun FolderManageRow(
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text("删除空文件夹") },
+                        text = { Text("删除整个文件夹") },
                         leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
                         onClick = {
                             menuExpanded = false

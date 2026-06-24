@@ -10,32 +10,32 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface NoteDao {
     @Query(
-        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isTrashed = 0 AND isArchived = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isTrashed = 0 AND isArchived = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
     )
     fun getAllActiveNotes(): Flow<List<NoteEntity>>
 
     @Query(
-        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
     )
     fun getAllNotesWithArchive(): Flow<List<NoteEntity>>
 
     @Query(
-        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isTrashed = 1 ORDER BY lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isTrashed = 1 ORDER BY lastModifiedMs DESC",
     )
     fun getTrashedNotes(): Flow<List<NoteEntity>>
 
     @Query(
-        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isArchived = 1 AND isTrashed = 0 ORDER BY lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isArchived = 1 AND isTrashed = 0 ORDER BY lastModifiedMs DESC",
     )
     fun getArchivedNotes(): Flow<List<NoteEntity>>
 
     @Query(
-        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE folder = :folder AND isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE folder = :folder AND isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
     )
     fun getNotesByFolder(folder: String): Flow<List<NoteEntity>>
 
     @Query(
-        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE (folder = :folder OR folder LIKE :folderPrefix) AND isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE (folder = :folder OR folder LIKE :folderPrefix) AND isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
     )
     fun getNotesByFolderRecursive(
         folder: String,
@@ -43,7 +43,7 @@ interface NoteDao {
     ): Flow<List<NoteEntity>>
 
     @Query(
-        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isFavorite = 1 AND isTrashed = 0 ORDER BY lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isFavorite = 1 AND isTrashed = 0 ORDER BY lastModifiedMs DESC",
     )
     fun getFavoriteNotes(): Flow<List<NoteEntity>>
 
@@ -51,12 +51,31 @@ interface NoteDao {
     suspend fun getNoteByPath(filePath: String): NoteEntity?
 
     @Query(
-        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE filePath = :filePath",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE filePath = :filePath",
     )
     suspend fun getNoteShellByPath(filePath: String): NoteEntity?
 
+
+    @Query(
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE filePath = :recordKey OR recordId = :recordKey LIMIT 1",
+    )
+    suspend fun getNoteShellByRecordKey(recordKey: String): NoteEntity?
+
     @Query("SELECT * FROM notes WHERE filePath IN (:filePaths)")
     suspend fun getNotesByPaths(filePaths: List<String>): List<NoteEntity>
+
+    @Query(
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE filePath IN (:filePaths)",
+    )
+    suspend fun getNoteShellsByPaths(filePaths: List<String>): List<NoteEntity>
+
+    @Query(
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE folder = :folder OR folder LIKE :folderPrefix",
+    )
+    suspend fun getNoteShellsInFolderTree(
+        folder: String,
+        folderPrefix: String,
+    ): List<NoteEntity>
 
     @Query(
         """
@@ -89,6 +108,12 @@ interface NoteDao {
 
     @Query("SELECT DISTINCT folder FROM notes WHERE isTrashed = 0 AND isArchived = 0")
     fun getAllLabels(): Flow<List<String>>
+
+    @Query("UPDATE notes SET recordId = :recordId WHERE filePath = :filePath")
+    suspend fun updateRecordId(
+        filePath: String,
+        recordId: String,
+    )
 
     @Query("UPDATE notes SET isPinned = :isPinned WHERE filePath = :filePath")
     suspend fun updatePinStatus(
@@ -139,7 +164,7 @@ interface NoteDao {
     suspend fun getTrashedNotePathsBefore(cutoffMs: Long): List<String>
 
     @Query(
-        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes",
     )
     suspend fun getAllNoteMetadataSync(): List<NoteMetadataEntity>
 
@@ -185,7 +210,7 @@ interface NoteDao {
     fun getAllYamlTagRows(): Flow<List<String>>
 
     @Query(
-        "SELECT filePath, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE yamlTags LIKE '%' || :needle || '%' AND isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE yamlTags LIKE '%' || :needle || '%' AND isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
     )
     fun getNotesByYamlTag(needle: String): Flow<List<NoteEntity>>
 

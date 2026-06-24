@@ -1,5 +1,6 @@
 package com.kangle.kardleaf.ui
 
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
@@ -36,6 +37,7 @@ import kotlinx.coroutines.launch
 
 private const val DASHBOARD_NOTE_PREVIEW_LIMIT = 200
 private const val EDITOR_TRACE_TAG = "KardLeafEditorTrace"
+private const val LARGE_NOTE_OPEN_TRACE_TAG = "KardLeafLargeNoteOpen"
 private const val STARTUP_PERF_TRACE_TAG = "KardLeafStartupPerf"
 private const val YAML_TAG_TRACE_TAG = "KardLeafYamlTags"
 private const val CUSTOM_SORT_TRACE_TAG = "KardLeafCustomSort"
@@ -670,6 +672,43 @@ class MainViewModel(
         _isLoading.value = false
     }
 
+    fun openNoteByPath(notePath: String) {
+        val normalizedPath = normalizeNotePath(notePath)
+        if (normalizedPath.isBlank()) return
+        viewModelScope.launch {
+            openResolvedNoteByPath(normalizedPath, "openNoteByPath")
+        }
+    }
+
+    fun openRecordNote(recordKey: String) {
+        val key = recordKey.trim()
+        if (key.isBlank()) return
+        viewModelScope.launch {
+            val resolvedPath = runCatching {
+                repository.resolveRecordNotePath(key)
+            }.getOrNull()
+            if (resolvedPath.isNullOrBlank()) {
+                Log.w(EDITOR_TRACE_TAG, "openRecordNote no note key=$key")
+                return@launch
+            }
+            openResolvedNoteByPath(normalizeNotePath(resolvedPath), "openRecordNote")
+        }
+    }
+
+    private suspend fun openResolvedNoteByPath(
+        normalizedPath: String,
+        source: String,
+    ) {
+        val note = runCatching {
+            repository.getCachedNote(normalizedPath) ?: repository.getNoteForEditor(normalizedPath)
+        }.getOrNull()
+        if (note != null) {
+            openNote(note)
+        } else {
+            Log.w(EDITOR_TRACE_TAG, "$source no note path=$normalizedPath")
+        }
+    }
+
     fun openNote(note: Note) {
         val requestVersion = ++openNoteRequestVersion
         val notePath = note.file.path
@@ -677,6 +716,11 @@ class MainViewModel(
         Log.d(
             EDITOR_TRACE_TAG,
             "openNote start request=$requestVersion editorOpen=${_isEditorOpen.value} source=${note.traceSummary()}",
+        )
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "vm openNote start request=$requestVersion path=$notePath editorOpen=${_isEditorOpen.value} " +
+                "sourceContentLen=${note.content.length} sourcePreviewLen=${note.contentPreview.length} isOpening=${_isOpeningNoteContent.value}",
         )
         _externalNoteDraft.value = null
         _editorDirty.value = false
@@ -696,6 +740,12 @@ class MainViewModel(
                 EDITOR_TRACE_TAG,
                 "openNote cached loaded request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
                     "cached=${cachedNote?.traceSummary() ?: "null"}",
+            )
+            Log.d(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "vm cached loaded request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                    "cachedContentLen=${cachedNote?.content?.length ?: -1} cachedPreviewLen=${cachedNote?.contentPreview?.length ?: -1} " +
+                    "hasFull=${cachedNote?.hasFullEditorContent()}",
             )
 
             if (requestVersion != openNoteRequestVersion) {
@@ -718,6 +768,11 @@ class MainViewModel(
                 _isOpeningNoteContent.value = false
                 _currentNote.value = initialNote
                 _isEditorOpen.value = true
+                Log.d(
+                    LARGE_NOTE_OPEN_TRACE_TAG,
+                    "vm show initial request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                        "contentLen=${initialNote.content.length} previewLen=${initialNote.contentPreview.length} isOpening=${_isOpeningNoteContent.value}",
+                )
                 markOpenNoteShown(initialNote)
             } else {
                 val shellNote = note.copy(content = "", contentPreview = "")
@@ -729,6 +784,11 @@ class MainViewModel(
                 _isOpeningNoteContent.value = true
                 _currentNote.value = shellNote
                 _isEditorOpen.value = true
+                Log.d(
+                    LARGE_NOTE_OPEN_TRACE_TAG,
+                    "vm show loading shell request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                        "path=$notePath isOpening=${_isOpeningNoteContent.value}",
+                )
                 markOpenNoteShown(shellNote)
             }
 
@@ -743,6 +803,12 @@ class MainViewModel(
                 EDITOR_TRACE_TAG,
                 "openNote full loaded request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
                     "full=${fullNote?.traceSummary() ?: "null"}",
+            )
+            Log.d(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "vm full loaded request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                    "fullContentLen=${fullNote?.content?.length ?: -1} fullPreviewLen=${fullNote?.contentPreview?.length ?: -1} " +
+                    "isOpening=${_isOpeningNoteContent.value}",
             )
 
             if (requestVersion != openNoteRequestVersion) {
@@ -770,6 +836,11 @@ class MainViewModel(
                     )
                     _currentNote.value = fullNote
                     _isEditorOpen.value = true
+                    Log.d(
+                        LARGE_NOTE_OPEN_TRACE_TAG,
+                        "vm show full request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                            "contentLen=${fullNote.content.length} previewLen=${fullNote.contentPreview.length} isOpening=${_isOpeningNoteContent.value}",
+                    )
                     markOpenNoteShown(fullNote)
                 } else {
                     Log.w(
@@ -777,6 +848,13 @@ class MainViewModel(
                         "openNote skip full request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
                             "suspiciousBlank=$fullNoteIsSuspiciousBlank hasNotOpenedYet=$hasNotOpenedYet same=$isSameOpenedNote " +
                             "dirty=${_editorDirty.value} currentEmpty=$currentContentEmpty",
+                    )
+                    Log.w(
+                        LARGE_NOTE_OPEN_TRACE_TAG,
+                        "vm skip full request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                            "suspiciousBlank=$fullNoteIsSuspiciousBlank hasNotOpenedYet=$hasNotOpenedYet same=$isSameOpenedNote " +
+                            "dirty=${_editorDirty.value} currentEmpty=$currentContentEmpty currentContentLen=${current?.content?.length ?: -1} " +
+                            "fullContentLen=${fullNote.content.length} isOpening=${_isOpeningNoteContent.value}",
                     )
                 }
             } else {
@@ -935,6 +1013,33 @@ class MainViewModel(
                 onSuccess()
             } else {
                 onError("Label must be empty to delete it")
+            }
+        }
+    }
+
+    fun deleteLabelWithContents(
+        name: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        val folder = normalizeFolderPath(name)
+        if (folder.isBlank()) return
+        viewModelScope.launch {
+            val success = repository.deleteLabelWithContents(folder)
+            if (success) {
+                val prefix = "$folder/"
+                val current = _tempLabels.value
+                    .filterNot { it == folder || it.startsWith(prefix) }
+                    .toSet()
+                _tempLabels.value = current
+                val filter = _currentFilter.value
+                if (filter is NoteFilter.Label && (filter.name == folder || filter.name.startsWith(prefix))) {
+                    _currentFilter.value = NoteFilter.All
+                    persistLastFilter(NoteFilter.All)
+                }
+                onSuccess()
+            } else {
+                onError("删除文件夹失败")
             }
         }
     }
@@ -1291,6 +1396,8 @@ class MainViewModel(
             val moves = repository.moveNotesWithResult(notesToMove, targetFolder)
             if (moves.isNotEmpty()) {
                 pendingNoteUndo = PendingNoteUndo.MoveBack(moves)
+                _homeScrollToTopEvents.value += 1
+                runCatching { repository.refreshNotesFromExternalChange() }
             }
         }
     }
@@ -1319,17 +1426,12 @@ class MainViewModel(
             }
 
             selectedNotes.forEach { note ->
-                val baseTitle = note.title.trim().replace(Regex("~副本\\d+$"), "").ifBlank { "Untitled" }
-                var index = 1
-                var copyTitle = "$baseTitle~副本$index"
-                while (copyTitle in existingTitles) {
-                    index += 1
-                    copyTitle = "$baseTitle~副本$index"
-                }
+                val sourceNote = repository.getNoteForEditor(note.file.path) ?: note
+                val copyTitle = buildDuplicateNoteTitle(sourceNote.title, existingTitles)
                 existingTitles.add(copyTitle)
                 val copiedPath = joinPath(normalizedTargetFolder, "$copyTitle.md")
                 val savedPath = repository.saveNote(
-                    note.copy(
+                    sourceNote.copy(
                         file = java.io.File(copiedPath),
                         title = copyTitle,
                         isArchived = false,
@@ -1358,8 +1460,64 @@ class MainViewModel(
                 current.add(normalizedTargetFolder)
                 _tempLabels.value = current
             }
+            if (copiedCount > 0 && shouldScrollHomeToTopAfterDuplicate(normalizedTargetFolder)) {
+                _homeScrollToTopEvents.value += 1
+            }
             onDone(copiedCount)
         }
+    }
+
+    private fun shouldScrollHomeToTopAfterDuplicate(targetFolder: String): Boolean {
+        val filter = _currentFilter.value
+        val copyWillBeVisible = when (filter) {
+            NoteFilter.All,
+            NoteFilter.Recent -> true
+            NoteFilter.Favorites -> true
+            NoteFilter.Drafts -> targetFolder == PrefsManager.DEFAULT_DRAFT_FOLDER_NAME
+            is NoteFilter.Label -> {
+                val folder = normalizeFolderPath(filter.name)
+                targetFolder == folder || (filter.recursive && targetFolder.startsWith("$folder/"))
+            }
+            NoteFilter.Archive,
+            NoteFilter.Trash -> false
+            is NoteFilter.YamlTag -> false
+        }
+        if (!copyWillBeVisible) return false
+        if (filter is NoteFilter.Recent) return true
+
+        val folderSettings = (filter as? NoteFilter.Label)
+            ?.takeIf { !it.recursive }
+            ?.name
+            ?.let { prefsManager.getFolderSortSettings(it) }
+        val effectiveSortOrder = folderSettings?.order ?: _sortOrder.value
+        val effectiveSortDirection = folderSettings?.direction ?: _sortDirection.value
+        return effectiveSortOrder == PrefsManager.SortOrder.DATE_MODIFIED &&
+            effectiveSortDirection == PrefsManager.SortDirection.DESCENDING
+    }
+
+    private fun buildDuplicateNoteTitle(
+        sourceTitle: String,
+        existingTitles: Set<String>,
+    ): String {
+        val normalizedSourceTitle = sourceTitle.trim().ifBlank { "Untitled" }
+        val duplicateTitleRegex = Regex(".*~副本(?:\\d+)?(?:~\\d+)*$")
+        val appendSerialOnly = duplicateTitleRegex.matches(normalizedSourceTitle)
+
+        var index = 1
+        var copyTitle = if (appendSerialOnly) {
+            "$normalizedSourceTitle~$index"
+        } else {
+            "$normalizedSourceTitle~副本$index"
+        }
+        while (copyTitle in existingTitles) {
+            index += 1
+            copyTitle = if (appendSerialOnly) {
+                "$normalizedSourceTitle~$index"
+            } else {
+                "$normalizedSourceTitle~副本$index"
+            }
+        }
+        return copyTitle
     }
 
     private fun appendCopiedNotesToFolderCustomOrder(
@@ -1780,6 +1938,11 @@ class MainViewModel(
         uri: Uri,
         currentFolder: String,
     ): String = repository.importImage(uri, currentFolder)
+
+    suspend fun importDrawingImage(
+        bitmap: Bitmap,
+        currentFolder: String,
+    ): String = repository.importDrawingImage(bitmap, currentFolder)
 
     suspend fun resolveNoteImages(note: Note): List<RoomNoteRepository.NoteImage> =
         repository.resolveNoteImages(note.content, note.folder)

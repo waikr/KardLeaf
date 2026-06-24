@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -26,6 +27,7 @@ import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
+private const val LARGE_NOTE_OPEN_TRACE_TAG = "KardLeafLargeNoteOpen"
 private val toggleTaskRegex = Regex("- \\[[ xX]\\]")
 private data class PreviewRenderState(
     val contentLength: Int,
@@ -135,6 +137,7 @@ fun PreviewWebView(
     AndroidView(
         modifier = modifier,
         factory = { context ->
+            Log.d(LARGE_NOTE_OPEN_TRACE_TAG, "webview factory create")
             WebView(context).apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -255,7 +258,15 @@ fun PreviewWebView(
                             url: String?,
                         ) {
                             val webView = view ?: return
-                            webView.evaluateJavascript("updateContentFromAndroid($isDark)") {
+                            Log.d(
+                                LARGE_NOTE_OPEN_TRACE_TAG,
+                                "webview page finished url=$url contentLen=${contentRef.get().length} dark=$isDark",
+                            )
+                            webView.evaluateJavascript("updateContentFromAndroid($isDark)") { result ->
+                                Log.d(
+                                    LARGE_NOTE_OPEN_TRACE_TAG,
+                                    "webview page finished updateContent result=$result contentLen=${contentRef.get().length}",
+                                )
                                 webView.applyPreviewSearch()
                                 webView.applyPreviewHeadingScroll()
                             }
@@ -287,10 +298,19 @@ fun PreviewWebView(
             val lastSearchQuery = view.getTag(R.id.preview_search_query_tag) as? String
             val lastHeadingToken = view.getTag(R.id.preview_heading_scroll_token_tag) as? Int ?: 0
             if (view.tag != previewState) {
+                Log.d(
+                    LARGE_NOTE_OPEN_TRACE_TAG,
+                    "webview update content changed len=${content.length} hash=${content.hashCode()} dark=$isDark " +
+                        "lastState=${view.tag}",
+                )
                 view.tag = previewState
                 contentRef.set(content)
                 view.post {
-                    view.evaluateJavascript("updateContentFromAndroid($isDark)") {
+                    view.evaluateJavascript("updateContentFromAndroid($isDark)") { result ->
+                        Log.d(
+                            LARGE_NOTE_OPEN_TRACE_TAG,
+                            "webview updateContent done result=$result len=${contentRef.get().length} hash=${contentRef.get().hashCode()}",
+                        )
                         view.setTag(R.id.preview_search_query_tag, currentSearchQuery.value)
                         view.applyPreviewSearch()
                         view.setTag(R.id.preview_heading_scroll_token_tag, currentHeadingScrollToken.value)

@@ -11,14 +11,21 @@ import androidx.fragment.app.FragmentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
@@ -26,6 +33,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -342,6 +350,9 @@ class MainActivity : FragmentActivity() {
                     var drawerBackAction by androidx.compose.runtime.remember {
                         androidx.compose.runtime.mutableStateOf<(() -> Boolean)?>(null)
                     }
+                    var openDrawingPadAfterEditorOpen by androidx.compose.runtime.remember {
+                        androidx.compose.runtime.mutableStateOf(false)
+                    }
                     fun blockDrawerOpenBriefly() {
                         drawerOpenBlockedUntil = SystemClock.uptimeMillis() + 700L
                     }
@@ -561,7 +572,7 @@ class MainActivity : FragmentActivity() {
                             }
                         }
 
-                        Box(
+                        BoxWithConstraints(
                             modifier =
                                 Modifier
                                     .fillMaxSize()
@@ -604,6 +615,17 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                         ) {
+                            val mainContentOffsetX by animateDpAsState(
+                                targetValue = if (isEditorOpen) -maxWidth * 0.10f else 0.dp,
+                                animationSpec = tween(durationMillis = 300),
+                                label = "MainContentOffset",
+                            )
+                            val mainContentAlpha by animateFloatAsState(
+                                targetValue = if (isEditorOpen) 0.92f else 1f,
+                                animationSpec = tween(durationMillis = 300),
+                                label = "MainContentAlpha",
+                            )
+
                             androidx.activity.compose.BackHandler(
                                 enabled = !drawerState.isOpen &&
                                     (currentScreen is MainViewModel.Screen.Dates ||
@@ -615,7 +637,13 @@ class MainActivity : FragmentActivity() {
                                 viewModel.navigateTo(MainViewModel.Screen.Dashboard)
                             }
 
-                            when (currentScreen) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .offset(x = mainContentOffsetX)
+                                    .alpha(mainContentAlpha),
+                            ) {
+                                when (currentScreen) {
                                 MainViewModel.Screen.Dashboard -> {
                                     DashboardScreen(
                                         viewModel = viewModel,
@@ -634,6 +662,13 @@ class MainActivity : FragmentActivity() {
                                             if (!isDrawerContentBlocked()) {
                                                 blockDrawerOpenBriefly()
                                                 viewModel.createNote(source = "dashboard_fab")
+                                            }
+                                        },
+                                        onCreateDrawingClick = {
+                                            if (!isDrawerContentBlocked()) {
+                                                blockDrawerOpenBriefly()
+                                                openDrawingPadAfterEditorOpen = true
+                                                viewModel.createNote(source = "dashboard_fab_drawing")
                                             }
                                         },
                                         onOpenDrawer = { openDrawerIfAllowed() },
@@ -720,16 +755,26 @@ class MainActivity : FragmentActivity() {
                                     onLoadHistoryCleanupPreview = { keep -> viewModel.getHistoryCleanupPreview(keep) },
                                     onLoadRemarkNoteSummaries = { viewModel.getRemarkNoteSummaries() },
                                     onLoadHistoryNoteSummaries = { viewModel.getHistoryNoteSummaries() },
+                                    onOpenRecordNote = { noteKey -> viewModel.openRecordNote(noteKey) },
                                     onCleanupHistory = { viewModel.cleanupOldHistoryVersions() },
                                     labels = labels,
                                 )
+                            }
                             }
                         }
 
                         androidx.compose.animation.AnimatedVisibility(
                                 visible = isEditorOpen,
-                                enter = slideInHorizontally { width -> width },
-                                exit = slideOutHorizontally { width -> width },
+                                enter = slideInHorizontally(
+                                    animationSpec = tween(durationMillis = 300),
+                                ) { width -> width / 10 } + fadeIn(
+                                    animationSpec = tween(durationMillis = 195, delayMillis = 105),
+                                ),
+                                exit = slideOutHorizontally(
+                                    animationSpec = tween(durationMillis = 300),
+                                ) { width -> width / 10 } + fadeOut(
+                                    animationSpec = tween(durationMillis = 105),
+                                ),
                                 label = "EditorTransition",
                             ) {
                                 val filter = viewModel.currentFilter.value
@@ -740,6 +785,8 @@ class MainActivity : FragmentActivity() {
                                     onBack = { viewModel.closeEditor() },
                                     initialLabel = label,
                                     onPickImage = { onPicked -> launchEditorImagePicker(onPicked) },
+                                    openDrawingPadOnStart = openDrawingPadAfterEditorOpen,
+                                    onDrawingPadStartConsumed = { openDrawingPadAfterEditorOpen = false },
                                 )
                             }
 

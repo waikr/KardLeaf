@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
@@ -23,6 +24,8 @@ import androidx.compose.ui.text.TextRange
 import androidx.documentfile.provider.DocumentFile
 import com.kangle.kardleaf.data.repository.PrefsManager
 import java.util.concurrent.Executors
+import java.util.regex.Pattern
+import java.util.regex.PatternSyntaxException
 import java.util.concurrent.atomic.AtomicInteger
 
 private const val EDITOR_TRACE_TAG = "KardLeafEditorTrace"
@@ -35,6 +38,8 @@ private const val IMAGE_PREVIEW_DEBOUNCE_MS = 350L
 private const val INLINE_IMAGE_PREVIEW_ENABLED = true
 
 private const val SEARCH_HIGHLIGHT_COLOR = 0x66FFD54F
+private val SEARCH_CURRENT_HIGHLIGHT_COLOR = 0x80FFD54F.toInt()
+private val SEARCH_CURRENT_BORDER_COLOR = 0xFFE0A800.toInt()
 
 private class KardLeafSearchHighlightSpan(color: Int) : BackgroundColorSpan(color)
 
@@ -169,6 +174,15 @@ class EditorEditText @JvmOverloads constructor(
     private var markdownWatcher: TextWatcher? = null
     private var markdownWatcherAttached = false
 
+    private val currentSearchPath = Path()
+    private val currentSearchBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = SEARCH_CURRENT_BORDER_COLOR
+        style = Paint.Style.STROKE
+        strokeWidth = resources.displayMetrics.density * 1.5f
+    }
+    private var currentSearchStart = -1
+    private var currentSearchEnd = -1
+
     private val internalWatcher = object : TextWatcher {
         override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
             if (isApplyingHistory || programmaticChange) return
@@ -252,6 +266,25 @@ class EditorEditText @JvmOverloads constructor(
 
     init {
         addTextChangedListener(internalWatcher)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        drawCurrentSearchBorder(canvas)
+    }
+
+    private fun drawCurrentSearchBorder(canvas: Canvas) {
+        val layout = layout ?: return
+        val start = currentSearchStart
+        val end = currentSearchEnd
+        val length = text?.length ?: 0
+        if (start < 0 || end <= start || end > length) return
+        currentSearchPath.reset()
+        layout.getSelectionPath(start, end, currentSearchPath)
+        canvas.save()
+        canvas.translate(totalPaddingLeft.toFloat(), totalPaddingTop.toFloat())
+        canvas.drawPath(currentSearchPath, currentSearchBorderPaint)
+        canvas.restore()
     }
 
     fun configureInlineImagePreviewFolder(currentFolder: String) {
@@ -546,6 +579,19 @@ class EditorEditText @JvmOverloads constructor(
         notifyUndoRedoChanged()
     }
 
+    fun clearTextForDispose() {
+        removeCallbacks(imagePreviewRefreshRunnable)
+        programmaticChange = true
+        try {
+            setText("")
+        } finally {
+            programmaticChange = false
+        }
+        clearHistory()
+        clearSearchHighlights()
+        imagePreviewItems = emptyList()
+    }
+
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
         if (SystemClock.elapsedRealtime() <= debugImageInsertUntilMs) {
@@ -736,41 +782,88 @@ class EditorEditText @JvmOverloads constructor(
         scheduleInlineImagePreviewRefresh()
     }
 
-    fun highlightSearch(query: String): Int {
+    fun highlightSearch(
+        query: String,
+        currentStart: Int = -1,
+        useRegex: Boolean = false,
+        matchCase: Boolean = false,
+    ): Int {
         clearSearchHighlights()
         if (query.isBlank()) return 0
         val editable = text ?: return 0
         val source = editable.toString()
         var count = 0
-        var searchFrom = 0
-        while (searchFrom <= source.length - query.length) {
-            val index = source.indexOf(query, startIndex = searchFrom, ignoreCase = true)
-            if (index < 0) break
-            val end = index + query.length
+
+        fun addHighlight(start: Int, end: Int) {
+            if (end <= start) return
             editable.setSpan(
-                KardLeafSearchHighlightSpan(SEARCH_HIGHLIGHT_COLOR),
-                index,
+                KardLeafSearchHighlightSpan(
+                    if (start == currentStart) SEARCH_CURRENT_HIGHLIGHT_COLOR else SEARCH_HIGHLIGHT_COLOR,
+                ),
+                start,
                 end,
                 Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
             )
+            if (start == currentStart) {
+                currentSearchStart = start
+                currentSearchEnd = end
+            }
             count++
-            searchFrom = end.coerceAtLeast(index + 1)
         }
+
+        if (useRegex) {
+            val pattern = createSearchHighlightPattern(query, matchCase) ?: return 0
+            val matcher = pattern.matcher(source)
+            while (matcher.find()) {
+                addHighlight(matcher.start().coerceIn(0, source.length), matcher.end().coerceIn(0, source.length))
+            }
+        } else {
+            var searchFrom = 0
+            while (searchFrom <= source.length - query.length) {
+                val index = source.indexOf(query, startIndex = searchFrom, ignoreCase = !matchCase)
+                if (index < 0) break
+                val end = index + query.length
+                addHighlight(index, end)
+                searchFrom = end.coerceAtLeast(index + 1)
+            }
+        }
+
+        invalidate()
         Log.d(
             EDITOR_TRACE_TAG,
-            "search highlight queryLen=${query.length} count=$count textLen=${source.length} selection=$selectionStart..$selectionEnd",
+            "search highlight queryLen=${query.length} regex=$useRegex matchCase=$matchCase count=$count " +
+                "current=${currentSearchStart}..${currentSearchEnd} textLen=${source.length} selection=$selectionStart..$selectionEnd",
         )
         return count
     }
 
     fun clearSearchHighlights() {
         val editable = text ?: return
-        val spans = editable.getSpans(0, editable.length, KardLeafSearchHighlightSpan::class.java)
-        spans.forEach { editable.removeSpan(it) }
-        if (spans.isNotEmpty()) {
-            Log.d(EDITOR_TRACE_TAG, "search highlight cleared count=${spans.size} textLen=${editable.length}")
+        val normalSpans = editable.getSpans(0, editable.length, KardLeafSearchHighlightSpan::class.java)
+        normalSpans.forEach { editable.removeSpan(it) }
+        currentSearchStart = -1
+        currentSearchEnd = -1
+        val removedCount = normalSpans.size
+        if (removedCount > 0) {
+            invalidate()
+            Log.d(EDITOR_TRACE_TAG, "search highlight cleared count=$removedCount textLen=${editable.length}")
         }
     }
+
+    private fun createSearchHighlightPattern(
+        query: String,
+        matchCase: Boolean,
+    ): Pattern? =
+        try {
+            val caseFlags = if (matchCase) {
+                0
+            } else {
+                Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
+            }
+            Pattern.compile(query, Pattern.MULTILINE or caseFlags)
+        } catch (_: PatternSyntaxException) {
+            null
+        }
 
     fun getTextString(): String = text?.toString().orEmpty()
 

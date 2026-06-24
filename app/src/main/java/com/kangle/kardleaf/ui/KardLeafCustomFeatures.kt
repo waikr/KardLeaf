@@ -3,6 +3,8 @@
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
@@ -97,7 +99,9 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.launch
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -127,6 +131,7 @@ object KardLeafCustomFeatures {
         UNDO("撤销"),
         REDO("恢复"),
         IMAGE("图片"),
+        DRAWING("绘图"),
         HEADING("标题"),
         RULE("分割线"),
         BOLD("加粗"),
@@ -148,6 +153,7 @@ object KardLeafCustomFeatures {
             ToolbarItem.UNDO,
             ToolbarItem.REDO,
             ToolbarItem.IMAGE,
+            ToolbarItem.DRAWING,
             ToolbarItem.HEADING,
             ToolbarItem.RULE,
             ToolbarItem.BOLD,
@@ -381,6 +387,7 @@ fun KardLeafSettingsScreen(
     onLoadHistoryCleanupPreview: suspend (Int) -> List<HistoryCleanupPreview> = { emptyList() },
     onLoadRemarkNoteSummaries: suspend () -> List<NoteRecordSummary> = { emptyList() },
     onLoadHistoryNoteSummaries: suspend () -> List<NoteRecordSummary> = { emptyList() },
+    onOpenRecordNote: (String) -> Unit = {},
     onCleanupHistory: () -> Unit = {},
     labels: List<String> = emptyList(),
 ) {
@@ -428,6 +435,7 @@ fun KardLeafSettingsScreen(
     var themeBackgroundColor by remember { mutableStateOf(prefsManager.getThemeBackgroundColor()) }
     var drawerEdgeWidthText by remember { mutableStateOf(prefsManager.getDrawerEdgeWidthDp().toString()) }
     var noteSidePanelsEnabled by remember { mutableStateOf(prefsManager.isNoteSidePanelsEnabled()) }
+    var noteSidePanelOpenMode by remember { mutableStateOf(prefsManager.getNoteSidePanelOpenMode()) }
     var showYamlTagsOnLooseCards by remember { mutableStateOf(prefsManager.isLooseCardYamlTagsVisible()) }
     var showModifiedDateOnCards by remember { mutableStateOf(prefsManager.isModifiedDateOnCardsVisible()) }
     var showNoteTitleOnCards by remember { mutableStateOf(prefsManager.isNoteTitleOnCardsVisible()) }
@@ -439,6 +447,8 @@ fun KardLeafSettingsScreen(
     var trashAutoCleanDaysText by remember { mutableStateOf(prefsManager.getTrashAutoCleanDays().toString()) }
     var passwordInputMode by remember { mutableStateOf(prefsManager.getPasswordInputMode()) }
     var toolbarOrder by remember { mutableStateOf(KardLeafCustomFeatures.getToolbarOrder(context)) }
+    var editorTopToolbarOrder by remember { mutableStateOf(prefsManager.getEditorTopToolbarItemOrder()) }
+    var editorTopToolbarMoreItems by remember { mutableStateOf(prefsManager.getEditorTopToolbarMoreItems()) }
     var selectionToolbarOrder by remember { mutableStateOf(prefsManager.getSelectionToolbarItemOrder()) }
     var selectionToolbarMoreItems by remember { mutableStateOf(prefsManager.getSelectionToolbarMoreItems()) }
     var restoreLastFilter by remember { mutableStateOf(prefsManager.isRestoreLastFilterEnabled()) }
@@ -651,6 +661,47 @@ fun KardLeafSettingsScreen(
         )
     }
 
+    fun exportDiagnosticLog() {
+        try {
+            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo.versionCode.toLong()
+            }
+            val now = Date()
+            val fileTimestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now)
+            val displayTime = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(now)
+            val logText = buildString {
+                appendLine("KardLeaf 诊断日志")
+                appendLine("生成时间：$displayTime")
+                appendLine("应用版本：${packageInfo.versionName} ($versionCode)")
+                appendLine("包名：${context.packageName}")
+                appendLine("Android：${Build.VERSION.RELEASE} / SDK ${Build.VERSION.SDK_INT}")
+                appendLine("设备：${Build.MANUFACTURER} ${Build.MODEL}")
+                appendLine()
+                appendLine("详细日志：当前正式版未启用")
+                appendLine("说明：此文件不包含笔记正文、文件名或笔记路径。")
+                appendLine("如遇问题，请联系开发者获取诊断版后再次导出。")
+            }
+            val shareDir = File(context.cacheDir, "shared_notes").apply { mkdirs() }
+            val logFile = File(shareDir, "kardleaf_diagnostic_$fileTimestamp.txt")
+            logFile.writeText(logText, Charsets.UTF_8)
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", logFile)
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "KardLeaf 诊断日志")
+                putExtra(Intent.EXTRA_TEXT, "KardLeaf 诊断日志")
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(shareIntent, "导出诊断日志"))
+        } catch (e: Exception) {
+            Toast.makeText(context, "导出诊断日志失败", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun resetSettings() {
         val oldThemeColor = prefsManager.getThemeColor()
         val oldThemeBackgroundColor = prefsManager.getThemeBackgroundColor()
@@ -824,8 +875,6 @@ fun KardLeafSettingsScreen(
                                 maxLines = 8,
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            SettingsPageText("隐藏纯日期文件名时生效。默认第一行：${PrefsManager.DEFAULT_HIDDEN_DATE_FILENAME_PATTERN}")
-                            SettingsPageText("默认第二行：${PrefsManager.DEFAULT_HIDDEN_COPY_FILENAME_PATTERN}")
                         }
                         "sort" -> {
                             SettingsSectionTitle("排序字段")
@@ -867,6 +916,20 @@ fun KardLeafSettingsScreen(
                                 onClick = {
                                     openNoteMode = mode
                                     KardLeafCustomFeatures.saveOpenNoteMode(context, mode)
+                                    settingsDialog = null
+                                },
+                            )
+                        }
+                        "sidePanelOpenMode" -> PrefsManager.NoteSidePanelOpenMode.values().forEach { mode ->
+                            SettingsChoiceRow(
+                                icon = if (mode == PrefsManager.NoteSidePanelOpenMode.GESTURE) Icons.Outlined.Swipe else Icons.Outlined.ViewHeadline,
+                                title = if (mode == PrefsManager.NoteSidePanelOpenMode.GESTURE) "手势划出" else "顶部工具栏弹出",
+                                subtitle = if (mode == PrefsManager.NoteSidePanelOpenMode.GESTURE) "左右滑动打开目录和属性备注" else "用顶部按钮打开，禁用左右划出",
+                                selected = noteSidePanelOpenMode == mode,
+                                onClick = {
+                                    noteSidePanelOpenMode = mode
+                                    prefsManager.saveNoteSidePanelOpenMode(mode)
+                                    onSettingsChanged()
                                     settingsDialog = null
                                 },
                             )
@@ -1398,6 +1461,87 @@ fun KardLeafSettingsScreen(
                             KardLeafCustomFeatures.saveToolbarOrder(context, toolbarOrder)
                         },
                     )
+                }
+                "editorTopToolbar" -> {
+                    val availableItems = remember(noteSidePanelOpenMode, noteSidePanelsEnabled) {
+                        editorTopToolbarAvailableItems(noteSidePanelsEnabled, noteSidePanelOpenMode)
+                    }
+                    var itemOrder by remember(settingsPage, editorTopToolbarOrder, noteSidePanelOpenMode, noteSidePanelsEnabled) {
+                        mutableStateOf(normalizeEditorTopToolbarOrder(prefsManager.getEditorTopToolbarItemOrder(), availableItems))
+                    }
+                    var moreItems by remember(settingsPage, editorTopToolbarMoreItems, noteSidePanelOpenMode, noteSidePanelsEnabled) {
+                        mutableStateOf(prefsManager.getEditorTopToolbarMoreItems().filter { it in availableItems && it != PrefsManager.EditorTopToolbarItemId.MORE }.toSet())
+                    }
+
+                    fun saveEditorTopToolbarState(
+                        newOrder: List<PrefsManager.EditorTopToolbarItemId> = itemOrder,
+                        newMoreItems: Set<PrefsManager.EditorTopToolbarItemId> = moreItems,
+                    ) {
+                        val safeOrder = normalizeEditorTopToolbarOrder(newOrder, availableItems)
+                        val safeMoreItems = newMoreItems.filter { it in safeOrder && it != PrefsManager.EditorTopToolbarItemId.MORE }.toSet()
+                        val hiddenItems = PrefsManager.EditorTopToolbarItemId.DEFAULT_ORDER.filter { it !in availableItems }
+                        val fullOrder = (safeOrder + hiddenItems).distinct()
+                        itemOrder = safeOrder
+                        moreItems = safeMoreItems
+                        editorTopToolbarOrder = fullOrder
+                        editorTopToolbarMoreItems = safeMoreItems
+                        prefsManager.saveEditorTopToolbarItemOrder(fullOrder)
+                        prefsManager.saveEditorTopToolbarMoreItems(safeMoreItems)
+                        onSettingsChanged()
+                    }
+
+                    fun saveEditorTopToolbarSections(
+                        topItems: List<PrefsManager.EditorTopToolbarItemId>,
+                        moreDisplayItems: List<PrefsManager.EditorTopToolbarItemId>,
+                    ) {
+                        saveEditorTopToolbarState(topItems + moreDisplayItems, moreItems)
+                    }
+
+                    val topItems = itemOrder.filter { it !in moreItems }
+                    val moreDisplayItems = itemOrder.filter { it in moreItems }
+
+                    SettingsPageText("长按拖动调整顺序，点击按钮可在顶部和更多之间移动")
+                    if (noteSidePanelsEnabled && noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) {
+                        SettingsPageText("当前为手势划出侧滑面板，大纲和属性备注不会显示在顶部栏设置里")
+                    }
+                    SettingsSectionTitle("顶部展示")
+                    if (topItems.isEmpty()) {
+                        SettingsPageText("暂无顶部按钮")
+                    } else {
+                        SettingsEditorTopToolbarDragList(
+                            items = topItems,
+                            moreItems = moreItems,
+                            onOrderChange = { newTopItems ->
+                                saveEditorTopToolbarSections(newTopItems, moreDisplayItems)
+                            },
+                            onToggleArea = { itemId ->
+                                val newMoreItems = moreItems + itemId
+                                val newTopItems = itemOrder.filter { it !in newMoreItems }
+                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems }
+                                saveEditorTopToolbarState(newTopItems + newMoreDisplayItems, newMoreItems)
+                            },
+                        )
+                    }
+
+                    SettingsSectionDivider()
+                    SettingsSectionTitle("更多选项展示")
+                    if (moreDisplayItems.isEmpty()) {
+                        SettingsPageText("暂无更多选项")
+                    } else {
+                        SettingsEditorTopToolbarDragList(
+                            items = moreDisplayItems,
+                            moreItems = moreItems,
+                            onOrderChange = { newMoreDisplayItems ->
+                                saveEditorTopToolbarSections(topItems, newMoreDisplayItems)
+                            },
+                            onToggleArea = { itemId ->
+                                val newMoreItems = moreItems - itemId
+                                val newTopItems = itemOrder.filter { it !in newMoreItems }
+                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems }
+                                saveEditorTopToolbarState(newTopItems + newMoreDisplayItems, newMoreItems)
+                            },
+                        )
+                    }
                 }
                 "selectionToolbar" -> {
                     var itemOrder by remember { mutableStateOf(prefsManager.getSelectionToolbarItemOrder()) }
@@ -1979,7 +2123,7 @@ fun KardLeafSettingsScreen(
                         emptyText = "当前没有带备注的笔记",
                         summaries = remarkNoteSummaries,
                         isLoading = isLoadingRecordSummaries,
-                        countLabel = "备注",
+                        onOpenNote = onOpenRecordNote,
                     )
                 }
                 "historyRecords" -> {
@@ -1988,7 +2132,7 @@ fun KardLeafSettingsScreen(
                         emptyText = "当前没有历史版本记录",
                         summaries = historyNoteSummaries,
                         isLoading = isLoadingRecordSummaries,
-                        countLabel = "版本",
+                        onOpenNote = onOpenRecordNote,
                     )
                 }
                 "about" -> {
@@ -2000,7 +2144,7 @@ fun KardLeafSettingsScreen(
                     SettingsActionRow(
                         icon = Icons.Outlined.Info,
                         title = "版本",
-                        subtitle = versionName.ifBlank { "1.0.8" },
+                        subtitle = versionName.ifBlank { "1.2.2" },
                         onClick = {},
                     )
                     SettingsActionRow(
@@ -2112,6 +2256,12 @@ fun KardLeafSettingsScreen(
                     SettingsSectionDivider()
                     SettingsSectionTitle("编辑器")
                     SettingsActionRow(Icons.Outlined.FormatListBulleted, "字符按钮位置", "调整工具按钮顺序", { openSettingsPage("toolbar") })
+                    SettingsActionRow(Icons.Outlined.ViewHeadline, "笔记顶部栏", "调整进入笔记后的顶部按钮顺序", {
+                        noteSidePanelsEnabled = prefsManager.isNoteSidePanelsEnabled()
+                        noteSidePanelOpenMode = prefsManager.getNoteSidePanelOpenMode()
+                        editorTopToolbarOrder = prefsManager.getEditorTopToolbarItemOrder()
+                        openSettingsPage("editorTopToolbar")
+                    })
                     SettingsActionRow(Icons.Outlined.Reorder, "长按选择栏", "调整顶部和更多按钮", { openSettingsPage("selectionToolbar") })
                     SettingsActionRow(Icons.Outlined.Visibility, "默认打开模式", if (openNoteMode == KardLeafCustomFeatures.OpenNoteMode.PREVIEW) "查看模式" else "编辑模式", { settingsDialog = "openNote" })
                     SettingsActionRow(
@@ -2123,13 +2273,22 @@ fun KardLeafSettingsScreen(
                     SettingsSwitchRow(
                         icon = Icons.Outlined.Info,
                         title = "笔记详情侧滑面板",
-                        subtitle = if (noteSidePanelsEnabled) "左右滑动打开侧栏" else "关闭左右侧滑",
+                        subtitle = if (noteSidePanelsEnabled) "已开启" else "已关闭",
                         checked = noteSidePanelsEnabled,
                         onCheckedChange = { enabled ->
                             noteSidePanelsEnabled = enabled
                             prefsManager.saveNoteSidePanelsEnabled(enabled)
+                            onSettingsChanged()
                         },
                     )
+                    if (noteSidePanelsEnabled) {
+                        SettingsActionRow(
+                            icon = if (noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) Icons.Outlined.Swipe else Icons.Outlined.ViewHeadline,
+                            title = "侧滑面板弹出方式",
+                            subtitle = if (noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) "手势划出" else "顶部工具栏弹出",
+                            onClick = { settingsDialog = "sidePanelOpenMode" },
+                        )
+                    }
                     SettingsSectionDivider()
                     SettingsSectionTitle("附件与文件")
                     SettingsActionRow(Icons.Outlined.Folder, "图片保存位置", imageFolder, { openSettingsPage("image") })
@@ -2158,6 +2317,7 @@ fun KardLeafSettingsScreen(
                     SettingsSectionDivider()
                     SettingsSectionTitle("其他")
                     SettingsActionRow(Icons.Outlined.Restore, "恢复默认设置", "恢复所有默认设置", { showResetDialog = true })
+                    SettingsActionRow(Icons.Outlined.BugReport, "导出诊断日志", "导出基础诊断信息", { exportDiagnosticLog() })
                     SettingsActionRow(Icons.Outlined.Info, "关于", "版本信息和作者", { openSettingsPage("about") })
                 }
                     }
@@ -2177,11 +2337,13 @@ private fun settingsPageTitle(page: String): String =
         "density" -> "卡片密度"
         "date" -> "日期格式"
         "openNote" -> "默认编辑器模式"
+        "sidePanelOpenMode" -> "侧滑面板弹出方式"
         "backup" -> "数据备份"
         "drawer" -> "侧边栏距离"
         "historyLimit" -> "历史版本数量"
         "trash" -> "回收站"
         "toolbar" -> "字符按钮位置"
+        "editorTopToolbar" -> "笔记顶部栏"
         "selectionToolbar" -> "长按选择栏"
         "drawerEdit" -> "侧边栏调整"
         "interface" -> "应用界面"
@@ -2217,6 +2379,7 @@ private fun toolbarItemIcon(item: KardLeafCustomFeatures.ToolbarItem): ImageVect
         KardLeafCustomFeatures.ToolbarItem.UNDO -> Icons.Outlined.Undo
         KardLeafCustomFeatures.ToolbarItem.REDO -> Icons.Outlined.Redo
         KardLeafCustomFeatures.ToolbarItem.IMAGE -> Icons.Outlined.Image
+        KardLeafCustomFeatures.ToolbarItem.DRAWING -> Icons.Outlined.Palette
         KardLeafCustomFeatures.ToolbarItem.HEADING -> Icons.Outlined.Title
         KardLeafCustomFeatures.ToolbarItem.RULE -> Icons.Outlined.HorizontalRule
         KardLeafCustomFeatures.ToolbarItem.BOLD -> Icons.Outlined.FormatBold
@@ -2348,44 +2511,43 @@ private fun NoteRecordSummarySettingsPage(
     emptyText: String,
     summaries: List<NoteRecordSummary>,
     isLoading: Boolean,
-    countLabel: String,
+    onOpenNote: (String) -> Unit,
 ) {
-    val formatter = androidx.compose.runtime.remember { SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()) }
-    SettingsSectionTitle(title, "只展示记录索引，不会修改笔记内容")
+    SettingsSectionTitle(title, "点击条目进入对应笔记")
     when {
         isLoading -> SettingsPageText("正在读取记录...")
         summaries.isEmpty() -> SettingsPageText(emptyText)
         else -> {
-            SettingsPageText("共 ${summaries.size} 篇")
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 summaries.forEach { item ->
+                    val previewText = item.contentPreview
+                        .lineSequence()
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                        .joinToString(" ")
+                        .ifBlank { "无正文预览" }
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f))
-                            .border(
-                                width = 1.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
-                                shape = RoundedCornerShape(14.dp),
-                            )
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onOpenNote(item.noteId) }
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         Text(
-                            text = item.title.ifBlank { item.noteId },
+                            text = item.title.ifBlank { "无标题" },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = item.noteId,
+                            text = previewText,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = "${item.recordCount} 条$countLabel · ${formatter.format(Date(item.updatedAtMs))}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -2749,6 +2911,195 @@ private fun calculateToolbarAvoidanceOffset(
     return IntOffset(
         x = ((visualColumn - originalColumn) * cellSizePx).roundToInt(),
         y = ((visualRow - originalRow) * cellSizePx).roundToInt(),
+    )
+}
+
+private fun editorTopToolbarAvailableItems(
+    noteSidePanelsEnabled: Boolean,
+    noteSidePanelOpenMode: PrefsManager.NoteSidePanelOpenMode,
+): List<PrefsManager.EditorTopToolbarItemId> {
+    val showPanelItems = noteSidePanelsEnabled && noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.TOOLBAR
+    return PrefsManager.EditorTopToolbarItemId.DEFAULT_ORDER.filter { item ->
+        showPanelItems || (item != PrefsManager.EditorTopToolbarItemId.OUTLINE && item != PrefsManager.EditorTopToolbarItemId.REMARKS)
+    }
+}
+
+private fun normalizeEditorTopToolbarOrder(
+    order: List<PrefsManager.EditorTopToolbarItemId>,
+    availableItems: List<PrefsManager.EditorTopToolbarItemId>,
+): List<PrefsManager.EditorTopToolbarItemId> {
+    val result = order.filter { it in availableItems }.distinct().toMutableList()
+    availableItems.forEach { if (it !in result) result.add(it) }
+    return result
+}
+
+private fun editorTopToolbarItemLabel(item: PrefsManager.EditorTopToolbarItemId): String =
+    when (item) {
+        PrefsManager.EditorTopToolbarItemId.LABEL -> "目录"
+        PrefsManager.EditorTopToolbarItemId.OUTLINE -> "大纲"
+        PrefsManager.EditorTopToolbarItemId.REMARKS -> "属性备注"
+        PrefsManager.EditorTopToolbarItemId.SEARCH -> "搜索"
+        PrefsManager.EditorTopToolbarItemId.EDIT -> "编辑"
+        PrefsManager.EditorTopToolbarItemId.HISTORY -> "历史版本"
+        PrefsManager.EditorTopToolbarItemId.PRIVACY -> "保护"
+        PrefsManager.EditorTopToolbarItemId.ARCHIVE -> "归档"
+        PrefsManager.EditorTopToolbarItemId.DELETE -> "删除"
+        PrefsManager.EditorTopToolbarItemId.MORE -> "更多"
+    }
+
+private fun editorTopToolbarItemIcon(item: PrefsManager.EditorTopToolbarItemId): ImageVector =
+    when (item) {
+        PrefsManager.EditorTopToolbarItemId.LABEL -> Icons.AutoMirrored.Outlined.DriveFileMove
+        PrefsManager.EditorTopToolbarItemId.OUTLINE -> Icons.Outlined.FormatListBulleted
+        PrefsManager.EditorTopToolbarItemId.REMARKS -> Icons.Outlined.Info
+        PrefsManager.EditorTopToolbarItemId.SEARCH -> Icons.Outlined.Search
+        PrefsManager.EditorTopToolbarItemId.EDIT -> Icons.Outlined.Edit
+        PrefsManager.EditorTopToolbarItemId.HISTORY -> Icons.Outlined.History
+        PrefsManager.EditorTopToolbarItemId.PRIVACY -> Icons.Outlined.Lock
+        PrefsManager.EditorTopToolbarItemId.ARCHIVE -> Icons.Outlined.Archive
+        PrefsManager.EditorTopToolbarItemId.DELETE -> Icons.Outlined.Delete
+        PrefsManager.EditorTopToolbarItemId.MORE -> Icons.Outlined.MoreVert
+    }
+
+@Composable
+private fun SettingsEditorTopToolbarDragList(
+    items: List<PrefsManager.EditorTopToolbarItemId>,
+    moreItems: Set<PrefsManager.EditorTopToolbarItemId>,
+    onOrderChange: (List<PrefsManager.EditorTopToolbarItemId>) -> Unit,
+    onToggleArea: (PrefsManager.EditorTopToolbarItemId) -> Unit,
+) {
+    val rowHeight = 64.dp
+    val rowSpacing = 6.dp
+    val rowStepPx = with(LocalDensity.current) { (rowHeight + rowSpacing).toPx() }
+    var draggingItem by remember { mutableStateOf<PrefsManager.EditorTopToolbarItemId?>(null) }
+    var draggingStartIndex by remember { mutableStateOf(-1) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
+
+    fun clearDragState() {
+        draggingItem = null
+        draggingStartIndex = -1
+        dragOffset = Offset.Zero
+        dragTargetIndex = null
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(rowSpacing)) {
+        items.forEachIndexed { index, itemId ->
+            val itemIsDragging = draggingItem == itemId
+            val targetIndex = dragTargetIndex
+            val isDropTarget = targetIndex == index && draggingItem != null && !itemIsDragging
+            val avoidanceOffset = if (!itemIsDragging && targetIndex != null) {
+                calculateDrawerAvoidanceOffset(
+                    index = index,
+                    fromIndex = draggingStartIndex,
+                    toIndex = targetIndex,
+                    rowStepPx = rowStepPx,
+                )
+            } else {
+                IntOffset.Zero
+            }
+
+            SettingsEditorTopToolbarEditRow(
+                icon = editorTopToolbarItemIcon(itemId),
+                title = editorTopToolbarItemLabel(itemId),
+                isMore = itemId in moreItems,
+                canToggleArea = itemId != PrefsManager.EditorTopToolbarItemId.MORE,
+                isDragging = itemIsDragging,
+                isDropTarget = isDropTarget,
+                onToggleArea = { onToggleArea(itemId) },
+                modifier = Modifier
+                    .zIndex(if (itemIsDragging) 1f else 0f)
+                    .offset {
+                        if (itemIsDragging) {
+                            IntOffset(0, dragOffset.y.roundToInt())
+                        } else {
+                            avoidanceOffset
+                        }
+                    }
+                    .pointerInput(itemId, items.size, rowStepPx) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                draggingItem = itemId
+                                draggingStartIndex = index
+                                dragOffset = Offset.Zero
+                                dragTargetIndex = index
+                            },
+                            onDragCancel = { clearDragState() },
+                            onDragEnd = {
+                                val dragged = draggingItem
+                                val fromIndex = if (dragged == null) -1 else items.indexOf(dragged)
+                                val toIndex = dragTargetIndex
+                                if (fromIndex >= 0 && toIndex != null && toIndex != fromIndex) {
+                                    val newOrder = items.toMutableList().also { list ->
+                                        val moved = list.removeAt(fromIndex)
+                                        list.add(toIndex.coerceIn(0, list.size), moved)
+                                    }
+                                    onOrderChange(newOrder)
+                                }
+                                clearDragState()
+                            },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                dragOffset += dragAmount
+                                dragTargetIndex = calculateDrawerDragTarget(
+                                    startIndex = draggingStartIndex,
+                                    dragOffset = dragOffset,
+                                    rowHeightPx = rowStepPx,
+                                    itemCount = items.size,
+                                )
+                            },
+                        )
+                    },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsEditorTopToolbarEditRow(
+    icon: ImageVector,
+    title: String,
+    isMore: Boolean,
+    canToggleArea: Boolean,
+    isDragging: Boolean,
+    isDropTarget: Boolean,
+    onToggleArea: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val active = isDragging || isDropTarget
+    val shape = RoundedCornerShape(16.dp)
+    val backgroundColor = if (active) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    val borderColor = if (active) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outlineVariant
+    }
+
+    SettingsBaseRow(
+        icon = icon,
+        title = title,
+        subtitle = "",
+        onClick = {},
+        modifier = modifier
+            .clip(shape)
+            .background(backgroundColor)
+            .border(1.dp, borderColor, shape),
+        contentHorizontalPadding = 14.dp,
+        trailing = {
+            if (canToggleArea) {
+                TextButton(onClick = onToggleArea) { Text(if (isMore) "顶部" else "更多") }
+            } else {
+                Text(
+                    text = "固定",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
     )
 }
 

@@ -217,3 +217,31 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
         )
     }
 }
+
+
+/*
+ * version 13 → 14：缓存 YAML Frontmatter 中的 kardleaf_id。
+ * 用于备注记录/历史版本记录直接通过 ID 找到对应笔记，避免打开设置页时扫描外部文件。
+ */
+val MIGRATION_13_14 = object : Migration(13, 14) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            ALTER TABLE `notes` ADD COLUMN `recordId` TEXT NOT NULL DEFAULT ''
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            UPDATE `notes`
+            SET `recordId` = `filePath`
+            WHERE `recordId` = ''
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE INDEX IF NOT EXISTS `index_notes_record_id`
+            ON `notes` (`recordId`)
+            """.trimIndent(),
+        )
+    }
+}

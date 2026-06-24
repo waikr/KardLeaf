@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [NoteEntity::class, LabelEntity::class, NoteHistoryEntity::class, PrivacyNoteEntity::class, NoteRemarkEntity::class],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -33,7 +33,7 @@ abstract class AppDatabase : RoomDatabase() {
                         AppDatabase::class.java,
                         "kardleaf_database",
                     )
-                        .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+                        .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
                         .build()
                 INSTANCE = instance
                 instance

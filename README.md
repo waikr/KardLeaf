@@ -1,58 +1,125 @@
 # KardLeaf / 卡叶笔记
 
-![GitHub Downloads](https://img.shields.io/github/downloads/waikr/KardLeaf/total?label=Downloads)
+<p align="center">
+  <img src="docs/images/home-cards.jpg" width="220" alt="KardLeaf 首页双层分类和卡片笔记" />
+  <img src="docs/images/editor-detail-panel.jpg" width="220" alt="KardLeaf 笔记详情侧滑面板" />
+  <img src="docs/images/editor-outline-panel.jpg" width="220" alt="KardLeaf Markdown 目录面板" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/waikr/KardLeaf/releases"><img src="https://img.shields.io/github/downloads/waikr/KardLeaf/total?label=Downloads" alt="GitHub Downloads" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache License 2.0" /></a>
+  <img src="https://img.shields.io/badge/Android-6.0%2B-brightgreen" alt="Android 6.0+" />
+  <img src="https://img.shields.io/badge/Markdown-local_files-blue" alt="Local Markdown files" />
+</p>
 
 KardLeaf 是一款轻量、简洁、以本地文件为核心的 Android Markdown 笔记应用。
 
-它的目标是让用户把笔记保存在自己选择的本地目录中，而不是锁定在应用私有数据库里。笔记内容以 `.md` / `.txt` 文件形式保存，应用内部使用 Room 数据库建立索引和缓存，从而兼顾数据可迁移性与移动端加载性能。
+它的重点不是把笔记锁进应用私有数据库，而是让笔记以真实的 `.md` / `.txt` 文件保存在你选择的本地目录中。你可以用 KardLeaf 在手机上快速浏览、分类、编辑和预览，也可以继续用 Obsidian、VS Code、Typora 或其他 Markdown 工具管理同一批文件。
+
+---
+
+## 特色
+
+- **本地文件优先**：笔记以普通 Markdown / TXT 文件保存，方便备份、同步和迁移。
+- **双层分类标签**：首页提供两层横向分类入口，适合按「大类 → 子类 / 标签」组织笔记。
+- **卡片式首页**：用标题、正文预览和图片缩略图快速浏览笔记内容。
+- **Markdown 编辑与预览**：支持常用 Markdown 输入辅助、目录、任务列表、代码块、数学公式和本地图片预览。
+- **Obsidian 兼容**：基于标准 Markdown 和本地文件夹结构，适合作为 Obsidian 工作流的移动端补充。
+- **本地索引加速**：Room 数据库只用于索引、缓存和状态管理，正文仍保存在真实文件中。
+- **隐私友好**：不依赖账号登录，不强制使用云端服务。
+
+---
+
+## 双层分类标签
+
+KardLeaf 的首页支持双层分类显示，不只是普通的单层文件夹列表。
+
+第一层可以作为主要分类，例如：
+
+```text
+创作工坊 / 灵感花园 / 生活抽屉 / 阅读地图
+```
+
+第二层可以作为当前分类下的子分类、主题或标签，例如：
+
+```text
+使用说明 / 写作素材 / 展示样稿 / attachments
+```
+
+这样可以把笔记组织成更接近真实写作和资料管理的结构：
+
+```text
+创作工坊
+├── 使用说明
+├── 写作素材
+└── 展示样稿
+```
+
+在这种结构下，首页仍然保留搜索、排序、卡片预览、图片缩略图和快速新建等操作。
+
+---
+
+## 和 Obsidian 的兼容方式
+
+KardLeaf 的兼容重点是 **Markdown 文件层面的兼容**。
+
+你可以把 KardLeaf 的笔记库放在一个普通文件夹中，也可以把它和 Obsidian 使用的 Markdown 文件夹配合使用。KardLeaf 会读取和保存 `.md` / `.txt` 文件，其他 Markdown 编辑器修改文件后，KardLeaf 也可以通过外部文件同步刷新索引。
+
+适合的使用方式：
+
+- 在电脑上用 Obsidian 管理和整理 Markdown 笔记。
+- 在 Android 手机上用 KardLeaf 快速查看、编辑、分类和预览。
+- 使用 Syncthing、坚果云、网盘同步目录或手动复制文件进行多端同步。
+- 保留 Markdown 原文件，不把笔记绑定在单一应用里。
+
+KardLeaf 不是 Obsidian 官方客户端，也不依赖 Obsidian 的专有功能；它更适合作为本地 Markdown 工作流的 Android 补充。
+
+---
+
+## 界面预览
+
+| 首页双层分类 | 详情侧滑面板 | Markdown 目录 |
+| --- | --- | --- |
+| <img src="docs/images/home-cards.jpg" width="220" alt="首页双层分类" /> | <img src="docs/images/editor-detail-panel.jpg" width="220" alt="详情侧滑面板" /> | <img src="docs/images/editor-outline-panel.jpg" width="220" alt="Markdown 目录" /> |
+
+| 侧边栏导航 | 编辑器设置 |
+| --- | --- |
+| <img src="docs/images/navigation-drawer.jpg" width="220" alt="侧边栏导航" /> | <img src="docs/images/editor-settings.jpg" width="220" alt="编辑器设置" /> |
 
 ---
 
 ## 功能特性
 
-* 本地 Markdown / TXT 笔记管理
-* 通过 Android SAF 选择和访问本地笔记目录
-* 卡片式首页，支持笔记预览
-* 支持文件夹分类和多级目录
-* 支持 Markdown 编辑与预览
-* 支持常用 Markdown 工具栏
-* 支持 KaTeX 数学公式预览
-* 支持本地图片引用预览
-* 支持搜索、排序、收藏、置顶
-* 支持归档与回收站
-* 支持笔记提醒和系统通知
-* 支持历史版本记录与恢复
-* 支持外部文件变更同步
-* 支持数据导入与导出
-
----
-
-## 项目定位
-
-KardLeaf 适合希望在 Android 手机上管理本地 Markdown 笔记的用户。
-
-它更偏向以下使用方式：
-
-* 笔记以真实文件形式保存，方便备份和迁移
-* 可以和文件管理器、同步盘、桌面 Markdown 编辑器一起使用
-* 不依赖账号登录或云端服务
-* 首页以卡片方式快速浏览笔记
-* 编辑时保持轻量，预览时再进行完整 Markdown 渲染
+- 本地 Markdown / TXT 笔记管理
+- 通过 Android SAF 选择和访问本地笔记目录
+- 双层分类标签与多级目录管理
+- 卡片式首页与正文预览
+- 图片缩略图和本地图片引用预览
+- Markdown 编辑、预览和目录导航
+- KaTeX 数学公式预览
+- 搜索、排序、收藏、置顶
+- 草稿、归档、回收站
+- 笔记提醒和系统通知
+- 历史版本记录与恢复
+- 备注记录和笔记属性统计
+- 外部文件变更同步
+- 数据导入与导出
 
 ---
 
 ## 技术栈
 
-* Kotlin
-* Jetpack Compose
-* Material 3
-* Room
-* Kotlin Coroutines / Flow
-* Android Storage Access Framework
-* WebView
-* markdown-it
-* KaTeX
-* Gradle Kotlin DSL
+- Kotlin
+- Jetpack Compose
+- Material 3
+- Room
+- Kotlin Coroutines / Flow
+- Android Storage Access Framework
+- WebView
+- markdown-it
+- KaTeX
+- Gradle Kotlin DSL
 
 ---
 
@@ -78,53 +145,17 @@ app/src/main/java/com/kangle/kardleaf
 
 ---
 
-## 本地文件与数据库设计
-
-KardLeaf 使用“本地文件 + 数据库索引”的方式管理笔记。
-
-笔记正文保存在用户选择的本地目录中，格式为 `.md` 或 `.txt` 文件。Room 数据库主要用于保存索引、缓存和应用状态，例如标题、预览内容、修改时间、收藏、置顶、归档、回收站、历史版本等信息。
-
-这样做的好处是：
-
-* 用户可以直接拿到自己的 Markdown 文件
-* 笔记可以被其他 Markdown 编辑器打开
-* 应用首页不需要每次都重新读取所有文件全文
-* 大量笔记场景下加载更快
-* 数据迁移和备份更简单
-
----
-
-## Markdown 编辑与预览
-
-KardLeaf 支持编辑模式和预览模式切换。
-
-编辑器提供常用 Markdown 输入辅助，包括标题、加粗、斜体、删除线、链接、代码、引用、列表、待办列表、公式等。
-
-预览部分使用 WebView 渲染 Markdown，支持较复杂的 Markdown 内容，包括任务列表、数学公式和本地图片引用。
-
----
-
-## 外部文件同步
-
-KardLeaf 会监听用户选择的笔记目录。
-
-当用户通过文件管理器、同步工具或其他 Markdown 编辑器修改笔记文件时，应用可以检测外部变化并刷新对应的笔记索引。
-
-这让 KardLeaf 可以和其他本地文件工具配合使用，而不是把数据封闭在应用内部。
-
----
-
 ## 如何运行
 
-### 环境要求
+环境要求：
 
-* Android Studio
-* JDK 17
-* Android 设备或模拟器
-* minSdk 23
-* targetSdk 34
+- Android Studio
+- JDK 17
+- Android 设备或模拟器
+- minSdk 23
+- targetSdk 34
 
-### 构建方式
+构建方式：
 
 ```bash
 git clone https://github.com/waikr/KardLeaf.git
@@ -138,16 +169,7 @@ cd KardLeaf
 
 ## 当前状态
 
-KardLeaf 目前仍处于持续开发和优化阶段，核心功能已经可用，但仍可能存在未完善的细节。
-
-后续计划包括：
-
-* 继续优化长文本编辑性能
-* 改进 Markdown 编辑体验
-* 完善历史版本管理
-* 优化大型笔记库扫描速度
-* 增强同步冲突处理
-* 补充更多测试和文档
+KardLeaf 仍处于持续开发和优化阶段，核心功能已经可用，后续会继续优化长文本编辑性能、图片加载、历史版本管理、外部同步和整体界面体验。
 
 ---
 

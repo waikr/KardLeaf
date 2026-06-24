@@ -39,12 +39,18 @@ import androidx.room.PrimaryKey
             name = "index_notes_labels",
             value = ["isTrashed", "isArchived", "folder"],
         ),
+        Index(
+            name = "index_notes_record_id",
+            value = ["recordId"],
+        ),
     ],
 )
 data class NoteEntity(
     // Unique ID: "Label/filename.md"
     @PrimaryKey
     val filePath: String,
+    // Stable id from YAML frontmatter, used to keep remarks/history after rename/move
+    val recordId: String = filePath,
     // "MyNote.md"
     val fileName: String,
     // "Work", "Life", etc.

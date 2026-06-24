@@ -495,7 +495,7 @@ private fun HistoryTopBar(
         ) {
             Text(
                 text = "完成",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onPrimary,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Black,
             )
@@ -526,7 +526,7 @@ private fun HistorySearchRow(
                 .weight(1f)
                 .height(44.dp)
                 .clip(RoundedCornerShape(16.dp))
-                .background(Color.White)
+                .background(HistoryUiColors.CardBackground)
                 .border(1.dp, HistoryUiColors.Border, RoundedCornerShape(16.dp))
                 .padding(horizontal = 13.dp),
             decorationBox = { innerTextField ->
@@ -553,7 +553,7 @@ private fun HistorySearchRow(
             modifier = Modifier
                 .size(44.dp)
                 .clip(RoundedCornerShape(16.dp))
-                .background(Color.White)
+                .background(HistoryUiColors.CardBackground)
                 .border(1.dp, HistoryUiColors.Border, RoundedCornerShape(16.dp))
                 .clickable(onClick = onClearQuery),
             contentAlignment = Alignment.Center,
@@ -579,7 +579,7 @@ private fun CompareSourceStrip(
             .fillMaxWidth()
             .padding(bottom = 8.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(Color.White)
+            .background(HistoryUiColors.CardBackground)
             .border(1.dp, HistoryUiColors.Border, RoundedCornerShape(16.dp))
             .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
@@ -668,7 +668,7 @@ private fun SelectedVersionPanel(selected: HistoryVersionItem) {
             .fillMaxWidth()
             .padding(bottom = 10.dp)
             .clip(RoundedCornerShape(22.dp))
-            .background(Color.White)
+            .background(HistoryUiColors.CardBackground)
             .border(1.dp, HistoryUiColors.Border, RoundedCornerShape(22.dp))
             .padding(14.dp),
     ) {
@@ -757,7 +757,7 @@ private fun VersionCard(
             .fillMaxWidth()
             .padding(bottom = 9.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(Color.White)
+            .background(HistoryUiColors.CardBackground)
             .border(1.dp, borderColor, RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
             .padding(13.dp),
@@ -858,14 +858,14 @@ private fun HistoryBottomActions(
         HistoryActionButton(
             text = "查看对比",
             background = HistoryUiColors.DarkButton,
-            contentColor = Color.White,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
             onClick = onCompare,
             modifier = Modifier.weight(1f),
         )
         HistoryActionButton(
             text = restoreText,
             background = if (restoreEnabled) MaterialTheme.colorScheme.primary else HistoryUiColors.DisabledButton,
-            contentColor = if (restoreEnabled) Color.White else HistoryUiColors.TextSecondary,
+            contentColor = if (restoreEnabled) MaterialTheme.colorScheme.onPrimary else HistoryUiColors.TextSecondary,
             enabled = restoreEnabled,
             onClick = onRestore,
             modifier = Modifier.weight(1f),
@@ -900,7 +900,7 @@ private fun CompareBottomActions(
         HistoryActionButton(
             text = restoreText,
             background = if (restoreEnabled) MaterialTheme.colorScheme.primary else HistoryUiColors.DisabledButton,
-            contentColor = if (restoreEnabled) Color.White else HistoryUiColors.TextSecondary,
+            contentColor = if (restoreEnabled) MaterialTheme.colorScheme.onPrimary else HistoryUiColors.TextSecondary,
             enabled = restoreEnabled,
             onClick = onRestore,
             modifier = Modifier.weight(1f),
@@ -946,7 +946,7 @@ private fun CompareModeSegment(
             .fillMaxWidth()
             .padding(bottom = 10.dp)
             .clip(RoundedCornerShape(15.dp))
-            .background(Color.White)
+            .background(HistoryUiColors.CardBackground)
             .border(1.dp, HistoryUiColors.Border, RoundedCornerShape(15.dp))
             .padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -964,7 +964,7 @@ private fun CompareModeSegment(
             ) {
                 Text(
                     text = mode.label,
-                    color = if (active) Color.White else HistoryUiColors.TextSecondary,
+                    color = if (active) MaterialTheme.colorScheme.onPrimary else HistoryUiColors.TextSecondary,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Black,
                     maxLines = 1,
@@ -1031,7 +1031,7 @@ private fun DiffGroupCard(group: HistoryDiffGroup) {
             .fillMaxWidth()
             .padding(bottom = 10.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(Color.White)
+            .background(HistoryUiColors.CardBackground)
             .border(1.dp, HistoryUiColors.Border, RoundedCornerShape(20.dp)),
     ) {
         Row(
@@ -1208,7 +1208,7 @@ private fun FullModePanel(diffModel: HistoryDiffModel) {
                 .fillMaxWidth()
                 .padding(bottom = 10.dp)
                 .clip(RoundedCornerShape(20.dp))
-                .background(Color.White)
+                .background(HistoryUiColors.CardBackground)
                 .border(1.dp, HistoryUiColors.Border, RoundedCornerShape(20.dp)),
         ) {
             Row(
@@ -1279,7 +1279,7 @@ private fun SplitTextCard(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(18.dp))
-            .background(Color.White)
+            .background(HistoryUiColors.CardBackground)
             .border(1.dp, HistoryUiColors.Border, RoundedCornerShape(18.dp)),
     ) {
         Text(
@@ -1537,6 +1537,7 @@ private fun buildHistoryDiffGroups(rows: List<HistoryDiffDisplayRow>): List<Hist
     return groups
 }
 
+@Composable
 private fun diffColors(type: HistoryDiffType): DiffBlockColors =
     when (type) {
         HistoryDiffType.ADD -> DiffBlockColors(
@@ -1555,25 +1556,39 @@ private fun diffColors(type: HistoryDiffType): DiffBlockColors =
             content = HistoryUiColors.YellowText,
         )
         HistoryDiffType.SAME -> DiffBlockColors(
-            background = Color.White,
+            background = HistoryUiColors.CardBackground,
             border = HistoryUiColors.Border,
             content = HistoryUiColors.TextTertiary,
         )
     }
 
 private object HistoryUiColors {
-    val PageBackground = Color(0xFFF8FAFC)
-    val TopBarBackground = Color(0xF0F8FAFC)
-    val TextPrimary = Color(0xFF0F172A)
-    val TextSecondary = Color(0xFF64748B)
-    val TextTertiary = Color(0xFF475569)
-    val TextMuted = Color(0xFF94A3B8)
-    val Border = Color(0xFFE2E8F0)
-    val SoftBorder = Color(0xFFEEF2F7)
-    val IconButtonBackground = Color(0xFFF1F5F9)
-    val DarkButton = Color(0xFF111827)
-    val NeutralPill = Color(0xFFF1F5F9)
-    val DisabledButton = Color(0xFFCBD5E1)
+    val PageBackground: Color
+        @Composable get() = MaterialTheme.colorScheme.background
+    val TopBarBackground: Color
+        @Composable get() = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+    val CardBackground: Color
+        @Composable get() = MaterialTheme.colorScheme.surface
+    val TextPrimary: Color
+        @Composable get() = MaterialTheme.colorScheme.onSurface
+    val TextSecondary: Color
+        @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+    val TextTertiary: Color
+        @Composable get() = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.78f)
+    val TextMuted: Color
+        @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
+    val Border: Color
+        @Composable get() = MaterialTheme.colorScheme.outlineVariant
+    val SoftBorder: Color
+        @Composable get() = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+    val IconButtonBackground: Color
+        @Composable get() = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+    val DarkButton: Color
+        @Composable get() = MaterialTheme.colorScheme.primary
+    val NeutralPill: Color
+        @Composable get() = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f)
+    val DisabledButton: Color
+        @Composable get() = MaterialTheme.colorScheme.surfaceVariant
     val GreenBackground = Color(0xFFECFDF5)
     val GreenBorder = Color(0xFFBBF7D0)
     val GreenText = Color(0xFF047857)

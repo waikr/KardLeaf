@@ -67,12 +67,33 @@ interface NoteHistoryDao {
 
     @Query(
         """
-        SELECT h.noteId AS noteId,
-            COALESCE(NULLIF(n.title, ''), h.noteId) AS title,
-            COUNT(*) AS recordCount,
+        SELECT COALESCE(MAX(n.filePath), h.noteId) AS noteId,
+            COALESCE(
+                NULLIF(MAX(n.title), ''),
+                NULLIF((
+                    SELECT hh.title
+                    FROM note_history hh
+                    WHERE hh.noteId = h.noteId
+                    ORDER BY hh.savedAtMs DESC, hh.id DESC
+                    LIMIT 1
+                ), ''),
+                '无标题'
+            ) AS title,
+            COALESCE(
+                NULLIF(MAX(n.contentPreview), ''),
+                (
+                    SELECT substr(hh.content, 1, 200)
+                    FROM note_history hh
+                    WHERE hh.noteId = h.noteId
+                    ORDER BY hh.savedAtMs DESC, hh.id DESC
+                    LIMIT 1
+                ),
+                ''
+            ) AS contentPreview,
+            COUNT(DISTINCT h.id) AS recordCount,
             MAX(h.savedAtMs) AS updatedAtMs
         FROM note_history h
-        LEFT JOIN notes n ON n.filePath = h.noteId
+        LEFT JOIN notes n ON n.filePath = h.noteId OR n.recordId = h.noteId
         GROUP BY h.noteId
         ORDER BY MAX(h.savedAtMs) DESC, h.noteId ASC
         """,

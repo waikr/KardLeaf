@@ -78,6 +78,8 @@ interface NoteRepository {
 
     suspend fun deleteLabel(name: String): Boolean
 
+    suspend fun deleteLabelWithContents(name: String): Boolean
+
     suspend fun emptyTrash()
 
     suspend fun cleanupExpiredTrash(olderThanDays: Int)

@@ -54,6 +54,9 @@ class PrefsManager(context: Context) {
         private const val KEY_DRAWER_ITEM_LABEL_PREFIX = "drawer_item_label_"
         private const val KEY_SELECTION_TOOLBAR_ITEM_ORDER = "selection_toolbar_item_order"
         private const val KEY_SELECTION_TOOLBAR_MORE_ITEMS = "selection_toolbar_more_items"
+        private const val KEY_EDITOR_TOP_TOOLBAR_ITEM_ORDER = "editor_top_toolbar_item_order"
+        private const val KEY_EDITOR_TOP_TOOLBAR_MORE_ITEMS = "editor_top_toolbar_more_items"
+        private const val KEY_EDITOR_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED = "editor_top_toolbar_more_default_migrated"
         private const val KEY_APP_PASSWORD = "app_password_hash"
         private const val KEY_PRIVACY_PASSWORD = "privacy_password_hash"
         private const val KEY_SAFETY_WORD = "safety_word_hash"
@@ -66,6 +69,7 @@ class PrefsManager(context: Context) {
         private const val KEY_AUTO_BACKUP_DIR_URI = "auto_backup_dir_uri"
         private const val KEY_HISTORY_VERSION_LIMIT = "history_version_limit"
         private const val KEY_NOTE_SIDE_PANELS_ENABLED = "note_side_panels_enabled"
+        private const val KEY_NOTE_SIDE_PANEL_OPEN_MODE = "note_side_panel_open_mode"
         private const val KEY_PREVIEW_DOUBLE_TAP_INTERVAL_MS = "preview_double_tap_interval_ms"
         private const val KEY_TRASH_AUTO_CLEAN_DAYS = "trash_auto_clean_days"
         private const val KEY_PASSWORD_INPUT_MODE = "password_input_mode"
@@ -80,9 +84,10 @@ class PrefsManager(context: Context) {
         const val DEFAULT_DRAWER_EDGE_WIDTH_DP = 40
         const val DEFAULT_HISTORY_VERSION_LIMIT = 20
         const val DEFAULT_NOTE_SIDE_PANELS_ENABLED = true
+        val DEFAULT_NOTE_SIDE_PANEL_OPEN_MODE = NoteSidePanelOpenMode.GESTURE
         const val DEFAULT_PREVIEW_DOUBLE_TAP_INTERVAL_MS = 180
         const val DEFAULT_HIDDEN_DATE_FILENAME_PATTERN = "yyyy.MM.dd.HHmmss"
-        const val DEFAULT_HIDDEN_COPY_FILENAME_PATTERN = "yyyy.MM.dd.HHmmss~副本"
+        const val DEFAULT_HIDDEN_COPY_FILENAME_PATTERN = "yyyy.MM.dd.HHmmss~副本*"
         const val DEFAULT_TRASH_AUTO_CLEAN_DAYS = 0
         const val MIN_HISTORY_VERSION_LIMIT = 1
         const val MAX_HISTORY_VERSION_LIMIT = 500
@@ -119,6 +124,11 @@ class PrefsManager(context: Context) {
     enum class PasswordInputMode {
         SIMPLE,
         COMPLEX,
+    }
+
+    enum class NoteSidePanelOpenMode {
+        GESTURE,
+        TOOLBAR,
     }
 
     enum class ThemeColor {
@@ -406,6 +416,16 @@ class PrefsManager(context: Context) {
 
     fun isNoteSidePanelsEnabled(): Boolean = prefs.getBoolean(KEY_NOTE_SIDE_PANELS_ENABLED, DEFAULT_NOTE_SIDE_PANELS_ENABLED)
 
+    fun saveNoteSidePanelOpenMode(mode: NoteSidePanelOpenMode) {
+        prefs.edit().putString(KEY_NOTE_SIDE_PANEL_OPEN_MODE, mode.name).apply()
+    }
+
+    fun getNoteSidePanelOpenMode(): NoteSidePanelOpenMode {
+        val name = prefs.getString(KEY_NOTE_SIDE_PANEL_OPEN_MODE, DEFAULT_NOTE_SIDE_PANEL_OPEN_MODE.name)
+        return runCatching { NoteSidePanelOpenMode.valueOf(name ?: DEFAULT_NOTE_SIDE_PANEL_OPEN_MODE.name) }
+            .getOrDefault(DEFAULT_NOTE_SIDE_PANEL_OPEN_MODE)
+    }
+
     fun saveImageFolder(folder: String) {
         prefs.edit().putString(KEY_IMAGE_FOLDER, normalizeImageFolder(folder)).apply()
     }
@@ -611,6 +631,59 @@ class PrefsManager(context: Context) {
 
     fun saveSelectionToolbarMoreItems(items: Set<SelectionToolbarItemId>) {
         prefs.edit().putStringSet(KEY_SELECTION_TOOLBAR_MORE_ITEMS, items.map { it.name }.toSet()).apply()
+    }
+    // endregion
+
+    // region 笔记详情顶部栏功能项编辑
+    enum class EditorTopToolbarItemId {
+        LABEL, OUTLINE, REMARKS, SEARCH, EDIT, HISTORY, PRIVACY, ARCHIVE, DELETE, MORE;
+
+        companion object {
+            val DEFAULT_ORDER: List<EditorTopToolbarItemId> =
+                listOf(LABEL, SEARCH, EDIT, OUTLINE, REMARKS, HISTORY, PRIVACY, ARCHIVE, DELETE, MORE)
+            val DEFAULT_MORE_ITEMS: Set<EditorTopToolbarItemId> = setOf(HISTORY, PRIVACY, ARCHIVE, DELETE)
+        }
+    }
+
+    fun getEditorTopToolbarItemOrder(): List<EditorTopToolbarItemId> {
+        val raw = prefs.getString(KEY_EDITOR_TOP_TOOLBAR_ITEM_ORDER, null) ?: return EditorTopToolbarItemId.DEFAULT_ORDER
+        val ids = raw.split(",").mapNotNull { runCatching { EditorTopToolbarItemId.valueOf(it) }.getOrNull() }
+        val result = ids.toMutableList()
+        EditorTopToolbarItemId.DEFAULT_ORDER.forEach { if (it !in result) result.add(it) }
+        return result
+    }
+
+    fun saveEditorTopToolbarItemOrder(order: List<EditorTopToolbarItemId>) {
+        val normalized = order.distinct().toMutableList()
+        EditorTopToolbarItemId.DEFAULT_ORDER.forEach { if (it !in normalized) normalized.add(it) }
+        prefs.edit().putString(KEY_EDITOR_TOP_TOOLBAR_ITEM_ORDER, normalized.joinToString(",") { it.name }).apply()
+    }
+
+    fun getEditorTopToolbarMoreItems(): Set<EditorTopToolbarItemId> {
+        val storedItems = prefs.getStringSet(KEY_EDITOR_TOP_TOOLBAR_MORE_ITEMS, null)
+            ?.mapNotNull { runCatching { EditorTopToolbarItemId.valueOf(it) }.getOrNull() }
+            ?.filter { it != EditorTopToolbarItemId.MORE }
+            ?.toSet()
+        if (storedItems == null) return EditorTopToolbarItemId.DEFAULT_MORE_ITEMS
+
+        if (!prefs.getBoolean(KEY_EDITOR_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED, false)) {
+            val migratedItems = storedItems + EditorTopToolbarItemId.DEFAULT_MORE_ITEMS
+            prefs.edit()
+                .putBoolean(KEY_EDITOR_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED, true)
+                .putStringSet(KEY_EDITOR_TOP_TOOLBAR_MORE_ITEMS, migratedItems.map { it.name }.toSet())
+                .apply()
+            return migratedItems
+        }
+
+        return storedItems
+    }
+
+    fun saveEditorTopToolbarMoreItems(items: Set<EditorTopToolbarItemId>) {
+        val safeItems = items.filter { it != EditorTopToolbarItemId.MORE }
+        prefs.edit()
+            .putBoolean(KEY_EDITOR_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED, true)
+            .putStringSet(KEY_EDITOR_TOP_TOOLBAR_MORE_ITEMS, safeItems.map { it.name }.toSet())
+            .apply()
     }
     // endregion
 

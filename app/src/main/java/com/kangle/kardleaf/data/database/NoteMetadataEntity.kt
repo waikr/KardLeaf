@@ -2,6 +2,7 @@ package com.kangle.kardleaf.data.database
 
 data class NoteMetadataEntity(
     val filePath: String,
+    val recordId: String,
     val fileName: String,
     val folder: String,
     val title: String,

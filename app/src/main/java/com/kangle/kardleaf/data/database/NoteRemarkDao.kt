@@ -17,12 +17,23 @@ interface NoteRemarkDao {
 
     @Query(
         """
-        SELECT r.noteId AS noteId,
-            COALESCE(NULLIF(n.title, ''), r.noteId) AS title,
-            COUNT(*) AS recordCount,
+        SELECT COALESCE(MAX(n.filePath), r.noteId) AS noteId,
+            COALESCE(NULLIF(MAX(n.title), ''), '无标题') AS title,
+            COALESCE(
+                NULLIF(MAX(n.contentPreview), ''),
+                (
+                    SELECT substr(rr.content, 1, 200)
+                    FROM note_remarks rr
+                    WHERE rr.noteId = r.noteId
+                    ORDER BY rr.updatedAtMs DESC, rr.id DESC
+                    LIMIT 1
+                ),
+                ''
+            ) AS contentPreview,
+            COUNT(DISTINCT r.id) AS recordCount,
             MAX(r.updatedAtMs) AS updatedAtMs
         FROM note_remarks r
-        LEFT JOIN notes n ON n.filePath = r.noteId
+        LEFT JOIN notes n ON n.filePath = r.noteId OR n.recordId = r.noteId
         GROUP BY r.noteId
         ORDER BY MAX(r.updatedAtMs) DESC, r.noteId ASC
         """,

@@ -22,8 +22,9 @@ android {
         applicationId = "com.kardleaf"
         minSdk = 23
         targetSdk = 34
-        versionCode = 108
-        versionName = "1.0.8"
+        versionCode = 122
+        versionName = "1.2.2"
+        manifestPlaceholders["appLabel"] = "KardLeaf"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
@@ -46,10 +47,16 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            manifestPlaceholders["appLabel"] = "KardLeaf Debug"
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
+            manifestPlaceholders["appLabel"] = "KardLeaf"
         }
     }
     compileOptions {

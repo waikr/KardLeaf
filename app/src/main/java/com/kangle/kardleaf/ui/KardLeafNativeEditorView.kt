@@ -128,6 +128,23 @@ class KardLeafEditorController {
         }
     }
 
+    fun releaseForClose() {
+        editorView?.let { view ->
+            Log.d(
+                EDITOR_TRACE_TAG,
+                "controller releaseForClose key=$documentKey viewKey=${view.boundDocumentKey} titleLen=${view.titleEditText.length()} contentLen=${view.contentLength()}",
+            )
+            editorView = null
+            view.dispose(clearText = true)
+        }
+        documentKey = null
+        lastLoadedTitle = ""
+        lastLoadedContent = ""
+        cachedTitle = ""
+        cachedContent = ""
+        cachedSelection = TextRange(0, 0)
+    }
+
     private fun captureFromView(view: KardLeafNativeEditorView) {
         cachedTitle = view.getTitleString()
         cachedContent = view.getContentString()
@@ -275,7 +292,12 @@ class KardLeafEditorController {
         currentEditorView()?.scrollToProgress(progress)
     }
 
-    fun highlightSearch(query: String): Int = currentEditorView()?.highlightContentSearch(query) ?: 0
+    fun highlightSearch(
+        query: String,
+        currentStart: Int = -1,
+        useRegex: Boolean = false,
+        matchCase: Boolean = false,
+    ): Int = currentEditorView()?.highlightContentSearch(query, currentStart, useRegex, matchCase) ?: 0
 
     fun clearSearchHighlights() {
         currentEditorView()?.clearContentSearchHighlights()
@@ -705,7 +727,12 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         }
     }
 
-    fun highlightContentSearch(query: String): Int = contentEditText.highlightSearch(query)
+    fun highlightContentSearch(
+        query: String,
+        currentStart: Int = -1,
+        useRegex: Boolean = false,
+        matchCase: Boolean = false,
+    ): Int = contentEditText.highlightSearch(query, currentStart, useRegex, matchCase)
 
     fun clearContentSearchHighlights() {
         contentEditText.clearSearchHighlights()
@@ -729,7 +756,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
 
     fun hasEditorFocus(): Boolean = titleEditText.hasFocus() || contentEditText.hasFocus()
 
-    fun dispose() {
+    fun dispose(clearText: Boolean = false) {
         if (isDisposed) return
         isDisposed = true
         titleChangedCallback = null
@@ -737,11 +764,24 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         scrollChangedCallback = null
         titleEditText.removeTextChangedListener(titleWatcher)
         contentEditText.configureMarkdownWatcher(null)
+        if (clearText) {
+            clearTextForDispose()
+        }
         contentEditText.releaseInlineImagePreviews()
         contentEditText.kardLeafContentCallback = null
         contentEditText.kardLeafSelectionCallback = null
         contentEditText.kardLeafUndoRedoCallback = null
         markdownExecutor.shutdownNow()
+    }
+
+    private fun clearTextForDispose() {
+        programmaticTitleChange.set(true)
+        try {
+            titleEditText.setText("")
+        } finally {
+            programmaticTitleChange.set(false)
+        }
+        contentEditText.clearTextForDispose()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

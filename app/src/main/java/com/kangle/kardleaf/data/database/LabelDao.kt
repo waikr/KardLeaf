@@ -20,6 +20,12 @@ interface LabelDao {
     @Query("DELETE FROM labels WHERE name = :name")
     suspend fun delete(name: String)
 
+    @Query("DELETE FROM labels WHERE name = :name OR name LIKE :namePrefix")
+    suspend fun deleteTree(
+        name: String,
+        namePrefix: String,
+    )
+
     @Query("DELETE FROM labels")
     suspend fun deleteAll()
 }

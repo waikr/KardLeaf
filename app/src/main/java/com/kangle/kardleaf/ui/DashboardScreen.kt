@@ -6,7 +6,6 @@ import android.graphics.Bitmap
 import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent as AndroidKeyEvent
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -66,11 +65,13 @@ import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -86,9 +87,11 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -144,6 +147,49 @@ private const val MENU_REOPEN_GUARD_MS = 250L
 @Suppress("UNUSED_PARAMETER")
 private suspend fun pausedDashboardThumbnailLoader(note: Note): Bitmap? = null
 
+@Composable
+private fun KardLeafUndoSnackbar(snackbarData: SnackbarData) {
+    val hasAction = snackbarData.visuals.actionLabel != null
+    Surface(
+        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        tonalElevation = 6.dp,
+        shadowElevation = 6.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(
+                start = 16.dp,
+                top = 8.dp,
+                end = if (hasAction) 8.dp else 16.dp,
+                bottom = 8.dp,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = snackbarData.visuals.message,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (hasAction) {
+                IconButton(
+                    onClick = { snackbarData.performAction() },
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Undo,
+                        contentDescription = "撤回",
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun DashboardScreen(
@@ -153,6 +199,7 @@ fun DashboardScreen(
     onNoteClick: (Note) -> Unit,
     onFabClick: () -> Unit,
     onOpenDrawer: () -> Unit,
+    onCreateDrawingClick: () -> Unit = {},
     edgeDrawerWidthPx: Float = 0f,
     onBackFromTemporaryFilter: (MainViewModel.NoteFilter) -> Boolean = { false },
 ) {
@@ -199,12 +246,24 @@ fun DashboardScreen(
     fun thumbnailLoader(enabled: Boolean): suspend (Note) -> Bitmap? =
         if (enabled) activeThumbnailLoader else pausedThumbnailLoader
 
+    fun showThemedSnackbar(message: String) {
+        coroutineScope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(
+                message = message,
+                duration = SnackbarDuration.Short,
+            )
+        }
+    }
+
     fun showUndoSnackbar(message: String) {
         coroutineScope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
             val result = snackbarHostState.showSnackbar(
                 message = message,
                 actionLabel = "撤回",
-                withDismissAction = true,
+                withDismissAction = false,
+                duration = SnackbarDuration.Short,
             )
             if (result == SnackbarResult.ActionPerformed) {
                 viewModel.undoLastNoteAction()
@@ -228,6 +287,8 @@ fun DashboardScreen(
     // UI State
     var showCreateLabelDialog by remember { mutableStateOf(false) }
     var showCreateSubfolderDialog by remember { mutableStateOf(false) }
+    var showCreateFolderLocationDialog by remember { mutableStateOf(false) }
+    var createFolderParentPath by remember { mutableStateOf<String?>(null) }
     var showEmptyTrashDialog by remember { mutableStateOf(false) }
     var labelToDelete by remember { mutableStateOf<String?>(null) }
     var showSearch by remember { mutableStateOf(false) }
@@ -247,11 +308,54 @@ fun DashboardScreen(
         )
     }
 
+    if (showCreateFolderLocationDialog) {
+        val currentFolder = (currentFilter as? MainViewModel.NoteFilter.Label)?.name.orEmpty().normalizeDashboardFolderPath()
+        val parentFolder = currentFolder.substringBeforeLast("/", "").normalizeDashboardFolderPath()
+        AlertDialog(
+            onDismissRequest = { showCreateFolderLocationDialog = false },
+            title = { Text("新建文件夹位置") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DashboardFolderLocationRow(
+                        icon = Icons.Outlined.CreateNewFolder,
+                        title = "放在当前文件夹里",
+                        subtitle = currentFolder.ifBlank { "根目录" },
+                        onClick = {
+                            createFolderParentPath = currentFolder
+                            showCreateFolderLocationDialog = false
+                            showCreateSubfolderDialog = true
+                        },
+                    )
+                    DashboardFolderLocationRow(
+                        icon = Icons.Outlined.CreateNewFolder,
+                        title = "放在上一级文件夹里",
+                        subtitle = parentFolder.ifBlank { "根目录" },
+                        onClick = {
+                            createFolderParentPath = parentFolder
+                            showCreateFolderLocationDialog = false
+                            showCreateSubfolderDialog = true
+                        },
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showCreateFolderLocationDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
     if (showCreateSubfolderDialog) {
         CreateLabelDialog(
-            onDismiss = { showCreateSubfolderDialog = false },
+            onDismiss = {
+                showCreateSubfolderDialog = false
+                createFolderParentPath = null
+            },
             onConfirm = { name ->
-                val parent = (currentFilter as? MainViewModel.NoteFilter.Label)?.name.orEmpty()
+                val parent = createFolderParentPath
+                    ?: (currentFilter as? MainViewModel.NoteFilter.Label)?.name.orEmpty().normalizeDashboardFolderPath()
                 val childPath =
                     listOf(parent, name.trim())
                         .filter { it.isNotBlank() }
@@ -261,6 +365,7 @@ fun DashboardScreen(
                     viewModel.setFilter(MainViewModel.NoteFilter.Label(childPath))
                 }
                 showCreateSubfolderDialog = false
+                createFolderParentPath = null
             },
         )
     }
@@ -297,7 +402,7 @@ fun DashboardScreen(
                     viewModel.deleteLabel(
                         name = name,
                         onSuccess = {
-                            Toast.makeText(context, context.getString(R.string.label_deleted_toast), Toast.LENGTH_SHORT).show()
+                            showThemedSnackbar(context.getString(R.string.label_deleted_toast))
                         },
                         onError = { error ->
                             val localizedError =
@@ -306,7 +411,7 @@ fun DashboardScreen(
                                 } else {
                                     error
                                 }
-                            Toast.makeText(context, localizedError, Toast.LENGTH_SHORT).show()
+                            showThemedSnackbar(localizedError)
                         },
                     )
                     labelToDelete = null
@@ -382,7 +487,11 @@ fun DashboardScreen(
         )
         when {
             showCreateLabelDialog -> showCreateLabelDialog = false
-            showCreateSubfolderDialog -> showCreateSubfolderDialog = false
+            showCreateSubfolderDialog -> {
+                showCreateSubfolderDialog = false
+                createFolderParentPath = null
+            }
+            showCreateFolderLocationDialog -> showCreateFolderLocationDialog = false
             showEmptyTrashDialog -> showEmptyTrashDialog = false
             labelToDelete != null -> labelToDelete = null
             propertyNote != null -> propertyNote = null
@@ -408,7 +517,7 @@ fun DashboardScreen(
                     (context as? ComponentActivity)?.finish()
                 } else {
                     lastBackPressTime = currentTime
-                    Toast.makeText(context, context.getString(R.string.press_back_again_exit), Toast.LENGTH_SHORT).show()
+                    showThemedSnackbar(context.getString(R.string.press_back_again_exit))
                 }
             }
         }
@@ -430,7 +539,7 @@ fun DashboardScreen(
                     onClearSelection = { viewModel.clearSelection() },
                     onDelete = {
                         viewModel.deleteSelectedNotes()
-                        showUndoSnackbar("已移动到废弃")
+                        showUndoSnackbar("已删除")
                     },
                     onArchive = {
                         viewModel.archiveSelectedNotes()
@@ -451,7 +560,7 @@ fun DashboardScreen(
                     availableYamlTags = yamlTags,
                     onApplyTags = { tags ->
                         viewModel.addTagsToSelectedNotes(tags) {
-                            Toast.makeText(context, "已更新标签", Toast.LENGTH_SHORT).show()
+                            showThemedSnackbar("已更新标签")
                         }
                     },
                     onShowProperties = ::showProperties,
@@ -462,11 +571,7 @@ fun DashboardScreen(
                             else -> ""
                         }
                         viewModel.duplicateSelectedNotes(targetFolder) { count ->
-                            Toast.makeText(
-                                context,
-                                if (count > 0) "已复制 $count 篇笔记" else "复制失败",
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                            showThemedSnackbar(if (count > 0) "已复制 $count 篇笔记" else "复制失败")
                         }
                     },
                     onShare = {
@@ -474,11 +579,7 @@ fun DashboardScreen(
                     },
                     onMoveToPrivacy = {
                         viewModel.moveSelectedNotesToPrivacy { count ->
-                            Toast.makeText(
-                                context,
-                                if (count > 0) "已移动到隐私库" else "移动到隐私库失败",
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                            showThemedSnackbar(if (count > 0) "已移动到隐私库" else "移动到隐私库失败")
                         }
                     },
                 )
@@ -591,7 +692,11 @@ fun DashboardScreen(
                 )
             }
         },
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { snackbarData ->
+                KardLeafUndoSnackbar(snackbarData = snackbarData)
+            }
+        },
         floatingActionButton = {
             if (!isPermissionNeeded &&
                 currentFilter !is MainViewModel.NoteFilter.Trash &&
@@ -620,12 +725,27 @@ fun DashboardScreen(
                                 },
                             )
                             HomeFabIconButton(
-                                icon = Icons.Outlined.CreateNewFolder,
-                                contentDescription = "新建子文件夹",
+                                icon = Icons.Outlined.Palette,
+                                contentDescription = "新建绘图",
                                 onSwipeDown = { showQuickCreateActions = false },
                                 onClick = {
                                     showQuickCreateActions = false
-                                    showCreateSubfolderDialog = true
+                                    onCreateDrawingClick()
+                                },
+                            )
+                            HomeFabIconButton(
+                                icon = Icons.Outlined.CreateNewFolder,
+                                contentDescription = "新建文件夹",
+                                onSwipeDown = { showQuickCreateActions = false },
+                                onClick = {
+                                    showQuickCreateActions = false
+                                    val currentFolder = (currentFilter as? MainViewModel.NoteFilter.Label)?.name.orEmpty().normalizeDashboardFolderPath()
+                                    if (currentFolder.isBlank()) {
+                                        createFolderParentPath = ""
+                                        showCreateSubfolderDialog = true
+                                    } else {
+                                        showCreateFolderLocationDialog = true
+                                    }
                                 },
                             )
                         }
@@ -1058,6 +1178,7 @@ fun DashboardScreen(
                                         showFolderTags = currentFilter is MainViewModel.NoteFilter.All || currentFilter is MainViewModel.NoteFilter.Favorites,
                                         showYamlTags = showYamlTagsOnLooseCards,
                                         showModifiedDate = showModifiedDateOnCards,
+                                        showDeletedDate = currentFilter is MainViewModel.NoteFilter.Trash,
                                         showNoteTitle = showNoteTitleOnCards,
                                         showDateFilenameTitle = showDateFilenameTitleOnCards,
                                         customHiddenFilenamePatterns = customHiddenFilenamePatterns,
@@ -1135,6 +1256,7 @@ fun DashboardScreen(
                                         showFolderTags = isCurrentPage && isRecursive,
                                         showYamlTags = showYamlTagsOnLooseCards,
                                         showModifiedDate = showModifiedDateOnCards,
+                                        showDeletedDate = currentFilter is MainViewModel.NoteFilter.Trash,
                                         showNoteTitle = showNoteTitleOnCards,
                                         showDateFilenameTitle = showDateFilenameTitleOnCards,
                                         customHiddenFilenamePatterns = customHiddenFilenamePatterns,
@@ -1169,6 +1291,7 @@ fun DashboardScreen(
                                 showFolderTags = currentFilter is MainViewModel.NoteFilter.All || currentFilter is MainViewModel.NoteFilter.Favorites,
                                 showYamlTags = showYamlTagsOnLooseCards,
                                 showModifiedDate = showModifiedDateOnCards,
+                                showDeletedDate = currentFilter is MainViewModel.NoteFilter.Trash,
                                 showNoteTitle = showNoteTitleOnCards,
                                 showDateFilenameTitle = showDateFilenameTitleOnCards,
                                 customHiddenFilenamePatterns = customHiddenFilenamePatterns,
@@ -1250,6 +1373,57 @@ fun DashboardScreen(
         }
     }
 }
+
+
+@Composable
+private fun DashboardFolderLocationRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+
+private fun String.normalizeDashboardFolderPath(): String =
+    replace("\\", "/")
+        .trim('/')
+        .trim()
 
 
 private fun dashboardTitle(filter: MainViewModel.NoteFilter): String =

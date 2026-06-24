@@ -69,6 +69,7 @@ fun NoteCard(
     showFolderTag: Boolean,
     showYamlTags: Boolean = false,
     showModifiedDate: Boolean = false,
+    showDeletedDate: Boolean = false,
     showNoteTitle: Boolean = true,
     showDateFilenameTitle: Boolean = true,
     customHiddenFilenamePatterns: List<String> = emptyList(),
@@ -118,6 +119,9 @@ fun NoteCard(
     }
     val modifiedDateText = remember(note.lastModified.time) {
         SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()).format(note.lastModified)
+    }
+    val deletedDateText = remember(note.deletedAt?.time) {
+        note.deletedAt?.let { SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()).format(it) }
     }
     val imageReference = note.firstImageReference?.takeIf { it.isNotBlank() }
     val shouldLoadThumbnail = showImagePreview && searchMatch == null && imageReference != null
@@ -262,7 +266,8 @@ fun NoteCard(
 
             val visibleYamlTags = if (!isCompact && showYamlTags) note.tags.take(3) else emptyList()
             val showModifiedDateText = !isCompact && showModifiedDate
-            if (folderTag != null || visibleYamlTags.isNotEmpty() || showModifiedDateText) {
+            val showDeletedDateText = showDeletedDate && deletedDateText != null
+            if (folderTag != null || visibleYamlTags.isNotEmpty() || showModifiedDateText || showDeletedDateText) {
                 Row(
                     modifier =
                         Modifier
@@ -286,11 +291,12 @@ fun NoteCard(
                     } else {
                         Spacer(modifier = Modifier.weight(1f))
                     }
-                    if (showModifiedDateText) {
+                    val rightDateText = if (showDeletedDateText) deletedDateText else if (showModifiedDateText) modifiedDateText else null
+                    if (rightDateText != null) {
                         Text(
-                            text = modifiedDateText,
+                            text = rightDateText,
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (showDeletedDateText) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -378,7 +384,12 @@ private fun isHiddenFilenamePatternMatch(
             false
         } else {
             val suffix = trimmedTitle.substring(position.index)
-            suffix == "~副本" || suffix.matches(Regex("""~副本\d*"""))
+            val expectedSuffix = trimmedPattern.substring(copyMarkerIndex)
+            if (expectedSuffix.endsWith("*")) {
+                suffix.startsWith(expectedSuffix.removeSuffix("*"))
+            } else {
+                suffix == "~副本" || suffix.matches(Regex("""~副本(?:\d+)?(?:~\d+)*"""))
+            }
         }
     }.getOrDefault(false)
 }

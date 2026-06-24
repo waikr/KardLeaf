@@ -45,6 +45,9 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Archive
@@ -52,7 +55,10 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.FormatListBulleted
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Redo
 import androidx.compose.material.icons.outlined.Visibility
@@ -106,6 +112,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -126,6 +133,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.regex.Pattern
+import java.util.regex.PatternSyntaxException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -135,10 +144,93 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private const val EDITOR_TRACE_TAG = "KardLeafEditorTrace"
+private const val LARGE_NOTE_OPEN_TRACE_TAG = "KardLeafLargeNoteOpen"
 private const val EDITOR_GESTURE_TAG = "KardLeafGestureTrace"
 private const val BACK_TRACE_TAG = "KardLeafBackTrace"
+private const val EDITOR_TOP_BAR_TRACE_TAG = "KardLeafEditorTopBar"
 private const val MENU_REOPEN_GUARD_MS = 250L
 private const val DIRECT_EDIT_MAX_CHARS = 600_000
+
+
+private fun Iterable<PrefsManager.EditorTopToolbarItemId>.toEditorTopBarLogText(): String =
+    joinToString(prefix = "[", postfix = "]") { it.name }
+
+@Composable
+private fun NoteSearchTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    focused: Boolean,
+    focusRequester: FocusRequester,
+    onFocusChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+        cursorBrush = SolidColor(if (focused) MaterialTheme.colorScheme.primary else Color.Transparent),
+        modifier = modifier
+            .height(42.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f))
+            .padding(horizontal = 12.dp)
+            .focusRequester(focusRequester)
+            .onFocusChanged { onFocusChanged(it.isFocused) },
+        decorationBox = { innerTextField ->
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (value.isEmpty()) {
+                    Text(
+                        placeholder,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                innerTextField()
+            }
+        },
+    )
+}
+
+@Composable
+private fun NoteSearchChip(
+    text: String,
+    selected: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val backgroundColor = when {
+        selected -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
+    }
+    val contentColor = when {
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+        selected -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Box(
+        modifier = Modifier
+            .height(42.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(backgroundColor)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = contentColor,
+            maxLines = 1,
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
@@ -153,6 +245,8 @@ fun EditorScreen(
     onSavePrivacyNote: ((Long, String, String, (Long) -> Unit) -> Unit)? = null,
     onDeletePrivacyNote: (() -> Unit)? = null,
     onPickImage: (((Uri) -> Unit) -> Unit)? = null,
+    openDrawingPadOnStart: Boolean = false,
+    onDrawingPadStartConsumed: () -> Unit = {},
 ) {
     val currentNote by viewModel.currentNote.collectAsState()
     val allNotes by viewModel.allNotes.collectAsState(initial = emptyList())
@@ -180,9 +274,10 @@ fun EditorScreen(
         KardLeafCustomFeatures.getToolbarOrder(context)
     }
     val notePrefsManager = remember { PrefsManager(context) }
-    val noteSidePanelsEnabled = remember {
-        notePrefsManager.isNoteSidePanelsEnabled()
-    }
+    var editorTopToolbarOrder by remember { mutableStateOf(notePrefsManager.getEditorTopToolbarItemOrder()) }
+    var editorTopToolbarMoreItems by remember { mutableStateOf(notePrefsManager.getEditorTopToolbarMoreItems()) }
+    var noteSidePanelsEnabled by remember { mutableStateOf(notePrefsManager.isNoteSidePanelsEnabled()) }
+    var noteSidePanelOpenMode by remember { mutableStateOf(notePrefsManager.getNoteSidePanelOpenMode()) }
     val previewDoubleTapIntervalMs = remember { notePrefsManager.getPreviewDoubleTapIntervalMs() }
 
     val initialTitle = if (isPrivacyEditor) privacyInitialTitle.orEmpty() else currentNote?.title ?: externalDraft?.title.orEmpty()
@@ -248,8 +343,19 @@ fun EditorScreen(
     var showMathMenu by remember { mutableStateOf(false) }
     var lastMathMenuDismissAt by remember { mutableStateOf(0L) }
     var showNoteSearch by remember { mutableStateOf(false) }
+    var showDrawingPad by remember { mutableStateOf(false) }
+    var closeEditorWhenDashboardDrawingDismissed by remember { mutableStateOf(false) }
     var noteSearchQuery by remember { mutableStateOf("") }
+    var noteReplaceText by remember(editorDocumentKey) { mutableStateOf("") }
+    var noteSearchUseRegex by remember { mutableStateOf(false) }
+    var noteSearchMatchCase by remember { mutableStateOf(false) }
+    var noteSearchError by remember { mutableStateOf<String?>(null) }
+    var noteSearchMatchCount by remember { mutableStateOf(0) }
+    var noteSearchCurrentStart by remember { mutableStateOf(-1) }
+    var noteSearchCurrentEnd by remember { mutableStateOf(-1) }
+    var noteSearchCurrentOrdinal by remember { mutableStateOf(0) }
     var noteSearchFocused by remember { mutableStateOf(false) }
+    var noteReplaceFocused by remember { mutableStateOf(false) }
     var previewHeadingScrollToken by remember { mutableStateOf(0) }
     var previewHeadingScrollText by remember { mutableStateOf("") }
     var previewHeadingScrollLevel by remember { mutableStateOf(0) }
@@ -260,6 +366,7 @@ fun EditorScreen(
     var toolbarDragFraction by remember { mutableStateOf(if (isBottomToolbarExpanded) 1f else 0f) }
     val coroutineScope = rememberCoroutineScope()
     val searchFocusRequester = remember { FocusRequester() }
+    val replaceFocusRequester = remember { FocusRequester() }
     val noteSidePanelWidth = 320.dp
     val noteSidePanelWidthPx = with(density) { noteSidePanelWidth.toPx() }
     val noteSidePanelOpenThresholdPx = with(density) { 36.dp.toPx() }
@@ -301,6 +408,13 @@ fun EditorScreen(
                 "noteContentLen=${currentNote?.content?.length ?: -1} notePreviewLen=${currentNote?.contentPreview?.length ?: -1} " +
                 "draftContentLen=${externalDraft?.content?.length ?: -1} initialTitleLen=${initialTitle.length} initialContentLen=${initialContent.length}",
         )
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "screen state key=$editorDocumentKey open=$effectiveEditorOpen editing=$isEditing isOpening=$isOpeningNoteContent " +
+                "largeBlocked=$blocksDirectEditForLargeNote notePath=${currentNote?.file?.path} " +
+                "noteContentLen=${currentNote?.content?.length ?: -1} notePreviewLen=${currentNote?.contentPreview?.length ?: -1} " +
+                "initialContentLen=${initialContent.length} renderedPreviewLen=${renderedPreview.length}",
+        )
         if (effectiveEditorOpen && currentNote != null && currentNote!!.content.isEmpty() && currentNote!!.contentPreview.isNotEmpty()) {
             Log.w(
                 EDITOR_TRACE_TAG,
@@ -325,6 +439,17 @@ fun EditorScreen(
         noteSidePanelDragPx = 0f
         noteSidePanelDragStartPx = 0f
         isNoteSidePanelDragging = false
+    }
+
+    fun openNoteSidePanel(targetOffsetPx: Float) {
+        if (abs(noteSidePanelTargetPx - targetOffsetPx) < 1f) {
+            closeNoteSidePanel()
+        } else {
+            noteSidePanelTargetPx = targetOffsetPx.coerceIn(-noteSidePanelWidthPx, noteSidePanelWidthPx)
+            noteSidePanelDragPx = noteSidePanelTargetPx
+            noteSidePanelDragStartPx = noteSidePanelTargetPx
+            isNoteSidePanelDragging = false
+        }
     }
 
     fun startNoteSidePanelDrag() {
@@ -463,13 +588,15 @@ fun EditorScreen(
         }
 
     val noteSidePanelHasOffset = noteSidePanelVisibleFraction > 0.01f
+    val noteSidePanelGestureEnabled = noteSidePanelsActive && noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE
+    val noteSidePanelToolbarEnabled = noteSidePanelsEnabled && noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.TOOLBAR && !isClosingEditor
     val noteSidePanelContentDragModifier = Modifier.noteSidePanelDrag(
-        enabled = noteSidePanelsActive && !noteSidePanelHasOffset && (!isEditing || !isKeyboardVisible),
+        enabled = noteSidePanelGestureEnabled && !noteSidePanelHasOffset && (!isEditing || !isKeyboardVisible),
         protectEditorTouch = isEditing,
     )
-    val noteSidePanelActiveDragModifier = Modifier.noteSidePanelDrag(noteSidePanelsActive && noteSidePanelHasOffset)
+    val noteSidePanelActiveDragModifier = Modifier.noteSidePanelDrag(noteSidePanelGestureEnabled && noteSidePanelHasOffset)
     val noteSidePanelEdgeDragModifier =
-        Modifier.noteSidePanelDrag(noteSidePanelsActive && (!noteSidePanelHasOffset || isNoteSidePanelDragging))
+        Modifier.noteSidePanelDrag(noteSidePanelGestureEnabled && (!noteSidePanelHasOffset || isNoteSidePanelDragging))
 
     // Keep the editor chrome stable while scrolling. Hiding/showing bars during
     // downward drags changes Scaffold padding and makes long notes feel jerky.
@@ -482,6 +609,66 @@ fun EditorScreen(
         noteSidePanelsReady = false
         delay(500L)
         noteSidePanelsReady = true
+    }
+
+    LaunchedEffect(effectiveEditorOpen, editorDocumentKey) {
+        Log.d(
+            EDITOR_TOP_BAR_TRACE_TAG,
+            "reload prefs start key=$editorDocumentKey open=$effectiveEditorOpen " +
+                "oldOrder=${editorTopToolbarOrder.toEditorTopBarLogText()} " +
+                "oldMore=${editorTopToolbarMoreItems.toEditorTopBarLogText()} " +
+                "oldPanelsEnabled=$noteSidePanelsEnabled oldMode=$noteSidePanelOpenMode",
+        )
+        editorTopToolbarOrder = notePrefsManager.getEditorTopToolbarItemOrder()
+        editorTopToolbarMoreItems = notePrefsManager.getEditorTopToolbarMoreItems()
+        noteSidePanelsEnabled = notePrefsManager.isNoteSidePanelsEnabled()
+        noteSidePanelOpenMode = notePrefsManager.getNoteSidePanelOpenMode()
+        Log.d(
+            EDITOR_TOP_BAR_TRACE_TAG,
+            "reload prefs done key=$editorDocumentKey open=$effectiveEditorOpen " +
+                "newOrder=${editorTopToolbarOrder.toEditorTopBarLogText()} " +
+                "newMore=${editorTopToolbarMoreItems.toEditorTopBarLogText()} " +
+                "newPanelsEnabled=$noteSidePanelsEnabled newMode=$noteSidePanelOpenMode",
+        )
+    }
+
+    LaunchedEffect(
+        editorDocumentKey,
+        effectiveEditorOpen,
+        currentNote?.file?.path,
+        isEditing,
+        isPrivacyEditor,
+        isClosingEditor,
+        noteSidePanelsEnabled,
+        noteSidePanelsReady,
+        noteSidePanelsActive,
+        noteSidePanelOpenMode,
+        noteSidePanelToolbarEnabled,
+        editorTopToolbarOrder,
+        editorTopToolbarMoreItems,
+    ) {
+        val normalizedOrder = editorTopToolbarOrder.distinct().toMutableList().also { order ->
+            PrefsManager.EditorTopToolbarItemId.DEFAULT_ORDER.forEach { if (it !in order) order.add(it) }
+        }
+        val filteredOrder = normalizedOrder.filter { item ->
+            noteSidePanelToolbarEnabled || (item != PrefsManager.EditorTopToolbarItemId.OUTLINE && item != PrefsManager.EditorTopToolbarItemId.REMARKS)
+        }
+        val safeMoreItems = editorTopToolbarMoreItems
+            .filter { it in filteredOrder && it != PrefsManager.EditorTopToolbarItemId.MORE }
+            .toSet()
+        val moreDisplayItems = filteredOrder.filter { it in safeMoreItems }
+        val topDisplayItems = filteredOrder.filter { it !in safeMoreItems }
+        Log.d(
+            EDITOR_TOP_BAR_TRACE_TAG,
+            "state key=$editorDocumentKey path=${currentNote?.file?.path} open=$effectiveEditorOpen editing=$isEditing " +
+                "privacy=$isPrivacyEditor closing=$isClosingEditor panelsEnabled=$noteSidePanelsEnabled " +
+                "panelsReady=$noteSidePanelsReady panelsActive=$noteSidePanelsActive mode=$noteSidePanelOpenMode " +
+                "toolbarEnabled=$noteSidePanelToolbarEnabled rawOrder=${editorTopToolbarOrder.toEditorTopBarLogText()} " +
+                "rawMore=${editorTopToolbarMoreItems.toEditorTopBarLogText()} filteredOrder=${filteredOrder.toEditorTopBarLogText()} " +
+                "top=${topDisplayItems.toEditorTopBarLogText()} more=${moreDisplayItems.toEditorTopBarLogText()} " +
+                "showOutline=${PrefsManager.EditorTopToolbarItemId.OUTLINE in topDisplayItems || PrefsManager.EditorTopToolbarItemId.OUTLINE in moreDisplayItems} " +
+                "showRemarks=${PrefsManager.EditorTopToolbarItemId.REMARKS in topDisplayItems || PrefsManager.EditorTopToolbarItemId.REMARKS in moreDisplayItems}",
+        )
     }
 
     LaunchedEffect(noteSidePanelsActive) {
@@ -675,6 +862,48 @@ fun EditorScreen(
         }
     }
 
+    fun openDrawingPad() {
+        requestKeyboardOnEdit = false
+        noteSearchFocused = false
+        noteReplaceFocused = false
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+        showDrawingPad = true
+        showLabelMenu = false
+        showMoreMenu = false
+        showHeadingMenu = false
+        showMathMenu = false
+    }
+
+    fun saveDrawingImage(bitmap: android.graphics.Bitmap) {
+        coroutineScope.launch {
+            val markdown = viewModel.importDrawingImage(bitmap, folder)
+            if (markdown.isNotBlank()) {
+                closeEditorWhenDashboardDrawingDismissed = false
+                insertImageMarkdown(markdown)
+                showDrawingPad = false
+            } else {
+                Toast.makeText(context, "画图保存失败", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    LaunchedEffect(editorDocumentKey, openDrawingPadOnStart) {
+        if (openDrawingPadOnStart) {
+            closeEditorWhenDashboardDrawingDismissed = true
+            openDrawingPad()
+            onDrawingPadStartConsumed()
+        }
+    }
+
+    LaunchedEffect(showDrawingPad) {
+        if (showDrawingPad) {
+            requestKeyboardOnEdit = false
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+        }
+    }
+
     fun undoContent() {
         if (!canUndo && !editorController.canUndo()) return
         editorController.undo()
@@ -688,44 +917,231 @@ fun EditorScreen(
     }
 
     fun hideNoteSearchCursor(reason: String) {
-        if (!showNoteSearch || !noteSearchFocused) return
+        if (!showNoteSearch || (!noteSearchFocused && !noteReplaceFocused)) return
         noteSearchFocused = false
+        noteReplaceFocused = false
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
         Log.d(EDITOR_TRACE_TAG, "noteSearch cursor hidden reason=$reason")
     }
 
+    fun closeNoteSearch() {
+        showNoteSearch = false
+        noteSearchQuery = ""
+        noteReplaceText = ""
+        noteSearchError = null
+        noteSearchMatchCount = 0
+        noteSearchCurrentStart = -1
+        noteSearchCurrentEnd = -1
+        noteSearchCurrentOrdinal = 0
+        noteSearchFocused = false
+        noteReplaceFocused = false
+        editorController.clearSearchHighlights()
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+    }
+
+    fun updateSearchState(
+        query: String,
+        currentStart: Int,
+        text: String = editorController.getText(),
+    ): SearchMatchSummary {
+        val summary = summarizeNoteSearchMatches(
+            text = text,
+            query = query,
+            preferredStart = currentStart,
+            useRegex = noteSearchUseRegex,
+            matchCase = noteSearchMatchCase,
+        )
+        noteSearchError = summary.errorMessage
+        noteSearchMatchCount = summary.count
+        noteSearchCurrentStart = summary.currentStart
+        noteSearchCurrentEnd = summary.currentEnd
+        noteSearchCurrentOrdinal = summary.currentOrdinal
+        val highlightCount = if (isEditing && summary.errorMessage == null) {
+            editorController.highlightSearch(
+                query = query,
+                currentStart = summary.currentStart,
+                useRegex = noteSearchUseRegex,
+                matchCase = noteSearchMatchCase,
+            )
+        } else {
+            editorController.clearSearchHighlights()
+            0
+        }
+        Log.d(
+            EDITOR_TRACE_TAG,
+            "noteSearch queryLen=${query.length} regex=$noteSearchUseRegex matchCase=$noteSearchMatchCase " +
+                "textLen=${text.length} current=${summary.currentStart}..${summary.currentEnd} " +
+                "ordinal=${summary.currentOrdinal}/${summary.count} error=${summary.errorMessage} " +
+                "highlights=$highlightCount attached=${editorController.editorView != null} editing=$isEditing",
+        )
+        return summary
+    }
+
+    fun selectSearchMatch(index: Int, query: String) {
+        if (query.isBlank()) return
+        val text = editorController.getText()
+        if (index < 0 || !isEditing) {
+            updateSearchState(query, -1, text)
+            return
+        }
+        val summary = updateSearchState(query, index, text)
+        if (summary.currentStart < 0 || summary.currentEnd <= summary.currentStart) return
+        editorController.setSelection(summary.currentStart, summary.currentEnd)
+        coroutineScope.launch {
+            withFrameNanos { }
+            delay(60)
+            editorController.setSelection(summary.currentStart, summary.currentEnd)
+            editorController.scrollToOffset(summary.currentStart)
+            runCatching { searchFocusRequester.requestFocus() }
+        }
+    }
+
     fun searchInNote(query: String) {
         if (query.isBlank()) {
+            noteSearchError = null
+            noteSearchMatchCount = 0
+            noteSearchCurrentStart = -1
+            noteSearchCurrentEnd = -1
+            noteSearchCurrentOrdinal = 0
             editorController.clearSearchHighlights()
             return
         }
         val text = editorController.getText()
-        val index = text.indexOf(query, ignoreCase = true)
-        val highlightCount = if (isEditing) editorController.highlightSearch(query) else 0
-        Log.d(
-            EDITOR_TRACE_TAG,
-            "noteSearch queryLen=${query.length} textLen=${text.length} index=$index highlights=$highlightCount attached=${editorController.editorView != null} editing=$isEditing",
-        )
-        if (index >= 0 && isEditing) {
-            val end = index + query.length
-            editorController.setSelection(index, end)
-            coroutineScope.launch {
-                withFrameNanos { }
-                delay(60)
-                editorController.setSelection(index, end)
-                editorController.scrollToOffset(index)
-                runCatching { searchFocusRequester.requestFocus() }
-            }
+        val result = buildNoteSearchMatches(text, query, noteSearchUseRegex, noteSearchMatchCase)
+        val index = result.matches.firstOrNull()?.start ?: -1
+        selectSearchMatch(index, query)
+    }
+
+    fun moveSearchMatch(forward: Boolean) {
+        val query = noteSearchQuery
+        if (query.isBlank()) return
+        val text = editorController.getText()
+        val result = buildNoteSearchMatches(text, query, noteSearchUseRegex, noteSearchMatchCase)
+        noteSearchError = result.errorMessage
+        if (result.errorMessage != null || result.matches.isEmpty()) {
+            updateSearchState(query, -1, text)
+            return
         }
+        val currentIndex = result.matches.indexOfFirst { it.start == noteSearchCurrentStart && it.end == noteSearchCurrentEnd }
+        val nextIndex = if (forward) {
+            if (currentIndex >= 0) (currentIndex + 1) % result.matches.size else 0
+        } else {
+            if (currentIndex > 0) currentIndex - 1 else result.matches.lastIndex
+        }
+        selectSearchMatch(result.matches[nextIndex].start, query)
+    }
+
+    fun replaceCurrentSearchMatch() {
+        val query = noteSearchQuery
+        if (query.isBlank()) {
+            Toast.makeText(context, "请输入要查找的文本", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!isEditing) {
+            Toast.makeText(context, "请先切换到编辑状态再替换", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val snapshot = editorController.getSnapshot()
+        val text = snapshot.content
+        val result = buildNoteSearchMatches(text, query, noteSearchUseRegex, noteSearchMatchCase)
+        if (result.errorMessage != null) {
+            updateSearchState(query, -1, text)
+            Toast.makeText(context, result.errorMessage, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val rawStart = minOf(snapshot.selection.start, snapshot.selection.end).coerceIn(0, text.length)
+        val rawEnd = maxOf(snapshot.selection.start, snapshot.selection.end).coerceIn(0, text.length)
+        val replaceMatch = result.matches.firstOrNull { it.start == rawStart && it.end == rawEnd }
+            ?: result.matches.firstOrNull { it.start == noteSearchCurrentStart && it.end == noteSearchCurrentEnd }
+            ?: result.matches.firstOrNull { it.start >= rawStart }
+            ?: result.matches.firstOrNull()
+        if (replaceMatch == null) {
+            Toast.makeText(context, "没有找到要替换的文本", Toast.LENGTH_SHORT).show()
+            noteSearchError = null
+            noteSearchMatchCount = 0
+            noteSearchCurrentStart = -1
+            noteSearchCurrentEnd = -1
+            noteSearchCurrentOrdinal = 0
+            editorController.clearSearchHighlights()
+            return
+        }
+        val replacement = buildCurrentReplacement(
+            text = text,
+            range = replaceMatch,
+            query = query,
+            replacement = noteReplaceText,
+            useRegex = noteSearchUseRegex,
+            matchCase = noteSearchMatchCase,
+        )
+        if (replacement.errorMessage != null) {
+            Toast.makeText(context, replacement.errorMessage, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val replacementText = replacement.text ?: noteReplaceText
+        editorController.setSelection(replaceMatch.start, replaceMatch.end)
+        editorController.replaceSelection(replacementText)
+        markEditorDirty()
+
+        val newText = editorController.getText()
+        val nextStart = (replaceMatch.start + replacementText.length).coerceIn(0, newText.length)
+        val nextResult = buildNoteSearchMatches(newText, query, noteSearchUseRegex, noteSearchMatchCase)
+        val nextMatch = nextResult.matches.firstOrNull { it.start >= nextStart } ?: nextResult.matches.firstOrNull()
+        if (nextMatch != null) {
+            selectSearchMatch(nextMatch.start, query)
+        } else {
+            updateSearchState(query, -1, newText)
+            editorController.setSelection(nextStart)
+        }
+    }
+
+    fun replaceAllSearchMatches() {
+        val query = noteSearchQuery
+        if (query.isBlank()) {
+            Toast.makeText(context, "请输入要查找的文本", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!isEditing) {
+            Toast.makeText(context, "请先切换到编辑状态再替换", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val snapshot = editorController.getSnapshot()
+        val replacement = replaceAllNoteSearchMatches(
+            text = snapshot.content,
+            query = query,
+            replacement = noteReplaceText,
+            useRegex = noteSearchUseRegex,
+            matchCase = noteSearchMatchCase,
+        )
+        if (replacement.errorMessage != null) {
+            updateSearchState(query, -1, snapshot.content)
+            Toast.makeText(context, replacement.errorMessage, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val newText = replacement.text ?: snapshot.content
+        if (replacement.count <= 0) {
+            Toast.makeText(context, "没有找到要替换的文本", Toast.LENGTH_SHORT).show()
+            noteSearchError = null
+            noteSearchMatchCount = 0
+            noteSearchCurrentStart = -1
+            noteSearchCurrentEnd = -1
+            noteSearchCurrentOrdinal = 0
+            editorController.clearSearchHighlights()
+            return
+        }
+        val cursor = snapshot.selection.start.coerceIn(0, newText.length)
+        editorController.replaceAll(newText, TextRange(cursor, cursor))
+        markEditorDirty()
+        updateSearchState(query, -1, newText)
+        Toast.makeText(context, "已替换 ${replacement.count} 处", Toast.LENGTH_SHORT).show()
     }
 
     fun jumpToHeading(heading: MarkdownHeading) {
         val text = editorController.getText()
         val target = heading.startOffset.coerceIn(0, text.length)
         showNoteInfoDialog = false
-        showNoteSearch = false
-        noteSearchQuery = ""
+        closeNoteSearch()
         closeNoteSidePanel()
         if (isEditing) {
             editorController.setSelection(target)
@@ -746,7 +1162,7 @@ fun EditorScreen(
         }
     }
 
-    LaunchedEffect(noteSearchQuery) {
+    LaunchedEffect(noteSearchQuery, noteSearchUseRegex, noteSearchMatchCase) {
         if (showNoteSearch) {
             searchInNote(noteSearchQuery)
         }
@@ -754,6 +1170,13 @@ fun EditorScreen(
 
     LaunchedEffect(showNoteSearch) {
         if (!showNoteSearch) {
+            noteSearchError = null
+            noteSearchMatchCount = 0
+            noteSearchCurrentStart = -1
+            noteSearchCurrentEnd = -1
+            noteSearchCurrentOrdinal = 0
+            noteSearchFocused = false
+            noteReplaceFocused = false
             editorController.clearSearchHighlights()
         }
     }
@@ -899,6 +1322,7 @@ fun EditorScreen(
         requestKeyboardOnEdit = false
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
+        editorController.releaseForClose()
         onBack()
     }
 
@@ -912,6 +1336,11 @@ fun EditorScreen(
             EDITOR_TRACE_TAG,
             "preview render start token=$token key=$editorDocumentKey titleLen=${snapshot.title.length} contentLen=${snapshot.content.length}",
         )
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "screen preview render start token=$token key=$editorDocumentKey markdownLen=${markdown.length} " +
+                "titleLen=${snapshot.title.length} contentLen=${snapshot.content.length}",
+        )
         coroutineScope.launch {
             val preparedMarkdown = viewModel.preparePreviewMarkdown(markdown, folder)
             if (previewRenderToken == token) {
@@ -920,8 +1349,18 @@ fun EditorScreen(
                     EDITOR_TRACE_TAG,
                     "preview render done token=$token key=$editorDocumentKey len=${preparedMarkdown.length} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
                 )
+                Log.d(
+                    LARGE_NOTE_OPEN_TRACE_TAG,
+                    "screen preview render done token=$token key=$editorDocumentKey len=${preparedMarkdown.length} " +
+                        "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                )
             } else {
                 Log.d(EDITOR_TRACE_TAG, "preview render ignored stale token=$token latest=$previewRenderToken key=$editorDocumentKey")
+                Log.w(
+                    LARGE_NOTE_OPEN_TRACE_TAG,
+                    "screen preview render ignored stale token=$token latest=$previewRenderToken key=$editorDocumentKey " +
+                        "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                )
             }
         }
     }
@@ -1014,8 +1453,9 @@ fun EditorScreen(
         }
     }
 
-    LaunchedEffect(effectiveEditorOpen, isEditing, currentNote, externalDraft, isLeavingEditor) {
+    LaunchedEffect(effectiveEditorOpen, isEditing, currentNote, externalDraft, isLeavingEditor, showDrawingPad) {
         if (!isLeavingEditor &&
+            !showDrawingPad &&
             !showNoteSearch &&
             effectiveEditorOpen &&
             isEditing &&
@@ -1033,6 +1473,31 @@ fun EditorScreen(
         if (!isEditing && !isOpeningNoteContent) {
             withFrameNanos { }
             renderPreviewSnapshot(editorController.getSnapshot())
+        }
+    }
+
+    LaunchedEffect(
+        effectiveEditorOpen,
+        isOpeningNoteContent,
+        isEditing,
+        blocksDirectEditForLargeNote,
+        renderedPreview.length,
+        initialContent.length,
+    ) {
+        if (effectiveEditorOpen) {
+            val previewContentLen = if (isOpeningNoteContent) 0 else renderedPreview.length
+            Log.d(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "screen visible mode=${if (isEditing && !blocksDirectEditForLargeNote) "editor" else "preview"} " +
+                    "key=$editorDocumentKey isOpening=$isOpeningNoteContent editing=$isEditing largeBlocked=$blocksDirectEditForLargeNote " +
+                    "initialContentLen=${initialContent.length} renderedPreviewLen=${renderedPreview.length} previewContentLen=$previewContentLen",
+            )
+            if (!isOpeningNoteContent && !isEditing && initialContent.isNotEmpty() && renderedPreview.isEmpty()) {
+                Log.w(
+                    LARGE_NOTE_OPEN_TRACE_TAG,
+                    "screen suspicious empty preview key=$editorDocumentKey initialContentLen=${initialContent.length} path=${currentNote?.file?.path}",
+                )
+            }
         }
     }
 
@@ -1073,8 +1538,7 @@ fun EditorScreen(
 
     BackHandler(enabled = showNoteSearch) {
         Log.d(BACK_TRACE_TAG, "Editor note search BackHandler hit")
-        showNoteSearch = false
-        noteSearchQuery = ""
+        closeNoteSearch()
     }
 
     BackHandler(enabled = noteSidePanelsActive && abs(noteSidePanelOffsetPx) > 1f) {
@@ -1149,47 +1613,26 @@ fun EditorScreen(
                 TopAppBar(
                     title = {
                         if (showNoteSearch) {
-                            BasicTextField(
+                            NoteSearchTextField(
                                 value = noteSearchQuery,
                                 onValueChange = { noteSearchQuery = it },
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                                cursorBrush = SolidColor(if (noteSearchFocused) MaterialTheme.colorScheme.primary else Color.Transparent),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(searchFocusRequester)
-                                    .onFocusChanged { noteSearchFocused = it.isFocused },
-                                decorationBox = { innerTextField ->
-                                    Box {
-                                        if (noteSearchQuery.isEmpty()) {
-                                            Text(
-                                                "搜索当前笔记",
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
-                                        }
-                                        innerTextField()
-                                    }
-                                },
+                                placeholder = "搜索当前笔记",
+                                focused = noteSearchFocused,
+                                focusRequester = searchFocusRequester,
+                                onFocusChanged = { noteSearchFocused = it },
+                                modifier = Modifier.fillMaxWidth(),
                             )
                         }
                     },
                     navigationIcon = {
-                    if (showNoteSearch) {
-                        IconButton(onClick = {
-                            showNoteSearch = false
-                            noteSearchQuery = ""
-                        }) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "关闭搜索")
-                        }
-                    } else if (isEditing) {
+                    if (!showNoteSearch && isEditing) {
                         IconButton(onClick = {
                             saveNote(saveHistory = true)
                             enterPreviewMode()
                         }) {
                             Icon(Icons.Outlined.Check, contentDescription = stringResource(R.string.done))
                         }
-                    } else {
+                    } else if (!showNoteSearch) {
                         IconButton(onClick = { leaveEditor() }) {
                             Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.back))
                         }
@@ -1197,273 +1640,607 @@ fun EditorScreen(
                 },
                 actions = {
                     if (showNoteSearch) {
-                        // Search mode: show only the close button
-                        IconButton(onClick = {
-                            showNoteSearch = false
-                            noteSearchQuery = ""
-                        }) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "关闭搜索")
+                        IconButton(
+                            enabled = isEditing && noteSearchMatchCount > 0,
+                            onClick = { moveSearchMatch(forward = false) },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "上一个")
+                        }
+                        IconButton(
+                            enabled = isEditing && noteSearchMatchCount > 0,
+                            onClick = { moveSearchMatch(forward = true) },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "下一个")
+                        }
+                        Box(
+                            modifier = Modifier.width(58.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = noteSearchError ?: if (noteSearchCurrentOrdinal > 0 && noteSearchMatchCount > 0) {
+                                    "$noteSearchCurrentOrdinal/$noteSearchMatchCount"
+                                } else {
+                                    "${noteSearchMatchCount}处"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (noteSearchError == null) {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        IconButton(
+                            onClick = { closeNoteSearch() },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭搜索")
                         }
                     } else {
-                    // Label picker
-                    if (!isPrivacyEditor) {
-                        Box {
-                            IconButton(onClick = {
-                                val now = SystemClock.uptimeMillis()
-                                val ignoreReopen = !showLabelMenu && now - lastLabelMenuDismissAt < MENU_REOPEN_GUARD_MS
-                                Log.d(BACK_TRACE_TAG, "Editor label click toggle menu showLabelMenu=$showLabelMenu ignoreReopen=$ignoreReopen")
-                                if (!ignoreReopen) {
-                                    showMoreMenu = false
-                                    showHeadingMenu = false
-                                    showMathMenu = false
-                                    showLabelMenu = !showLabelMenu
-                                }
-                            }) {
-                                Icon(
-                                    Icons.AutoMirrored.Outlined.DriveFileMove,
-                                    contentDescription = stringResource(R.string.label),
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-                            DropdownMenu(
-                                modifier =
-                                    Modifier.onPreviewKeyEvent { event ->
-                                        if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
-                                            Log.d(
-                                                BACK_TRACE_TAG,
-                                                "Editor label popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showLabelMenu=$showLabelMenu",
-                                            )
-                                        }
-                                        false
-                                    },
-                                expanded = showLabelMenu,
-                                onDismissRequest = {
-                                    Log.d(BACK_TRACE_TAG, "Editor label menu onDismissRequest showLabelMenu=$showLabelMenu")
-                                    lastLabelMenuDismissAt = SystemClock.uptimeMillis()
-                                    showLabelMenu = false
-                                },
-                                properties = PopupProperties(
-                                    focusable = false,
-                                    dismissOnBackPress = false,
-                                    dismissOnClickOutside = true,
-                                ),
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.root_folder_no_label)) },
-                                    onClick = {
-                                        folder = ""
-                                        showLabelMenu = false
-                                        if (currentNote != null) {
-                                            saveNote(saveHistory = false)
-                                        }
-                                    },
-                                )
-                                labels.forEach { label ->
-                                    DropdownMenuItem(
-                                        text = { Text(label) },
-                                        onClick = {
-                                            folder = label
-                                            showLabelMenu = false
-                                            if (currentNote != null) {
-                                                saveNote(saveHistory = false)
-                                            }
-                                        },
-                                    )
-                                }
-                                HorizontalDivider()
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.create_new_label)) },
-                                    leadingIcon = { Icon(Icons.Outlined.Add, null) },
-                                    onClick = {
-                                        showLabelMenu = false
-                                        showCreateLabelDialog = true
-                                    },
-                                )
-                            }
+                        val normalizedEditorTopToolbarOrder = editorTopToolbarOrder.distinct().toMutableList().also { order ->
+                            PrefsManager.EditorTopToolbarItemId.DEFAULT_ORDER.forEach { if (it !in order) order.add(it) }
+                        }.filter { item ->
+                            noteSidePanelToolbarEnabled || (item != PrefsManager.EditorTopToolbarItemId.OUTLINE && item != PrefsManager.EditorTopToolbarItemId.REMARKS)
                         }
-                    }
+                        val safeEditorTopToolbarMoreItems = editorTopToolbarMoreItems
+                            .filter { it in normalizedEditorTopToolbarOrder && it != PrefsManager.EditorTopToolbarItemId.MORE }
+                            .toSet()
+                        val editorTopToolbarMoreDisplayItems = normalizedEditorTopToolbarOrder.filter { it in safeEditorTopToolbarMoreItems }
+                        val editorTopToolbarTopItems = normalizedEditorTopToolbarOrder.filter { it !in safeEditorTopToolbarMoreItems }
 
-                    // Search
-                    IconButton(onClick = {
-                        showNoteSearch = true
-                    }) {
-                        Icon(
-                            Icons.Outlined.Search,
-                            contentDescription = "搜索当前笔记",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Log.d(
+                            EDITOR_TOP_BAR_TRACE_TAG,
+                            "compose actions key=$editorDocumentKey toolbarEnabled=$noteSidePanelToolbarEnabled " +
+                                "mode=$noteSidePanelOpenMode top=${editorTopToolbarTopItems.toEditorTopBarLogText()} " +
+                                "more=${editorTopToolbarMoreDisplayItems.toEditorTopBarLogText()} showOutline=${PrefsManager.EditorTopToolbarItemId.OUTLINE in editorTopToolbarTopItems || PrefsManager.EditorTopToolbarItemId.OUTLINE in editorTopToolbarMoreDisplayItems} " +
+                                "showRemarks=${PrefsManager.EditorTopToolbarItemId.REMARKS in editorTopToolbarTopItems || PrefsManager.EditorTopToolbarItemId.REMARKS in editorTopToolbarMoreDisplayItems}",
                         )
-                    }
-                    // Edit toggle (view-mode only)
-                    if (!isEditing) {
-                        IconButton(onClick = { enterEditMode() }) {
-                            Icon(Icons.Outlined.Edit, contentDescription = stringResource(R.string.edit))
-                        }
-                    }
 
-                    // More menu (existing notes only)
-                    val currentNoteObj = currentNote
-                    if (isPrivacyEditor && onDeletePrivacyNote != null) {
-                        Box {
-                            IconButton(onClick = {
-                                val now = SystemClock.uptimeMillis()
-                                val ignoreReopen = !showMoreMenu && now - lastMoreMenuDismissAt < MENU_REOPEN_GUARD_MS
-                                Log.d(BACK_TRACE_TAG, "Editor privacy more click toggle menu showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
-                                if (!ignoreReopen) {
-                                    showLabelMenu = false
-                                    showHeadingMenu = false
-                                    showMathMenu = false
-                                    showMoreMenu = !showMoreMenu
-                                }
-                            }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
-                            }
-                            DropdownMenu(
-                                modifier =
-                                    Modifier.onPreviewKeyEvent { event ->
-                                        if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
-                                            Log.d(
-                                                BACK_TRACE_TAG,
-                                                "Editor privacy more popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showMoreMenu=$showMoreMenu",
-                                            )
-                                        }
-                                        false
-                                    },
-                                expanded = showMoreMenu,
-                                onDismissRequest = {
-                                    Log.d(BACK_TRACE_TAG, "Editor note more onDismissRequest showMoreMenu=$showMoreMenu")
-                                    lastMoreMenuDismissAt = SystemClock.uptimeMillis()
-                                    showMoreMenu = false
-                                },
-                                properties = PopupProperties(
-                                    focusable = false,
-                                    dismissOnBackPress = false,
-                                    dismissOnClickOutside = true,
-                                ),
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.delete)) },
-                                    leadingIcon = { Icon(Icons.Outlined.Delete, null) },
-                                    onClick = {
-                                        showMoreMenu = false
-                                        onDeletePrivacyNote()
-                                    },
-                                )
-                            }
-                        }
-                    } else if (currentNoteObj != null) {
-                        Box {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .combinedClickable(
-                                        onClick = {
-                                            val now = SystemClock.uptimeMillis()
-                                            val ignoreReopen = !showMoreMenu && now - lastMoreMenuDismissAt < MENU_REOPEN_GUARD_MS
-                                            Log.d(BACK_TRACE_TAG, "Editor note more click toggle menu noteId=${currentNoteObj.id} showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
-                                            if (!ignoreReopen) {
-                                                showLabelMenu = false
-                                                showHeadingMenu = false
-                                                showMathMenu = false
-                                                showMoreMenu = !showMoreMenu
-                                            }
-                                        },
-                                        onLongClick = { addCurrentNoteToPrivacy(currentNoteObj) { leaveEditor() } },
-                                    ),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
-                            }
-                            DropdownMenu(
-                                modifier =
-                                    Modifier.onPreviewKeyEvent { event ->
-                                        if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
-                                            Log.d(
-                                                BACK_TRACE_TAG,
-                                                "Editor note more popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showMoreMenu=$showMoreMenu",
-                                            )
-                                        }
-                                        false
-                                    },
-                                expanded = showMoreMenu,
-                                onDismissRequest = {
-                                    Log.d(BACK_TRACE_TAG, "Editor privacy more onDismissRequest showMoreMenu=$showMoreMenu")
-                                    lastMoreMenuDismissAt = SystemClock.uptimeMillis()
-                                    showMoreMenu = false
-                                },
-                                properties = PopupProperties(
-                                    focusable = false,
-                                    dismissOnBackPress = false,
-                                    dismissOnClickOutside = true,
-                                ),
-                            ) {
-                                if (!currentNoteObj.isTrashed) {
-                                    DropdownMenuItem(
-                                        text = { Text("历史版本") },
-                                        leadingIcon = { Icon(Icons.Outlined.History, null) },
-                                        onClick = {
-                                            showHistoryDialog = true
+                        @Composable
+                        fun LabelAction() {
+                            if (!isPrivacyEditor) {
+                                Box {
+                                    IconButton(onClick = {
+                                        val now = SystemClock.uptimeMillis()
+                                        val ignoreReopen = !showLabelMenu && now - lastLabelMenuDismissAt < MENU_REOPEN_GUARD_MS
+                                        Log.d(BACK_TRACE_TAG, "Editor label click toggle menu showLabelMenu=$showLabelMenu ignoreReopen=$ignoreReopen")
+                                        if (!ignoreReopen) {
                                             showMoreMenu = false
+                                            showHeadingMenu = false
+                                            showMathMenu = false
+                                            showLabelMenu = !showLabelMenu
+                                        }
+                                    }) {
+                                        Icon(
+                                            Icons.AutoMirrored.Outlined.DriveFileMove,
+                                            contentDescription = stringResource(R.string.label),
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        modifier =
+                                            Modifier.onPreviewKeyEvent { event ->
+                                                if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
+                                                    Log.d(
+                                                        BACK_TRACE_TAG,
+                                                        "Editor label popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showLabelMenu=$showLabelMenu",
+                                                    )
+                                                }
+                                                false
+                                            },
+                                        expanded = showLabelMenu,
+                                        onDismissRequest = {
+                                            Log.d(BACK_TRACE_TAG, "Editor label menu onDismissRequest showLabelMenu=$showLabelMenu")
+                                            lastLabelMenuDismissAt = SystemClock.uptimeMillis()
+                                            showLabelMenu = false
                                         },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("保护") },
-                                        leadingIcon = { Icon(Icons.Outlined.Lock, null) },
-                                        onClick = {
-                                            addCurrentNoteToPrivacy(currentNoteObj) { leaveEditor() }
-                                            showMoreMenu = false
-                                        },
-                                    )
-                                    if (currentNoteObj.isArchived) {
+                                        properties = PopupProperties(
+                                            focusable = false,
+                                            dismissOnBackPress = false,
+                                            dismissOnClickOutside = true,
+                                        ),
+                                    ) {
                                         DropdownMenuItem(
-                                            text = { Text(stringResource(R.string.unarchive)) },
-                                            leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                                            text = { Text(stringResource(R.string.root_folder_no_label)) },
                                             onClick = {
-                                                viewModel.restoreNote(currentNoteObj)
-                                                showMoreMenu = false
-                                                onBack()
+                                                folder = ""
+                                                showLabelMenu = false
+                                                if (currentNote != null) {
+                                                    saveNote(saveHistory = false)
+                                                }
                                             },
                                         )
-                                    } else {
+                                        labels.forEach { label ->
+                                            DropdownMenuItem(
+                                                text = { Text(label) },
+                                                onClick = {
+                                                    folder = label
+                                                    showLabelMenu = false
+                                                    if (currentNote != null) {
+                                                        saveNote(saveHistory = false)
+                                                    }
+                                                },
+                                            )
+                                        }
+                                        HorizontalDivider()
                                         DropdownMenuItem(
-                                            text = { Text(stringResource(R.string.archive)) },
-                                            leadingIcon = { Icon(Icons.Outlined.Archive, null) },
+                                            text = { Text(stringResource(R.string.create_new_label)) },
+                                            leadingIcon = { Icon(Icons.Outlined.Add, null) },
                                             onClick = {
-                                                viewModel.archiveNote(currentNoteObj)
-                                                showMoreMenu = false
-                                                onBack()
+                                                showLabelMenu = false
+                                                showCreateLabelDialog = true
                                             },
                                         )
                                     }
                                 }
+                            }
+                        }
 
-                                if (currentNoteObj.isTrashed) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.restore)) },
-                                        leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
-                                        onClick = {
-                                            viewModel.restoreNote(currentNoteObj)
-                                            showMoreMenu = false
-                                            onBack()
-                                        },
-                                    )
-                                } else {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.delete)) },
-                                        leadingIcon = { Icon(Icons.Outlined.Delete, null) },
-                                        onClick = {
-                                            viewModel.deleteNote(currentNoteObj)
-                                            showMoreMenu = false
-                                            leaveEditor()
-                                        },
+                        @Composable
+                        fun OutlineAction() {
+                            IconButton(onClick = { openNoteSidePanel(noteSidePanelWidthPx) }) {
+                                Icon(
+                                    Icons.Outlined.FormatListBulleted,
+                                    contentDescription = "大纲",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+
+                        @Composable
+                        fun RemarksAction() {
+                            IconButton(onClick = { openNoteSidePanel(-noteSidePanelWidthPx) }) {
+                                Icon(
+                                    Icons.Outlined.Info,
+                                    contentDescription = "属性备注",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+
+                        @Composable
+                        fun SearchAction() {
+                            IconButton(onClick = {
+                                showLabelMenu = false
+                                showMoreMenu = false
+                                showHeadingMenu = false
+                                showMathMenu = false
+                                showNoteSearch = true
+                            }) {
+                                Icon(
+                                    Icons.Outlined.Search,
+                                    contentDescription = "搜索当前笔记",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+
+                        @Composable
+                        fun EditAction() {
+                            if (!isEditing) {
+                                IconButton(onClick = { enterEditMode() }) {
+                                    Icon(Icons.Outlined.Edit, contentDescription = stringResource(R.string.edit))
+                                }
+                            }
+                        }
+
+                        val editorTopToolbarNoteOperationItems = setOf(
+                            PrefsManager.EditorTopToolbarItemId.HISTORY,
+                            PrefsManager.EditorTopToolbarItemId.PRIVACY,
+                            PrefsManager.EditorTopToolbarItemId.ARCHIVE,
+                            PrefsManager.EditorTopToolbarItemId.DELETE,
+                        )
+
+                        @Composable
+                        fun HistoryAction() {
+                            val note = currentNote
+                            if (note != null && !note.isTrashed) {
+                                IconButton(onClick = { showHistoryDialog = true }) {
+                                    Icon(Icons.Outlined.History, contentDescription = "历史版本")
+                                }
+                            }
+                        }
+
+                        @Composable
+                        fun PrivacyAction() {
+                            val note = currentNote
+                            if (note != null && !note.isTrashed) {
+                                IconButton(onClick = { addCurrentNoteToPrivacy(note) { leaveEditor() } }) {
+                                    Icon(Icons.Outlined.Lock, contentDescription = "保护")
+                                }
+                            }
+                        }
+
+                        @Composable
+                        fun ArchiveAction() {
+                            val note = currentNote
+                            if (note != null && !note.isTrashed) {
+                                IconButton(onClick = {
+                                    if (note.isArchived) {
+                                        viewModel.restoreNote(note)
+                                    } else {
+                                        viewModel.archiveNote(note)
+                                    }
+                                    leaveEditor()
+                                }) {
+                                    Icon(
+                                        if (note.isArchived) Icons.Outlined.Refresh else Icons.Outlined.Archive,
+                                        contentDescription = if (note.isArchived) stringResource(R.string.unarchive) else stringResource(R.string.archive),
                                     )
                                 }
                             }
                         }
-                    }
+
+                        @Composable
+                        fun DeleteAction() {
+                            val note = currentNote
+                            when {
+                                isPrivacyEditor && onDeletePrivacyNote != null -> {
+                                    IconButton(onClick = { onDeletePrivacyNote() }) {
+                                        Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.delete))
+                                    }
+                                }
+                                note != null && note.isTrashed -> {
+                                    IconButton(onClick = {
+                                        viewModel.restoreNote(note)
+                                        leaveEditor()
+                                    }) {
+                                        Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.restore))
+                                    }
+                                }
+                                note != null -> {
+                                    IconButton(onClick = {
+                                        viewModel.deleteNote(note)
+                                        leaveEditor()
+                                    }) {
+                                        Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.delete))
+                                    }
+                                }
+                            }
+                        }
+
+                        @Composable
+                        fun EditorTopToolbarMoreItem(item: PrefsManager.EditorTopToolbarItemId) {
+                            when (item) {
+                                PrefsManager.EditorTopToolbarItemId.LABEL -> {
+                                    if (!isPrivacyEditor) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.root_folder_no_label)) },
+                                            leadingIcon = { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, null) },
+                                            onClick = {
+                                                folder = ""
+                                                showMoreMenu = false
+                                                if (currentNote != null) {
+                                                    saveNote(saveHistory = false)
+                                                }
+                                            },
+                                        )
+                                        labels.forEach { label ->
+                                            DropdownMenuItem(
+                                                text = { Text(label) },
+                                                leadingIcon = { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, null) },
+                                                onClick = {
+                                                    folder = label
+                                                    showMoreMenu = false
+                                                    if (currentNote != null) {
+                                                        saveNote(saveHistory = false)
+                                                    }
+                                                },
+                                            )
+                                        }
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.create_new_label)) },
+                                            leadingIcon = { Icon(Icons.Outlined.Add, null) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                showCreateLabelDialog = true
+                                            },
+                                        )
+                                    }
+                                }
+                                PrefsManager.EditorTopToolbarItemId.OUTLINE -> if (noteSidePanelToolbarEnabled) {
+                                    DropdownMenuItem(
+                                        text = { Text("大纲") },
+                                        leadingIcon = { Icon(Icons.Outlined.FormatListBulleted, null) },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            openNoteSidePanel(noteSidePanelWidthPx)
+                                        },
+                                    )
+                                }
+                                PrefsManager.EditorTopToolbarItemId.REMARKS -> if (noteSidePanelToolbarEnabled) {
+                                    DropdownMenuItem(
+                                        text = { Text("属性备注") },
+                                        leadingIcon = { Icon(Icons.Outlined.Info, null) },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            openNoteSidePanel(-noteSidePanelWidthPx)
+                                        },
+                                    )
+                                }
+                                PrefsManager.EditorTopToolbarItemId.SEARCH -> {
+                                    DropdownMenuItem(
+                                        text = { Text("搜索当前笔记") },
+                                        leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            showLabelMenu = false
+                                            showHeadingMenu = false
+                                            showMathMenu = false
+                                            showNoteSearch = true
+                                        },
+                                    )
+                                }
+                                PrefsManager.EditorTopToolbarItemId.EDIT -> {
+                                    if (!isEditing) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.edit)) },
+                                            leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                enterEditMode()
+                                            },
+                                        )
+                                    }
+                                }
+                                PrefsManager.EditorTopToolbarItemId.HISTORY -> {
+                                    val note = currentNote
+                                    if (note != null && !note.isTrashed) {
+                                        DropdownMenuItem(
+                                            text = { Text("历史版本") },
+                                            leadingIcon = { Icon(Icons.Outlined.History, null) },
+                                            onClick = {
+                                                showHistoryDialog = true
+                                                showMoreMenu = false
+                                            },
+                                        )
+                                    }
+                                }
+                                PrefsManager.EditorTopToolbarItemId.PRIVACY -> {
+                                    val note = currentNote
+                                    if (note != null && !note.isTrashed) {
+                                        DropdownMenuItem(
+                                            text = { Text("保护") },
+                                            leadingIcon = { Icon(Icons.Outlined.Lock, null) },
+                                            onClick = {
+                                                addCurrentNoteToPrivacy(note) { leaveEditor() }
+                                                showMoreMenu = false
+                                            },
+                                        )
+                                    }
+                                }
+                                PrefsManager.EditorTopToolbarItemId.ARCHIVE -> {
+                                    val note = currentNote
+                                    if (note != null && !note.isTrashed) {
+                                        if (note.isArchived) {
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.unarchive)) },
+                                                leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                                                onClick = {
+                                                    viewModel.restoreNote(note)
+                                                    showMoreMenu = false
+                                                    leaveEditor()
+                                                },
+                                            )
+                                        } else {
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.archive)) },
+                                                leadingIcon = { Icon(Icons.Outlined.Archive, null) },
+                                                onClick = {
+                                                    viewModel.archiveNote(note)
+                                                    showMoreMenu = false
+                                                    leaveEditor()
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+                                PrefsManager.EditorTopToolbarItemId.DELETE -> {
+                                    val note = currentNote
+                                    if (note != null && note.isTrashed) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.restore)) },
+                                            leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                                            onClick = {
+                                                viewModel.restoreNote(note)
+                                                showMoreMenu = false
+                                                leaveEditor()
+                                            },
+                                        )
+                                    } else if (note != null) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.delete)) },
+                                            leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                            onClick = {
+                                                viewModel.deleteNote(note)
+                                                showMoreMenu = false
+                                                leaveEditor()
+                                            },
+                                        )
+                                    }
+                                }
+                                PrefsManager.EditorTopToolbarItemId.MORE -> Unit
+                            }
+                        }
+
+                        @Composable
+                        fun MoreAction() {
+                            val currentNoteObj = currentNote
+                            if (isPrivacyEditor && onDeletePrivacyNote != null) {
+                                Box {
+                                    IconButton(onClick = {
+                                        val now = SystemClock.uptimeMillis()
+                                        val ignoreReopen = !showMoreMenu && now - lastMoreMenuDismissAt < MENU_REOPEN_GUARD_MS
+                                        Log.d(BACK_TRACE_TAG, "Editor privacy more click toggle menu showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
+                                        if (!ignoreReopen) {
+                                            showLabelMenu = false
+                                            showHeadingMenu = false
+                                            showMathMenu = false
+                                            showMoreMenu = !showMoreMenu
+                                        }
+                                    }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                                    }
+                                    DropdownMenu(
+                                        modifier =
+                                            Modifier.onPreviewKeyEvent { event ->
+                                                if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
+                                                    Log.d(
+                                                        BACK_TRACE_TAG,
+                                                        "Editor privacy more popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showMoreMenu=$showMoreMenu",
+                                                    )
+                                                }
+                                                false
+                                            },
+                                        expanded = showMoreMenu,
+                                        onDismissRequest = {
+                                            Log.d(BACK_TRACE_TAG, "Editor note more onDismissRequest showMoreMenu=$showMoreMenu")
+                                            lastMoreMenuDismissAt = SystemClock.uptimeMillis()
+                                            showMoreMenu = false
+                                        },
+                                        properties = PopupProperties(
+                                            focusable = false,
+                                            dismissOnBackPress = false,
+                                            dismissOnClickOutside = true,
+                                        ),
+                                    ) {
+                                        val renderedMoreToolbarItems = editorTopToolbarMoreDisplayItems
+                                            .filter { it != PrefsManager.EditorTopToolbarItemId.LABEL }
+                                            .filter { it !in editorTopToolbarNoteOperationItems }
+                                            .filter { it != PrefsManager.EditorTopToolbarItemId.EDIT || !isEditing }
+                                        renderedMoreToolbarItems.forEach { item ->
+                                            EditorTopToolbarMoreItem(item)
+                                        }
+                                        if (renderedMoreToolbarItems.isNotEmpty()) {
+                                            HorizontalDivider()
+                                        }
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.delete)) },
+                                            leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                onDeletePrivacyNote()
+                                            },
+                                        )
+                                    }
+                                }
+                            } else if (currentNoteObj != null) {
+                                Box {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .combinedClickable(
+                                                onClick = {
+                                                    val now = SystemClock.uptimeMillis()
+                                                    val ignoreReopen = !showMoreMenu && now - lastMoreMenuDismissAt < MENU_REOPEN_GUARD_MS
+                                                    Log.d(BACK_TRACE_TAG, "Editor note more click toggle menu noteId=${currentNoteObj.id} showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
+                                                    if (!ignoreReopen) {
+                                                        showLabelMenu = false
+                                                        showHeadingMenu = false
+                                                        showMathMenu = false
+                                                        showMoreMenu = !showMoreMenu
+                                                    }
+                                                },
+                                                onLongClick = { addCurrentNoteToPrivacy(currentNoteObj) { leaveEditor() } },
+                                            ),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                                    }
+                                    DropdownMenu(
+                                        modifier =
+                                            Modifier.onPreviewKeyEvent { event ->
+                                                if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
+                                                    Log.d(
+                                                        BACK_TRACE_TAG,
+                                                        "Editor note more popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showMoreMenu=$showMoreMenu",
+                                                    )
+                                                }
+                                                false
+                                            },
+                                        expanded = showMoreMenu,
+                                        onDismissRequest = {
+                                            Log.d(BACK_TRACE_TAG, "Editor privacy more onDismissRequest showMoreMenu=$showMoreMenu")
+                                            lastMoreMenuDismissAt = SystemClock.uptimeMillis()
+                                            showMoreMenu = false
+                                        },
+                                        properties = PopupProperties(
+                                            focusable = false,
+                                            dismissOnBackPress = false,
+                                            dismissOnClickOutside = true,
+                                        ),
+                                    ) {
+                                        val renderedMoreToolbarItems = editorTopToolbarMoreDisplayItems
+                                            .filter { it != PrefsManager.EditorTopToolbarItemId.EDIT || !isEditing }
+                                        renderedMoreToolbarItems.forEach { item ->
+                                            EditorTopToolbarMoreItem(item)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        editorTopToolbarTopItems.forEach { item ->
+                            when (item) {
+                                PrefsManager.EditorTopToolbarItemId.LABEL -> LabelAction()
+                                PrefsManager.EditorTopToolbarItemId.OUTLINE -> if (noteSidePanelToolbarEnabled) OutlineAction()
+                                PrefsManager.EditorTopToolbarItemId.REMARKS -> if (noteSidePanelToolbarEnabled) RemarksAction()
+                                PrefsManager.EditorTopToolbarItemId.SEARCH -> SearchAction()
+                                PrefsManager.EditorTopToolbarItemId.EDIT -> EditAction()
+                                PrefsManager.EditorTopToolbarItemId.HISTORY -> HistoryAction()
+                                PrefsManager.EditorTopToolbarItemId.PRIVACY -> PrivacyAction()
+                                PrefsManager.EditorTopToolbarItemId.ARCHIVE -> ArchiveAction()
+                                PrefsManager.EditorTopToolbarItemId.DELETE -> DeleteAction()
+                                PrefsManager.EditorTopToolbarItemId.MORE -> MoreAction()
+                            }
+                        }
                     } // end if (showNoteSearch) else
                 },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = backgroundColor),
                 )
+                AnimatedVisibility(visible = showNoteSearch && isEditing) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 12.dp, bottom = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        NoteSearchChip(
+                            text = "Aa",
+                            selected = noteSearchMatchCase,
+                            onClick = { noteSearchMatchCase = !noteSearchMatchCase },
+                        )
+                        NoteSearchChip(
+                            text = ".*",
+                            selected = noteSearchUseRegex,
+                            onClick = { noteSearchUseRegex = !noteSearchUseRegex },
+                        )
+                        NoteSearchTextField(
+                            value = noteReplaceText,
+                            onValueChange = { noteReplaceText = it },
+                            placeholder = "替换为",
+                            focused = noteReplaceFocused,
+                            focusRequester = replaceFocusRequester,
+                            onFocusChanged = { noteReplaceFocused = it },
+                            modifier = Modifier.weight(1f),
+                        )
+                        NoteSearchChip(
+                            text = "替换",
+                            enabled = noteSearchQuery.isNotBlank(),
+                            onClick = { replaceCurrentSearchMatch() },
+                        )
+                        NoteSearchChip(
+                            text = "全部",
+                            enabled = noteSearchQuery.isNotBlank(),
+                            onClick = { replaceAllSearchMatches() },
+                        )
+                    }
+                }
                 HorizontalDivider(
                     thickness = 0.6.dp,
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
@@ -1546,6 +2323,12 @@ fun EditorScreen(
                                         contentDescription = "图片",
                                         onClick = { launchImagePicker() },
                                     )
+                                    KardLeafCustomFeatures.ToolbarItem.DRAWING -> ToolbarIconButton(
+                                        text = "",
+                                        icon = Icons.Outlined.Palette,
+                                        contentDescription = "绘图",
+                                        onClick = { openDrawingPad() },
+                                    )
                                     KardLeafCustomFeatures.ToolbarItem.HEADING -> ToolbarIconButton(text = "H1", bold = true, onClick = { insertAtCursor("# ") })
                                     KardLeafCustomFeatures.ToolbarItem.RULE -> ToolbarIconButton(text = "---", onClick = { insertAtCursor("---\n") })
                                     KardLeafCustomFeatures.ToolbarItem.BOLD -> ToolbarIconButton(text = "B", bold = true, onClick = { insertAtCursor("**", "**") })
@@ -1600,6 +2383,12 @@ fun EditorScreen(
                                             icon = Icons.Outlined.Image,
                                             contentDescription = "图片",
                                             onClick = { launchImagePicker() },
+                                        )
+                                        KardLeafCustomFeatures.ToolbarItem.DRAWING -> ToolbarIconButton(
+                                            text = "",
+                                            icon = Icons.Outlined.Palette,
+                                            contentDescription = "绘图",
+                                            onClick = { openDrawingPad() },
                                         )
                                         KardLeafCustomFeatures.ToolbarItem.HEADING -> {
                                             Box {
@@ -1748,7 +2537,7 @@ fun EditorScreen(
                     .then(noteSidePanelContentDragModifier)
                     .then(noteSidePanelActiveDragModifier),
         ) {
-            if (isEditing && !blocksDirectEditForLargeNote) {
+            if (effectiveEditorOpen && isEditing && !isClosingEditor && !blocksDirectEditForLargeNote) {
                 KardLeafNativeEditor(
                     initialTitle = initialTitle,
                     initialContent = initialContent,
@@ -1774,8 +2563,9 @@ fun EditorScreen(
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
+                val previewContent = if (isOpeningNoteContent) "" else renderedPreview
                 PreviewWebView(
-                    content = if (isOpeningNoteContent) "" else renderedPreview,
+                    content = previewContent,
                     isDark = isDark,
                     controller = previewController,
                     modifier = Modifier.fillMaxSize(),
@@ -1828,7 +2618,7 @@ fun EditorScreen(
                     }
                 }
             }
-            if (noteSidePanelsActive && (!noteSidePanelHasOffset || isNoteSidePanelDragging)) {
+            if (noteSidePanelGestureEnabled && (!noteSidePanelHasOffset || isNoteSidePanelDragging)) {
                 Box(
                     modifier =
                         Modifier
@@ -1878,7 +2668,7 @@ fun EditorScreen(
                                 hideNoteSearchCursor(if (isEditing) "editor fast scroll" else "preview fast scroll")
                             },
                             sidePanelDragEnabled = {
-                                noteSidePanelsActive && (!noteSidePanelHasOffset || isNoteSidePanelDragging)
+                                noteSidePanelGestureEnabled && (!noteSidePanelHasOffset || isNoteSidePanelDragging)
                             },
                             onSidePanelDragStart = { startNoteSidePanelDrag() },
                             onSidePanelDragBy = { dragAmount -> dragNoteSidePanelBy(dragAmount) },
@@ -1904,6 +2694,20 @@ fun EditorScreen(
                         ) {
                             closeNoteSidePanel()
                         },
+            )
+        }
+        if (showDrawingPad) {
+            DrawingPadScreen(
+                modifier = Modifier.zIndex(10f),
+                onDismiss = {
+                    val shouldCloseEditor = closeEditorWhenDashboardDrawingDismissed
+                    closeEditorWhenDashboardDrawingDismissed = false
+                    showDrawingPad = false
+                    if (shouldCloseEditor) {
+                        leaveEditor()
+                    }
+                },
+                onSave = { bitmap -> saveDrawingImage(bitmap) },
             )
         }
         if (noteSidePanelsActive) {
@@ -1962,6 +2766,208 @@ fun EditorScreen(
             )
         }
     }
+}
+
+
+private data class NoteSearchMatchRange(
+    val start: Int,
+    val end: Int,
+)
+
+private data class NoteSearchMatchesResult(
+    val matches: List<NoteSearchMatchRange> = emptyList(),
+    val errorMessage: String? = null,
+)
+
+private data class NoteSearchReplacementResult(
+    val text: String? = null,
+    val count: Int = 0,
+    val errorMessage: String? = null,
+)
+
+private data class SearchMatchSummary(
+    val count: Int,
+    val currentStart: Int,
+    val currentEnd: Int,
+    val currentOrdinal: Int,
+    val errorMessage: String? = null,
+)
+
+private fun summarizeNoteSearchMatches(
+    text: String,
+    query: String,
+    preferredStart: Int,
+    useRegex: Boolean,
+    matchCase: Boolean,
+): SearchMatchSummary {
+    val result = buildNoteSearchMatches(text, query, useRegex, matchCase)
+    result.errorMessage?.let { return SearchMatchSummary(0, -1, -1, 0, it) }
+    val matches = result.matches
+    if (matches.isEmpty()) return SearchMatchSummary(0, -1, -1, 0)
+    val preferredIndex = matches.indexOfFirst { it.start == preferredStart }
+    val currentIndex = if (preferredIndex >= 0) preferredIndex else 0
+    val current = matches[currentIndex]
+    return SearchMatchSummary(
+        count = matches.size,
+        currentStart = current.start,
+        currentEnd = current.end,
+        currentOrdinal = currentIndex + 1,
+    )
+}
+
+private fun buildNoteSearchMatches(
+    text: String,
+    query: String,
+    useRegex: Boolean,
+    matchCase: Boolean,
+): NoteSearchMatchesResult {
+    if (text.isEmpty() || query.isBlank()) return NoteSearchMatchesResult()
+    return if (useRegex) {
+        val pattern = createNoteSearchPattern(query, matchCase)
+            ?: return NoteSearchMatchesResult(errorMessage = "正则表达式无效")
+        val matcher = pattern.matcher(text)
+        val matches = buildList {
+            while (matcher.find()) {
+                val start = matcher.start().coerceIn(0, text.length)
+                val end = matcher.end().coerceIn(0, text.length)
+                if (end > start) add(NoteSearchMatchRange(start, end))
+            }
+        }
+        NoteSearchMatchesResult(matches = matches)
+    } else {
+        val matches = buildList {
+            var searchFrom = 0
+            while (searchFrom <= text.length - query.length) {
+                val index = text.indexOf(query, startIndex = searchFrom, ignoreCase = !matchCase)
+                if (index < 0) break
+                val end = index + query.length
+                add(NoteSearchMatchRange(index, end))
+                searchFrom = end.coerceAtLeast(index + 1)
+            }
+        }
+        NoteSearchMatchesResult(matches = matches)
+    }
+}
+
+private fun buildCurrentReplacement(
+    text: String,
+    range: NoteSearchMatchRange,
+    query: String,
+    replacement: String,
+    useRegex: Boolean,
+    matchCase: Boolean,
+): NoteSearchReplacementResult {
+    if (!useRegex) return NoteSearchReplacementResult(text = replacement, count = 1)
+    val pattern = createNoteSearchPattern(query, matchCase)
+        ?: return NoteSearchReplacementResult(errorMessage = "正则表达式无效")
+    val matcher = pattern.matcher(text)
+    while (matcher.find()) {
+        val start = matcher.start().coerceIn(0, text.length)
+        val end = matcher.end().coerceIn(0, text.length)
+        if (start == range.start && end == range.end) {
+            val expanded = expandRegexReplacement(replacement, matcher)
+                ?: return NoteSearchReplacementResult(errorMessage = "替换内容包含无效的正则引用")
+            return NoteSearchReplacementResult(text = expanded, count = 1)
+        }
+    }
+    return NoteSearchReplacementResult(errorMessage = "没有找到要替换的文本")
+}
+
+private fun replaceAllNoteSearchMatches(
+    text: String,
+    query: String,
+    replacement: String,
+    useRegex: Boolean,
+    matchCase: Boolean,
+): NoteSearchReplacementResult {
+    if (text.isEmpty() || query.isBlank()) return NoteSearchReplacementResult(text = text)
+    if (!useRegex) {
+        val builder = StringBuilder(text.length)
+        var count = 0
+        var searchFrom = 0
+        while (searchFrom <= text.length - query.length) {
+            val index = text.indexOf(query, startIndex = searchFrom, ignoreCase = !matchCase)
+            if (index < 0) break
+            builder.append(text, searchFrom, index)
+            builder.append(replacement)
+            searchFrom = index + query.length
+            count++
+        }
+        if (count == 0) return NoteSearchReplacementResult(text = text)
+        builder.append(text, searchFrom, text.length)
+        return NoteSearchReplacementResult(text = builder.toString(), count = count)
+    }
+
+    val pattern = createNoteSearchPattern(query, matchCase)
+        ?: return NoteSearchReplacementResult(errorMessage = "正则表达式无效")
+    val matcher = pattern.matcher(text)
+    val builder = StringBuilder(text.length)
+    var count = 0
+    var lastEnd = 0
+    while (matcher.find()) {
+        val start = matcher.start().coerceIn(0, text.length)
+        val end = matcher.end().coerceIn(0, text.length)
+        if (end <= start) continue
+        builder.append(text, lastEnd, start)
+        val expanded = expandRegexReplacement(replacement, matcher)
+            ?: return NoteSearchReplacementResult(errorMessage = "替换内容包含无效的正则引用")
+        builder.append(expanded)
+        lastEnd = end
+        count++
+    }
+    if (count == 0) return NoteSearchReplacementResult(text = text)
+    builder.append(text, lastEnd, text.length)
+    return NoteSearchReplacementResult(text = builder.toString(), count = count)
+}
+
+private fun createNoteSearchPattern(
+    query: String,
+    matchCase: Boolean,
+): Pattern? =
+    try {
+        val caseFlags = if (matchCase) {
+            0
+        } else {
+            Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
+        }
+        Pattern.compile(query, Pattern.MULTILINE or caseFlags)
+    } catch (_: PatternSyntaxException) {
+        null
+    }
+
+private fun expandRegexReplacement(
+    replacement: String,
+    matcher: java.util.regex.Matcher,
+): String? {
+    val builder = StringBuilder(replacement.length)
+    var index = 0
+    while (index < replacement.length) {
+        val char = replacement[index]
+        when {
+            char == '\\' && index + 1 < replacement.length -> {
+                builder.append(replacement[index + 1])
+                index += 2
+            }
+            char == '$' -> {
+                var cursor = index + 1
+                if (cursor >= replacement.length || !replacement[cursor].isDigit()) return null
+                while (cursor < replacement.length && replacement[cursor].isDigit()) cursor++
+                val groupIndex = replacement.substring(index + 1, cursor).toIntOrNull() ?: return null
+                val groupText = try {
+                    matcher.group(groupIndex).orEmpty()
+                } catch (_: RuntimeException) {
+                    return null
+                }
+                builder.append(groupText)
+                index = cursor
+            }
+            else -> {
+                builder.append(char)
+                index++
+            }
+        }
+    }
+    return builder.toString()
 }
 
 private fun buildNoteSidePanelProperties(
