@@ -61,7 +61,7 @@ fun CustomSortDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("调整自定义顺序") },
+        title = { Text("简洁自定义顺序") },
         text = {
             Column {
                 Text(

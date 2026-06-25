@@ -41,6 +41,8 @@ private const val LARGE_NOTE_OPEN_TRACE_TAG = "KardLeafLargeNoteOpen"
 private const val STARTUP_PERF_TRACE_TAG = "KardLeafStartupPerf"
 private const val YAML_TAG_TRACE_TAG = "KardLeafYamlTags"
 private const val CUSTOM_SORT_TRACE_TAG = "KardLeafCustomSort"
+private const val CUSTOM_SORT_FLASH_TAG = "KardLeafCustomSortFlash"
+private const val ALL_NOTES_CUSTOM_SORT_KEY = "__kardleaf_all_notes__"
 
 class MainViewModel(
     private val repository: RoomNoteRepository,
@@ -84,6 +86,13 @@ class MainViewModel(
 
     private fun customSortNoteSummary(notes: Collection<Note>, limit: Int = 5): String =
         customSortPathSummary(notes.map { it.file.path }, limit)
+
+    private fun customSortUiItemSummary(items: Collection<DashboardUiItem>, limit: Int = 5): String {
+        val notePaths = items.mapNotNull { (it as? DashboardUiItem.NoteItem)?.note?.file?.path }
+        val headerCount = items.count { it is DashboardUiItem.HeaderItem }
+        val spacerCount = items.count { it is DashboardUiItem.SpacerItem }
+        return "items=${items.size} notes=${customSortPathSummary(notePaths, limit)} headers=$headerCount spacers=$spacerCount"
+    }
 
     private fun sortByCustomFolderOrder(
         notes: List<Note>,
@@ -154,6 +163,16 @@ class MainViewModel(
         object Trash : NoteFilter
     }
 
+    private fun customSortStorageKeyFor(filter: NoteFilter): String? =
+        when (filter) {
+            NoteFilter.All -> ALL_NOTES_CUSTOM_SORT_KEY
+            is NoteFilter.Label -> filter.name.takeIf { !filter.recursive && it.isNotBlank() }
+            else -> null
+        }
+
+    private fun customSortLogNameFor(filter: NoteFilter, key: String): String =
+        if (filter is NoteFilter.All) "全部笔记" else key
+
     sealed interface Screen {
         object Dashboard : Screen
 
@@ -186,6 +205,9 @@ class MainViewModel(
 
     private val _folderSortVersion = MutableStateFlow(0)
     val folderSortVersion: StateFlow<Int> = _folderSortVersion.asStateFlow()
+
+    private val _customSortDragModeEnabled = MutableStateFlow(false)
+    val customSortDragModeEnabled: StateFlow<Boolean> = _customSortDragModeEnabled.asStateFlow()
 
     private val _folderManagerOrderVersion = MutableStateFlow(0)
     val folderManagerOrderVersion: StateFlow<Int> = _folderManagerOrderVersion.asStateFlow()
@@ -285,7 +307,7 @@ class MainViewModel(
             _currentFilter,
             _folderSortVersion,
         ) { filter, _ ->
-            (filter as? NoteFilter.Label)?.name?.let { prefsManager.getFolderSortSettings(it) }
+            customSortStorageKeyFor(filter)?.let { prefsManager.getFolderSortSettings(it) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     @OptIn(kotlinx.coroutines.FlowPreview::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -344,11 +366,17 @@ class MainViewModel(
                 }
 
             val folderFilter = currentFilterValue as? NoteFilter.Label
-            val folderSortSettings = folderFilter?.name?.let { prefsManager.getFolderSortSettings(it) }
-            val effectiveSortOrder = folderSortSettings?.order ?: sorting.order
-            val effectiveSortDirection = folderSortSettings?.direction ?: sorting.direction
-            val useCustomSort =
-                folderFilter != null && !folderFilter.recursive && effectiveSortOrder == PrefsManager.SortOrder.CUSTOM
+            val customSortKey = customSortStorageKeyFor(currentFilterValue)
+            val customSortSettings = customSortKey?.let { prefsManager.getFolderSortSettings(it) }
+            val customSortName = customSortKey?.let { customSortLogNameFor(currentFilterValue, it) }
+            val effectiveSortOrder = customSortSettings?.order ?: sorting.order
+            val effectiveSortDirection = customSortSettings?.direction ?: sorting.direction
+            val useCustomSort = customSortKey != null && effectiveSortOrder == PrefsManager.SortOrder.CUSTOM
+            Log.d(
+                CUSTOM_SORT_FLASH_TAG,
+                "notesRaw beforeSort filter=$currentFilterValue customTarget=$customSortName recursive=${folderFilter?.recursive} " +
+                    "settings=$customSortSettings effective=$effectiveSortOrder/$effectiveSortDirection useCustom=$useCustomSort queryBlank=${query.isBlank()} searched=${customSortNoteSummary(searched)} sortVersion=${_folderSortVersion.value}",
+            )
 
             val sorted =
                 if (currentFilterValue is NoteFilter.Recent) {
@@ -358,8 +386,8 @@ class MainViewModel(
                         PrefsManager.TrashSortOrder.FILE_NAME -> searched.sortedBy { it.file.name.lowercase() }
                         PrefsManager.TrashSortOrder.DELETED_TIME -> searched.sortedBy { it.deletedAt ?: it.lastModified }
                     }
-                } else if (useCustomSort && folderFilter != null) {
-                    sortByCustomFolderOrder(searched, folderFilter.name)
+                } else if (useCustomSort && customSortKey != null) {
+                    sortByCustomFolderOrder(searched, customSortKey)
                 } else {
                     when (effectiveSortOrder) {
                         PrefsManager.SortOrder.DATE_MODIFIED,
@@ -376,6 +404,10 @@ class MainViewModel(
                 }
 
             val result = directed.sortedByDescending { it.isPinned }
+            Log.d(
+                CUSTOM_SORT_FLASH_TAG,
+                "notesRaw result filter=$currentFilterValue useCustom=$useCustomSort sorted=${customSortNoteSummary(sorted)} directed=${customSortNoteSummary(directed)} result=${customSortNoteSummary(result)}",
+            )
             val elapsedMs = SystemClock.elapsedRealtime() - mapStartMs
             notesRawEmissionCount += 1
             if (notesRawEmissionCount <= 20 || elapsedMs >= 16L || query.isNotBlank()) {
@@ -445,6 +477,10 @@ class MainViewModel(
                 }
             }
             addUnique(DashboardUiItem.SpacerItem)
+            Log.d(
+                CUSTOM_SORT_FLASH_TAG,
+                "uiItems build filter=$filter queryBlank=${query.isBlank()} global=$isGlobalSearch notes=${customSortNoteSummary(notesList)} result=${customSortUiItemSummary(list)}",
+            )
             val elapsedMs = SystemClock.elapsedRealtime() - mapStartMs
             uiItemsEmissionCount += 1
             if (uiItemsEmissionCount <= 20 || elapsedMs >= 16L || query.isNotBlank()) {
@@ -699,9 +735,19 @@ class MainViewModel(
         normalizedPath: String,
         source: String,
     ) {
+        val startMs = SystemClock.elapsedRealtime()
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "vm openResolvedNoteByPath start source=$source path=$normalizedPath",
+        )
         val note = runCatching {
             repository.getCachedNote(normalizedPath) ?: repository.getNoteForEditor(normalizedPath)
         }.getOrNull()
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "vm openResolvedNoteByPath resolved source=$source path=$normalizedPath elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                "noteContentLen=${note?.content?.length ?: -1} notePreviewLen=${note?.contentPreview?.length ?: -1}",
+        )
         if (note != null) {
             openNote(note)
         } else {
@@ -727,6 +773,10 @@ class MainViewModel(
         _externalConflict.value = null
 
         viewModelScope.launch {
+            Log.d(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "vm openNote coroutine start request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms path=$notePath",
+            )
             // Initialize from a full editor row when it is already available.
             // Otherwise open a lightweight loading shell, never the dashboard preview text.
             val cachedNote =
@@ -771,7 +821,8 @@ class MainViewModel(
                 Log.d(
                     LARGE_NOTE_OPEN_TRACE_TAG,
                     "vm show initial request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
-                        "contentLen=${initialNote.content.length} previewLen=${initialNote.contentPreview.length} isOpening=${_isOpeningNoteContent.value}",
+                        "contentLen=${initialNote.content.length} previewLen=${initialNote.contentPreview.length} isOpening=${_isOpeningNoteContent.value} " +
+                        "editorOpen=${_isEditorOpen.value}",
                 )
                 markOpenNoteShown(initialNote)
             } else {
@@ -787,11 +838,15 @@ class MainViewModel(
                 Log.d(
                     LARGE_NOTE_OPEN_TRACE_TAG,
                     "vm show loading shell request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
-                        "path=$notePath isOpening=${_isOpeningNoteContent.value}",
+                        "path=$notePath isOpening=${_isOpeningNoteContent.value} editorOpen=${_isEditorOpen.value}",
                 )
                 markOpenNoteShown(shellNote)
             }
 
+            Log.d(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "vm full load start request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms path=$notePath",
+            )
             val fullNote =
                 try {
                     repository.getNoteForEditor(notePath)
@@ -839,7 +894,8 @@ class MainViewModel(
                     Log.d(
                         LARGE_NOTE_OPEN_TRACE_TAG,
                         "vm show full request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
-                            "contentLen=${fullNote.content.length} previewLen=${fullNote.contentPreview.length} isOpening=${_isOpeningNoteContent.value}",
+                            "contentLen=${fullNote.content.length} previewLen=${fullNote.contentPreview.length} isOpening=${_isOpeningNoteContent.value} " +
+                            "editorOpen=${_isEditorOpen.value}",
                     )
                     markOpenNoteShown(fullNote)
                 } else {
@@ -911,7 +967,7 @@ class MainViewModel(
                 "lastOpenPath=$lastOpenNoteShownPath ageSinceOpen=${ageSinceOpen}ms stack=$stack",
         )
         openNoteRequestVersion++
-        _externalNoteDraft.value = draft
+        _externalNoteDraft.value = draft ?: KardLeafCustomFeatures.ExternalNoteDraft()
         _currentNote.value = null
         _isOpeningNoteContent.value = false
         _isEditorOpen.value = true
@@ -959,8 +1015,19 @@ class MainViewModel(
     }
 
     fun setFilter(filter: NoteFilter) {
+        Log.d(
+            CUSTOM_SORT_FLASH_TAG,
+            "setFilter from=${_currentFilter.value} to=$filter sortVersion=${_folderSortVersion.value}",
+        )
+        if (_currentFilter.value != filter) {
+            _customSortDragModeEnabled.value = false
+        }
         _currentFilter.value = filter
         persistLastFilter(filter)
+    }
+
+    fun setCustomSortDragModeEnabled(enabled: Boolean) {
+        _customSortDragModeEnabled.value = enabled
     }
 
     /**
@@ -972,6 +1039,11 @@ class MainViewModel(
         val current = _currentFilter.value
         val alreadyRecursive = current is NoteFilter.Label && current.recursive && current.name == path
         val newFilter = NoteFilter.Label(path, recursive = !alreadyRecursive)
+        Log.d(
+            CUSTOM_SORT_FLASH_TAG,
+            "showAllInFolder current=$current path=$path alreadyRecursive=$alreadyRecursive to=$newFilter",
+        )
+        _customSortDragModeEnabled.value = false
         _currentFilter.value = newFilter
         // 持久化为普通 LABEL（不带 recursive），重启恢复精确模式
         persistLastFilter(NoteFilter.Label(path))
@@ -981,7 +1053,13 @@ class MainViewModel(
         val path = (_currentFilter.value as? NoteFilter.Label)?.name.orEmpty()
         if (path.isBlank()) return false
         val parent = path.substringBeforeLast("/", missingDelimiterValue = "")
-        _currentFilter.value = if (parent.isBlank()) NoteFilter.All else NoteFilter.Label(parent)
+        val nextFilter = if (parent.isBlank()) NoteFilter.All else NoteFilter.Label(parent)
+        Log.d(
+            CUSTOM_SORT_FLASH_TAG,
+            "navigateUpFolder path=$path parent=$parent to=$nextFilter",
+        )
+        _customSortDragModeEnabled.value = false
+        _currentFilter.value = nextFilter
         _homeScrollToTopEvents.value += 1
         return true
     }
@@ -1174,75 +1252,88 @@ class MainViewModel(
     }
 
     fun setSortOrder(order: PrefsManager.SortOrder) {
-        val folderFilter = _currentFilter.value as? NoteFilter.Label
-        val folder = folderFilter?.name
-        val folderSettings = folder?.let { prefsManager.getFolderSortSettings(it) }
+        val currentFilter = _currentFilter.value
+        val folderFilter = currentFilter as? NoteFilter.Label
+        val customSortKey = customSortStorageKeyFor(currentFilter)
+        val isAllNotesFilter = currentFilter is NoteFilter.All
+        val customSortSettings = customSortKey?.let { prefsManager.getFolderSortSettings(it) }
+        val customSortName = customSortKey?.let { customSortLogNameFor(currentFilter, it) }
         Log.d(
             CUSTOM_SORT_TRACE_TAG,
-            "setSortOrder request order=$order folder=$folder recursive=${folderFilter?.recursive} folderSettings=$folderSettings globalOrder=${_sortOrder.value} globalDirection=${_sortDirection.value}",
+            "setSortOrder request order=$order customTarget=$customSortName recursive=${folderFilter?.recursive} customSettings=$customSortSettings globalOrder=${_sortOrder.value} globalDirection=${_sortDirection.value}",
         )
-        if (order == PrefsManager.SortOrder.CUSTOM && folderFilter != null && folder != null && !folderFilter.recursive) {
+        if (order == PrefsManager.SortOrder.CUSTOM && customSortKey != null) {
             enableCurrentFolderCustomSort(emptyList())
-        } else if (folder != null && folderSettings != null) {
-            prefsManager.saveFolderSortSettings(folder, folderSettings.copy(order = order))
+        } else if (isAllNotesFilter && customSortKey != null && order != PrefsManager.SortOrder.CUSTOM) {
+            _customSortDragModeEnabled.value = false
+            prefsManager.clearFolderSortSettings(customSortKey)
+            _sortOrder.value = order
+            prefsManager.saveSortOrder(order)
+            _folderSortVersion.value += 1
+        } else if (customSortKey != null && customSortSettings != null) {
+            if (order != PrefsManager.SortOrder.CUSTOM) {
+                _customSortDragModeEnabled.value = false
+            }
+            prefsManager.saveFolderSortSettings(customSortKey, customSortSettings.copy(order = order))
             _folderSortVersion.value += 1
         } else if (order != PrefsManager.SortOrder.CUSTOM) {
+            _customSortDragModeEnabled.value = false
             _sortOrder.value = order
             prefsManager.saveSortOrder(order)
         }
     }
 
     fun enableCurrentFolderCustomSort(initialPaths: Collection<String>) {
-        val folderFilter = _currentFilter.value as? NoteFilter.Label ?: return
-        if (folderFilter.recursive) {
-            Log.d(CUSTOM_SORT_TRACE_TAG, "enableCurrentFolderCustomSort skip recursive folder=${folderFilter.name}")
-            return
-        }
-        val folder = folderFilter.name
-        val beforeOrder = prefsManager.getFolderCustomOrder(folder)
+        val currentFilter = _currentFilter.value
+        val customSortKey = customSortStorageKeyFor(currentFilter) ?: return
+        val customSortName = customSortLogNameFor(currentFilter, customSortKey)
+        val beforeOrder = prefsManager.getFolderCustomOrder(customSortKey)
         Log.d(
             CUSTOM_SORT_TRACE_TAG,
-            "enableCurrentFolderCustomSort enter folder=$folder initial=${customSortPathSummary(initialPaths)} orderBefore=${customSortPathSummary(beforeOrder)} settingsBefore=${prefsManager.getFolderSortSettings(folder)}",
+            "enableCurrentFolderCustomSort enter target=$customSortName initial=${customSortPathSummary(initialPaths)} orderBefore=${customSortPathSummary(beforeOrder)} settingsBefore=${prefsManager.getFolderSortSettings(customSortKey)}",
         )
         if (beforeOrder.isEmpty() && initialPaths.isNotEmpty()) {
-            prefsManager.saveFolderCustomOrder(folder, initialPaths)
+            prefsManager.saveFolderCustomOrder(customSortKey, initialPaths)
         }
-        val current = prefsManager.getFolderSortSettings(folder)
+        val current = prefsManager.getFolderSortSettings(customSortKey)
         val next = (current ?: PrefsManager.FolderSortSettings(PrefsManager.SortOrder.CUSTOM, _sortDirection.value))
             .copy(order = PrefsManager.SortOrder.CUSTOM)
-        prefsManager.saveFolderSortSettings(folder, next)
+        prefsManager.saveFolderSortSettings(customSortKey, next)
         _folderSortVersion.value += 1
         Log.d(
             CUSTOM_SORT_TRACE_TAG,
-            "enableCurrentFolderCustomSort saved folder=$folder settingsAfter=$next orderAfter=${customSortPathSummary(prefsManager.getFolderCustomOrder(folder))} folderSortVersion=${_folderSortVersion.value}",
+            "enableCurrentFolderCustomSort saved target=$customSortName settingsAfter=$next orderAfter=${customSortPathSummary(prefsManager.getFolderCustomOrder(customSortKey))} folderSortVersion=${_folderSortVersion.value}",
         )
     }
 
     fun saveCurrentFolderCustomSortOrder(paths: Collection<String>) {
-        val folderFilter = _currentFilter.value as? NoteFilter.Label ?: return
-        if (folderFilter.recursive) {
-            Log.d(CUSTOM_SORT_TRACE_TAG, "saveCurrentFolderCustomSortOrder skip recursive folder=${folderFilter.name}")
-            return
-        }
-        val folder = folderFilter.name
+        val currentFilter = _currentFilter.value
+        val customSortKey = customSortStorageKeyFor(currentFilter) ?: return
+        val customSortName = customSortLogNameFor(currentFilter, customSortKey)
         Log.d(
             CUSTOM_SORT_TRACE_TAG,
-            "saveCurrentFolderCustomSortOrder enter folder=$folder paths=${customSortPathSummary(paths)} settingsBefore=${prefsManager.getFolderSortSettings(folder)}",
+            "saveCurrentFolderCustomSortOrder enter target=$customSortName paths=${customSortPathSummary(paths)} settingsBefore=${prefsManager.getFolderSortSettings(customSortKey)}",
         )
-        prefsManager.saveFolderCustomOrder(folder, paths)
-        val current = prefsManager.getFolderSortSettings(folder)
+        prefsManager.saveFolderCustomOrder(customSortKey, paths)
+        val current = prefsManager.getFolderSortSettings(customSortKey)
         val next = (current ?: PrefsManager.FolderSortSettings(PrefsManager.SortOrder.CUSTOM, _sortDirection.value))
             .copy(order = PrefsManager.SortOrder.CUSTOM)
-        prefsManager.saveFolderSortSettings(folder, next)
+        prefsManager.saveFolderSortSettings(customSortKey, next)
         _folderSortVersion.value += 1
         Log.d(
             CUSTOM_SORT_TRACE_TAG,
-            "saveCurrentFolderCustomSortOrder saved folder=$folder settingsAfter=$next orderAfter=${customSortPathSummary(prefsManager.getFolderCustomOrder(folder))} folderSortVersion=${_folderSortVersion.value}",
+            "saveCurrentFolderCustomSortOrder saved target=$customSortName settingsAfter=$next orderAfter=${customSortPathSummary(prefsManager.getFolderCustomOrder(customSortKey))} folderSortVersion=${_folderSortVersion.value}",
         )
     }
 
-    fun getFolderSortSettings(folder: String): PrefsManager.FolderSortSettings? =
-        prefsManager.getFolderSortSettings(folder)
+    fun getFolderSortSettings(folder: String): PrefsManager.FolderSortSettings? {
+        val settings = prefsManager.getFolderSortSettings(folder)
+        Log.d(
+            CUSTOM_SORT_FLASH_TAG,
+            "getFolderSortSettings folder=$folder settings=$settings sortVersion=${_folderSortVersion.value}",
+        )
+        return settings
+    }
 
     fun getFolderCustomSortOrder(folder: String): List<String> {
         val order = prefsManager.getFolderCustomOrder(folder)
@@ -1265,10 +1356,11 @@ class MainViewModel(
     }
 
     fun setSortDirection(direction: PrefsManager.SortDirection) {
-        val folder = (_currentFilter.value as? NoteFilter.Label)?.name
-        val folderSettings = folder?.let { prefsManager.getFolderSortSettings(it) }
-        if (folder != null && folderSettings != null) {
-            prefsManager.saveFolderSortSettings(folder, folderSettings.copy(direction = direction))
+        val currentFilter = _currentFilter.value
+        val customSortKey = customSortStorageKeyFor(currentFilter)
+        val customSortSettings = customSortKey?.let { prefsManager.getFolderSortSettings(it) }
+        if (currentFilter !is NoteFilter.All && customSortKey != null && customSortSettings != null) {
+            prefsManager.saveFolderSortSettings(customSortKey, customSortSettings.copy(direction = direction))
             _folderSortVersion.value += 1
         } else {
             _sortDirection.value = direction

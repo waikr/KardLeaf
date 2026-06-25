@@ -8,4 +8,6 @@ data class NoteHistory(
     val title: String,
     val content: String,
     val savedAt: Date,
+    val contentLength: Int = content.length,
+    val contentIsPreview: Boolean = false,
 )

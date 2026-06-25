@@ -128,14 +128,14 @@ class KardLeafEditorController {
         }
     }
 
-    fun releaseForClose() {
+    fun releaseForClose(clearText: Boolean = false) {
         editorView?.let { view ->
             Log.d(
                 EDITOR_TRACE_TAG,
                 "controller releaseForClose key=$documentKey viewKey=${view.boundDocumentKey} titleLen=${view.titleEditText.length()} contentLen=${view.contentLength()}",
             )
             editorView = null
-            view.dispose(clearText = true)
+            view.dispose(clearText = clearText)
         }
         documentKey = null
         lastLoadedTitle = ""
@@ -426,6 +426,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
             )
         }
 
+        val markdownInitStartMs = SystemClock.elapsedRealtime()
         val markwon = Markwon.builder(context)
             .usePlugin(StrikethroughPlugin.create())
             .build()
@@ -444,6 +445,10 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
             contentEditText,
         )
         contentEditText.configureMarkdownWatcher(markdownWatcher)
+        Log.d(
+            EDITOR_TRACE_TAG,
+            "native markdown watcher init done elapsed=${SystemClock.elapsedRealtime() - markdownInitStartMs}ms",
+        )
 
         titleEditText.setOnTouchListener { _, event -> notifyUserInteractionOnTouch(event) }
         contentEditText.setOnTouchListener { _, event -> notifyUserInteractionOnTouch(event) }
@@ -644,15 +649,41 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
             EDITOR_TRACE_TAG,
             "setInitialSnapshot key=$boundDocumentKey titleLen=${title.length} contentLen=${content.length} selection=$selection",
         )
-        programmaticTitleChange.set(true)
-        try {
-            titleEditText.setText(title)
-            titleEditText.setSelection(title.length.coerceIn(0, titleEditText.length()))
-        } finally {
-            programmaticTitleChange.set(false)
+        if (titleEditText.text?.toString().orEmpty() != title) {
+            programmaticTitleChange.set(true)
+            try {
+                val titleStartMs = SystemClock.elapsedRealtime()
+                titleEditText.setText(title)
+                titleEditText.setSelection(title.length.coerceIn(0, titleEditText.length()))
+                Log.d(
+                    EDITOR_TRACE_TAG,
+                    "setInitialSnapshot title set done key=$boundDocumentKey titleLen=${title.length} elapsed=${SystemClock.elapsedRealtime() - titleStartMs}ms",
+                )
+            } finally {
+                programmaticTitleChange.set(false)
+            }
+        } else {
+            Log.d(
+                EDITOR_TRACE_TAG,
+                "setInitialSnapshot title unchanged key=$boundDocumentKey titleLen=${title.length}",
+            )
         }
         val targetSelection = selection ?: TextRange(content.length, content.length)
+        val contentStartMs = SystemClock.elapsedRealtime()
         contentEditText.setInitialText(content, targetSelection)
+        Log.d(
+            EDITOR_TRACE_TAG,
+            "setInitialSnapshot content set done key=$boundDocumentKey contentLen=${content.length} " +
+                "contentSetElapsed=${SystemClock.elapsedRealtime() - contentStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        contentEditText.post {
+            Log.d(
+                EDITOR_TRACE_TAG,
+                "setInitialSnapshot content post key=$boundDocumentKey viewContentLen=${contentEditText.length()} " +
+                    "lineCount=${contentEditText.lineCount} layoutReady=${contentEditText.layout != null} height=${contentEditText.height} " +
+                    "elapsedFromStart=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+        }
         Log.d(
             EDITOR_TRACE_TAG,
             "setInitialSnapshot done key=$boundDocumentKey viewTitleLen=${titleEditText.length()} viewContentLen=${contentEditText.length()} " +
@@ -864,6 +895,7 @@ fun KardLeafNativeEditor(
                     "native AndroidView apply update key=$documentKey bound=${view.boundDocumentKey} initialTitleLen=${initialTitle.length} " +
                         "initialContentLen=${initialContent.length} showTitle=$showTitle focusToken=$requestFocusToken",
                 )
+                val configureStartMs = SystemClock.elapsedRealtime()
                 view.configure(
                     titleHint = titleHint,
                     contentHint = contentHint,
@@ -880,11 +912,20 @@ fun KardLeafNativeEditor(
                     onUserInteraction = { currentOnUserInteraction.value() },
                     onFastScrollSourceScrolled = { currentOnFastScrollSourceScrolled.value() },
                 )
+                Log.d(
+                    EDITOR_TRACE_TAG,
+                    "native AndroidView configure done key=$documentKey elapsed=${SystemClock.elapsedRealtime() - configureStartMs}ms",
+                )
+                val bindStartMs = SystemClock.elapsedRealtime()
                 view.bindDocument(
                     documentKey = documentKey,
                     initialTitle = initialTitle,
                     initialContent = initialContent,
                     preferredSnapshot = controller.getCachedSnapshot(),
+                )
+                Log.d(
+                    EDITOR_TRACE_TAG,
+                    "native AndroidView bindDocument done key=$documentKey bindElapsed=${SystemClock.elapsedRealtime() - bindStartMs}ms",
                 )
                 controller.attach(view, documentKey, initialTitle, initialContent)
             } else {

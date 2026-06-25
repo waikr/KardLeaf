@@ -59,30 +59,39 @@ object NoteFormatUtils {
      * Universal Parser: Robustly handles quoted and unquoted values.
      */
     fun parseFrontMatter(rawContent: String): FrontMatterData {
-        val lines = rawContent.lines()
-        if (lines.size < 3 || lines[0].trim() != "---") {
+        val firstLineEnd = rawContent.indexOf('\n')
+        if (firstLineEnd <= 0 || rawContent.substring(0, firstLineEnd).trim() != "---") {
             return FrontMatterData(null, rawContent)
         }
 
-        val closingIndexInDropped = lines.drop(1).indexOfFirst { it.trim() == "---" }
-        if (closingIndexInDropped == -1) {
-            return FrontMatterData(null, rawContent)
-        }
-
-        val actualClosingIndex = closingIndexInDropped + 1
-        var contentStartIndex = actualClosingIndex + 1
-        while (contentStartIndex < lines.size && lines[contentStartIndex].isBlank()) {
-            contentStartIndex++
-        }
-
-        val cleanContent =
-            if (contentStartIndex < lines.size) {
-                lines.subList(contentStartIndex, lines.size).joinToString("\n")
-            } else {
-                ""
+        val propertyLines = mutableListOf<String>()
+        var lineStart = firstLineEnd + 1
+        var closingLineEnd = -1
+        while (lineStart <= rawContent.length) {
+            val lineEnd = rawContent.indexOf('\n', lineStart).let { if (it == -1) rawContent.length else it }
+            val line = rawContent.substring(lineStart, lineEnd)
+            if (line.trim() == "---") {
+                closingLineEnd = lineEnd
+                break
             }
+            propertyLines += line
+            if (lineEnd >= rawContent.length) break
+            lineStart = lineEnd + 1
+        }
+        if (closingLineEnd == -1) {
+            return FrontMatterData(null, rawContent)
+        }
+
+        var contentStart = if (closingLineEnd < rawContent.length) closingLineEnd + 1 else closingLineEnd
+        while (contentStart < rawContent.length) {
+            val lineEnd = rawContent.indexOf('\n', contentStart).let { if (it == -1) rawContent.length else it }
+            if (!rawContent.substring(contentStart, lineEnd).isBlank()) break
+            contentStart = if (lineEnd < rawContent.length) lineEnd + 1 else rawContent.length
+        }
+
+        val cleanContent = if (contentStart < rawContent.length) rawContent.substring(contentStart) else ""
         // 提醒功能已移除：只剥离 front matter，不再读取 reminder。
-        val properties = parseFrontMatterProperties(lines.subList(1, actualClosingIndex))
+        val properties = parseFrontMatterProperties(propertyLines)
 
         return FrontMatterData(null, cleanContent, properties)
     }

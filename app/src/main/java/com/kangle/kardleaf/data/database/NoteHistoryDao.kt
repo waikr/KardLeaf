@@ -12,10 +12,39 @@ data class NoteHistoryCount(
     val versionCount: Int,
 )
 
+data class NoteHistoryPreviewEntity(
+    val id: Long,
+    val noteId: String,
+    val title: String,
+    val content: String,
+    val savedAtMs: Long,
+    val contentLength: Int,
+)
+
 @Dao
 interface NoteHistoryDao {
     @Query("SELECT * FROM note_history WHERE noteId = :noteId ORDER BY savedAtMs DESC")
     fun getHistory(noteId: String): Flow<List<NoteHistoryEntity>>
+
+    @Query(
+        """
+        SELECT id, noteId, title,
+            CASE
+                WHEN length(content) > :fullContentLimit THEN substr(content, 1, :previewLimit)
+                ELSE content
+            END AS content,
+            savedAtMs,
+            length(content) AS contentLength
+        FROM note_history
+        WHERE noteId = :noteId
+        ORDER BY savedAtMs DESC
+        """,
+    )
+    fun getHistoryPreview(
+        noteId: String,
+        previewLimit: Int,
+        fullContentLimit: Int,
+    ): Flow<List<NoteHistoryPreviewEntity>>
 
     @Query("SELECT * FROM note_history WHERE id = :id")
     suspend fun getHistoryById(id: Long): NoteHistoryEntity?

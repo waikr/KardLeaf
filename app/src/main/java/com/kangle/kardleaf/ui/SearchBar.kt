@@ -97,13 +97,15 @@ fun SortButton(viewModel: MainViewModel) {
     val sortDirection by viewModel.sortDirection.collectAsState()
     val currentFilter by viewModel.currentFilter.collectAsState()
     val notes by viewModel.notes.collectAsState()
+    val customSortDragModeEnabled by viewModel.customSortDragModeEnabled.collectAsState()
     val folderSortSettings by viewModel.currentFolderSortSettings.collectAsState()
     var showSortMenu by remember { mutableStateOf(false) }
     var showCustomSortDialog by remember { mutableStateOf(false) }
     var lastSortMenuDismissAt by remember { mutableStateOf(0L) }
     val folderFilter = currentFilter as? MainViewModel.NoteFilter.Label
+    val isAllNotesView = currentFilter is MainViewModel.NoteFilter.All
     val isFolderView = folderFilter != null
-    val canCustomSort = folderFilter != null && !folderFilter.recursive
+    val canCustomSort = isAllNotesView || (folderFilter != null && !folderFilter.recursive)
     val savedEffectiveSortOrder = folderSortSettings?.order ?: sortOrder
     val effectiveSortOrder =
         if (!canCustomSort && savedEffectiveSortOrder == PrefsManager.SortOrder.CUSTOM) {
@@ -113,10 +115,10 @@ fun SortButton(viewModel: MainViewModel) {
         }
     val effectiveSortDirection = folderSortSettings?.direction ?: sortDirection
     val customSortNotes =
-        if (canCustomSort && folderFilter != null) {
-            notes.filter { !it.isTrashed && it.folder == folderFilter.name }
-        } else {
-            emptyList()
+        when {
+            isAllNotesView -> notes.filter { !it.isTrashed }
+            canCustomSort && folderFilter != null -> notes.filter { !it.isTrashed && it.folder == folderFilter.name }
+            else -> emptyList()
         }
 
     LaunchedEffect(showSortMenu) {
@@ -204,10 +206,20 @@ fun SortButton(viewModel: MainViewModel) {
                 if (effectiveSortOrder == PrefsManager.SortOrder.CUSTOM) {
                     HorizontalDivider()
                     DropdownMenuItem(
-                        text = { Text("调整自定义顺序") },
+                        text = { Text("简洁自定义顺序") },
                         onClick = {
+                            viewModel.setCustomSortDragModeEnabled(false)
                             showSortMenu = false
                             showCustomSortDialog = true
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (customSortDragModeEnabled) "关闭拖动自定义顺序" else "拖动自定义顺序") },
+                        trailingIcon = { if (customSortDragModeEnabled) Icon(Icons.Default.Check, null) },
+                        onClick = {
+                            viewModel.enableCurrentFolderCustomSort(customSortNotes.map { it.file.path })
+                            viewModel.setCustomSortDragModeEnabled(!customSortDragModeEnabled)
+                            showSortMenu = false
                         },
                     )
                 }
@@ -233,9 +245,9 @@ fun SortButton(viewModel: MainViewModel) {
             }
         }
 
-        if (showCustomSortDialog && canCustomSort && folderFilter != null) {
+        if (showCustomSortDialog && canCustomSort) {
             CustomSortDialog(
-                folderName = folderFilter.name,
+                folderName = folderFilter?.name ?: "全部笔记",
                 notes = customSortNotes,
                 onDismiss = { showCustomSortDialog = false },
                 onSave = { paths ->

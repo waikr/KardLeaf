@@ -18,6 +18,7 @@ import com.kangle.kardleaf.data.database.NoteRemarkDao
 import com.kangle.kardleaf.data.database.NoteRemarkEntity
 import com.kangle.kardleaf.data.database.NoteHistoryDao
 import com.kangle.kardleaf.data.database.NoteHistoryEntity
+import com.kangle.kardleaf.data.database.NoteHistoryPreviewEntity
 import com.kangle.kardleaf.data.database.PrivacyNoteDao
 import com.kangle.kardleaf.data.database.PrivacyNoteEntity
 import com.kangle.kardleaf.data.model.AppConfig
@@ -32,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
@@ -70,6 +72,8 @@ class RoomNoteRepository(
     companion object {
         private const val MAX_TEXT_CACHE_ENTRIES = 200
         private const val NOTE_PREVIEW_CHAR_LIMIT = 200
+        private const val HISTORY_DIALOG_PREVIEW_CHAR_LIMIT = 200
+        private const val HISTORY_DIALOG_FULL_CONTENT_CHAR_LIMIT = 80_000
         private const val LOCAL_WRITE_OBSERVER_COOLDOWN_MS = 1500L
         private const val STARTUP_PERF_TRACE_TAG = "KardLeafStartupPerf"
         private const val NOTE_THUMBNAIL_CACHE_MAX_BYTES = 12 * 1024 * 1024
@@ -124,6 +128,7 @@ class RoomNoteRepository(
 
     private val cacheMutex = Mutex()
     private val refreshMutex = Mutex()
+    private val textReadLocks = mutableMapOf<String, Mutex>()
     private val indexingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val contentCache = LinkedHashMap<String, CachedText>(64, 0.75f, true)
     private val fileSignatures = mutableMapOf<String, FileSignature>()
@@ -484,23 +489,33 @@ class RoomNoteRepository(
             Log.d(LARGE_NOTE_OPEN_TRACE_TAG, "repo getNoteForEditor start path=$id")
             // Editor opening should load metadata from Room and full text from the
             // markdown file, instead of selecting a huge cached content column.
+            val entityQueryStartMs = SystemClock.elapsedRealtime()
             val entity = noteDao.getNoteShellByPath(id) ?: run {
-                Log.w(LARGE_NOTE_OPEN_TRACE_TAG, "repo getNoteForEditor no entity path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
+                Log.w(LARGE_NOTE_OPEN_TRACE_TAG, "repo getNoteForEditor no entity path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms entityQueryElapsed=${SystemClock.elapsedRealtime() - entityQueryStartMs}ms")
                 return@withContext null
             }
+            Log.d(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "repo getNoteForEditor entity query done path=$id entityQueryElapsed=${SystemClock.elapsedRealtime() - entityQueryStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
             Log.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo getNoteForEditor entity path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
                     "entityContentLen=${entity.content.length} entityPreviewLen=${entity.contentPreview.length}",
             )
+            val findFileStartMs = SystemClock.elapsedRealtime()
             val file = findNoteDocument(entity) ?: findDocumentByPath(id) ?: run {
                 Log.w(
                     LARGE_NOTE_OPEN_TRACE_TAG,
                     "repo getNoteForEditor no file path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
-                        "returnEntityContentLen=${entity.content.length}",
+                        "findFileElapsed=${SystemClock.elapsedRealtime() - findFileStartMs}ms returnEntityContentLen=${entity.content.length}",
                 )
                 return@withContext entity.toNote()
             }
+            Log.d(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "repo getNoteForEditor find file done path=$id findFileElapsed=${SystemClock.elapsedRealtime() - findFileStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
             Log.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo getNoteForEditor file path=$id name=${file.name} length=${file.length()} lastModified=${file.lastModified()} " +
@@ -727,9 +742,15 @@ class RoomNoteRepository(
     override fun getNoteHistory(noteId: String): Flow<List<NoteHistory>> = flow {
         val recordId = resolveNoteRecordId(noteId)
         emitAll(
-            noteHistoryDao.getHistory(recordId).map { histories ->
-                histories.map { it.toNoteHistory() }
-            },
+            noteHistoryDao
+                .getHistoryPreview(
+                    noteId = recordId,
+                    previewLimit = HISTORY_DIALOG_PREVIEW_CHAR_LIMIT,
+                    fullContentLimit = HISTORY_DIALOG_FULL_CONTENT_CHAR_LIMIT,
+                )
+                .map { histories ->
+                    histories.map { it.toNoteHistory(HISTORY_DIALOG_FULL_CONTENT_CHAR_LIMIT) }
+                },
         )
     }
 
@@ -2073,29 +2094,105 @@ class RoomNoteRepository(
                 }
             }
 
-            try {
-                context.contentResolver.openInputStream(file.uri)?.use { inputStream ->
-                    val text = BufferedReader(inputStream.reader()).use { it.readText() }
-                    cacheText(pathKey, lastModified, length, text)
-                    Log.d(
-                        LARGE_NOTE_OPEN_TRACE_TAG,
-                        "repo readText done name=${file.name} fileLength=$length textLen=${text.length} " +
-                            "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
-                    )
-                    text
-                } ?: run {
-                    Log.w(
-                        LARGE_NOTE_OPEN_TRACE_TAG,
-                        "repo readText empty stream name=${file.name} length=$length elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
-                    )
+            val readLock = cacheMutex.withLock {
+                textReadLocks.getOrPut(pathKey) { Mutex() }
+            }
+            return@withContext readLock.withLock readTextLock@ {
+                val cachedAfterWait = if (!bypassCache) {
+                    cacheMutex.withLock {
+                        val cached = contentCache[pathKey]
+                        if (cached != null && cached.lastModified == lastModified && cached.length == length) {
+                            Log.d(
+                                LARGE_NOTE_OPEN_TRACE_TAG,
+                                "repo readText cache hit after wait name=${file.name} length=$length textLen=${cached.text.length} " +
+                                    "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                            )
+                            cached.text
+                        } else {
+                            null
+                        }
+                    }
+                } else {
+                    null
+                }
+                if (cachedAfterWait != null) {
+                    return@readTextLock cachedAfterWait
+                }
+
+                try {
+                    var text = readTextFromUri(file.uri, file.name.orEmpty())
+                    if (text != null && text.isEmpty() && length > 0L) {
+                        Log.w(
+                            LARGE_NOTE_OPEN_TRACE_TAG,
+                            "repo readText empty result for non-empty file, retry name=${file.name} length=$length " +
+                                "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                        )
+                        delay(80L)
+                        val retryText = readTextFromUri(file.uri, file.name.orEmpty())
+                        if (!retryText.isNullOrEmpty()) {
+                            text = retryText
+                        }
+                    }
+
+                    if (text != null) {
+                        if (text.isNotEmpty() || length == 0L) {
+                            cacheText(pathKey, lastModified, length, text)
+                        } else {
+                            Log.w(
+                                LARGE_NOTE_OPEN_TRACE_TAG,
+                                "repo readText skipped caching suspicious empty text name=${file.name} length=$length",
+                            )
+                        }
+                        Log.d(
+                            LARGE_NOTE_OPEN_TRACE_TAG,
+                            "repo readText done name=${file.name} fileLength=$length textLen=${text.length} " +
+                                "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                        )
+                        text
+                    } else {
+                        Log.w(
+                            LARGE_NOTE_OPEN_TRACE_TAG,
+                            "repo readText empty stream name=${file.name} length=$length elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                        )
+                        ""
+                    }
+                } catch (e: Exception) {
+                    Log.e(LARGE_NOTE_OPEN_TRACE_TAG, "repo readText failed name=${file.name} length=$length", e)
+                    android.util.Log.e("RoomNoteRepository", "Exception reading markdown.", e)
                     ""
                 }
-            } catch (e: Exception) {
-                Log.e(LARGE_NOTE_OPEN_TRACE_TAG, "repo readText failed name=${file.name} length=$length", e)
-                android.util.Log.e("RoomNoteRepository", "Exception reading markdown.", e)
-                ""
             }
         }
+
+    private fun readTextFromUri(
+        uri: Uri,
+        traceName: String = "",
+    ): String? {
+        val startMs = SystemClock.elapsedRealtime()
+        val inputStream = context.contentResolver.openInputStream(uri) ?: run {
+            Log.w(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "repo readText openInputStream null name=$traceName elapsed=${SystemClock.elapsedRealtime() - startMs}ms uri=$uri",
+            )
+            return null
+        }
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "repo readText openInputStream done name=$traceName elapsed=${SystemClock.elapsedRealtime() - startMs}ms uri=$uri",
+        )
+        val readStartMs = SystemClock.elapsedRealtime()
+        return inputStream.use { stream ->
+            BufferedReader(stream.reader()).use { reader ->
+                reader.readText()
+            }
+        }.also { text ->
+            Log.d(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "repo readText stream read done name=$traceName textLen=${text.length} readElapsed=${SystemClock.elapsedRealtime() - readStartMs}ms " +
+                    "totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+        }
+    }
 
     private suspend fun updateTextCache(
         file: DocumentFile,
@@ -2139,9 +2236,48 @@ class RoomNoteRepository(
             "repo readNoteForEditor start path=${entity.filePath} fileName=${file.name} length=${file.length()}",
         )
         val rawContent = readText(file)
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "repo readNoteForEditor readText done path=${entity.filePath} rawLen=${rawContent.length} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        val parseStartMs = SystemClock.elapsedRealtime()
         val frontMatter = NoteFormatUtils.parseFrontMatter(rawContent)
-        val parsedTags = NoteFormatUtils.extractTags(rawContent)
-        val parsedRecordId = NoteFormatUtils.extractKardLeafId(rawContent)?.takeIf { it.isNotBlank() } ?: entity.filePath
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "repo readNoteForEditor parseFrontMatter done path=${entity.filePath} cleanLen=${frontMatter.cleanContent.length} " +
+                "parseElapsed=${SystemClock.elapsedRealtime() - parseStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        val tagsStartMs = SystemClock.elapsedRealtime()
+        val parsedTags = frontMatter.properties
+            .firstOrNull { it.key.equals(NoteFormatUtils.TAGS_KEY, ignoreCase = true) }
+            ?.values
+            ?.let(NoteFormatUtils::normalizeTags)
+            .orEmpty()
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "repo readNoteForEditor extractTags done path=${entity.filePath} tags=${parsedTags.size} " +
+                "tagsElapsed=${SystemClock.elapsedRealtime() - tagsStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        val recordIdStartMs = SystemClock.elapsedRealtime()
+        val parsedRecordId = frontMatter.properties
+            .firstOrNull { it.key.equals(NoteFormatUtils.KARDLEAF_ID_KEY, ignoreCase = true) }
+            ?.values
+            ?.firstOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: entity.filePath
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "repo readNoteForEditor extractRecordId done path=${entity.filePath} recordIdElapsed=${SystemClock.elapsedRealtime() - recordIdStartMs}ms " +
+                "totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        val imageRefStartMs = SystemClock.elapsedRealtime()
+        val firstImageReference = extractFirstImageReference(frontMatter.cleanContent).orEmpty()
+        Log.d(
+            LARGE_NOTE_OPEN_TRACE_TAG,
+            "repo readNoteForEditor extractFirstImage done path=${entity.filePath} imageRefLen=${firstImageReference.length} " +
+                "imageElapsed=${SystemClock.elapsedRealtime() - imageRefStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
         Log.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
             "repo readNoteForEditor parsed path=${entity.filePath} rawLen=${rawContent.length} cleanLen=${frontMatter.cleanContent.length} " +
@@ -2155,7 +2291,7 @@ class RoomNoteRepository(
             lastModifiedMs = file.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis(),
             color = 0xFFFFFFFF,
             reminder = frontMatter.reminder,
-            firstImageReference = extractFirstImageReference(frontMatter.cleanContent).orEmpty(),
+            firstImageReference = firstImageReference,
             yamlTags = NoteFormatUtils.tagsToStorage(parsedTags),
         )
     }
@@ -2679,6 +2815,20 @@ class RoomNoteRepository(
             title = title,
             content = content,
             savedAt = Date(savedAtMs),
+            contentLength = content.length,
+            contentIsPreview = false,
+        )
+    }
+
+    private fun NoteHistoryPreviewEntity.toNoteHistory(fullContentLimit: Int): NoteHistory {
+        return NoteHistory(
+            id = id,
+            noteId = noteId,
+            title = title,
+            content = content,
+            savedAt = Date(savedAtMs),
+            contentLength = contentLength,
+            contentIsPreview = contentLength > fullContentLimit,
         )
     }
 

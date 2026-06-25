@@ -35,6 +35,7 @@ private const val MAX_HISTORY_SIZE = 200
 private const val IMAGE_PREVIEW_MAX_CHARS = 30000
 private const val IMAGE_PREVIEW_MAX_COUNT = 12
 private const val IMAGE_PREVIEW_DEBOUNCE_MS = 350L
+private const val IMAGE_PREVIEW_FADE_DURATION_MS = 180L
 private const val INLINE_IMAGE_PREVIEW_ENABLED = true
 
 private const val SEARCH_HIGHLIGHT_COLOR = 0x66FFD54F
@@ -49,6 +50,9 @@ private class KardLeafInlineImageSpan(
     private val heightPx: Int,
     private val verticalPaddingPx: Int,
     private val horizontalShadowPaddingPx: Int,
+    private val animationStartMs: Long,
+    private val animationDurationMs: Long,
+    private val invalidateCallback: () -> Unit,
 ) : ReplacementSpan() {
     private val dst = Rect()
     private val shadowRect = RectF()
@@ -102,9 +106,39 @@ private class KardLeafInlineImageSpan(
             imageTop + heightPx,
         )
         shadowRect.set(dst)
+
+        val progress = calculateAnimationProgress()
+        val alpha = (72 + (183 * progress)).toInt().coerceIn(0, 255)
+        val scale = 0.985f + 0.015f * progress
+        val centerX = dst.exactCenterX()
+        val centerY = dst.exactCenterY()
+
+        val oldAmbientAlpha = ambientShadowPaint.alpha
+        val oldKeyAlpha = keyShadowPaint.alpha
+        val oldBitmapAlpha = paint.alpha
+        ambientShadowPaint.alpha = alpha
+        keyShadowPaint.alpha = alpha
+        paint.alpha = alpha
+        canvas.save()
+        canvas.scale(scale, scale, centerX, centerY)
         canvas.drawRoundRect(shadowRect, 8f, 8f, ambientShadowPaint)
         canvas.drawRoundRect(shadowRect, 8f, 8f, keyShadowPaint)
         canvas.drawBitmap(bitmap, null, dst, paint)
+        canvas.restore()
+        ambientShadowPaint.alpha = oldAmbientAlpha
+        keyShadowPaint.alpha = oldKeyAlpha
+        paint.alpha = oldBitmapAlpha
+
+        if (progress < 1f) {
+            invalidateCallback()
+        }
+    }
+
+    private fun calculateAnimationProgress(): Float {
+        if (animationDurationMs <= 0L) return 1f
+        val elapsed = (SystemClock.uptimeMillis() - animationStartMs).coerceAtLeast(0L)
+        val linear = (elapsed.toFloat() / animationDurationMs).coerceIn(0f, 1f)
+        return 1f - (1f - linear) * (1f - linear)
     }
 }
 
@@ -147,6 +181,7 @@ class EditorEditText @JvmOverloads constructor(
 
     private val imagePreviewExecutor = Executors.newSingleThreadExecutor()
     private val imagePreviewToken = AtomicInteger(0)
+    private var imagePreviewReleased = false
     private val imagePreviewResolver = KardLeafInlineImagePreviewResolver(context)
     private val imagePreviewRefreshRunnable = Runnable { refreshInlineImagePreviewsNow() }
     private var imagePreviewFolder: String = ""
@@ -295,6 +330,8 @@ class EditorEditText @JvmOverloads constructor(
     }
 
     fun releaseInlineImagePreviews() {
+        if (imagePreviewReleased) return
+        imagePreviewReleased = true
         removeCallbacks(imagePreviewRefreshRunnable)
         imagePreviewToken.incrementAndGet()
         clearInlineImagePreviewSpans()
@@ -303,25 +340,45 @@ class EditorEditText @JvmOverloads constructor(
 
     private fun scheduleInlineImagePreviewRefresh() {
         removeCallbacks(imagePreviewRefreshRunnable)
+        if (imagePreviewReleased) return
         if (!INLINE_IMAGE_PREVIEW_ENABLED) {
             clearInlineImagePreviewSpans()
+            return
+        }
+        if (length() > IMAGE_PREVIEW_MAX_CHARS) {
+            Log.d(
+                EDITOR_TRACE_TAG,
+                "inline image preview skipped schedule textLen=${length()} max=$IMAGE_PREVIEW_MAX_CHARS",
+            )
             return
         }
         postDelayed(imagePreviewRefreshRunnable, IMAGE_PREVIEW_DEBOUNCE_MS)
     }
 
     private fun refreshInlineImagePreviewsNow() {
+        if (imagePreviewReleased) return
         if (!INLINE_IMAGE_PREVIEW_ENABLED) {
             clearInlineImagePreviewSpans()
             return
         }
+        val startMs = SystemClock.elapsedRealtime()
         val editable = text ?: return
         val source = editable.toString()
         if (source.length > IMAGE_PREVIEW_MAX_CHARS || width <= 0) {
             clearInlineImagePreviewSpans()
+            Log.d(
+                EDITOR_TRACE_TAG,
+                "inline image preview skipped now textLen=${source.length} width=$width elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
             return
         }
+        val matchStartMs = SystemClock.elapsedRealtime()
         val matches = findInlineImagePreviewMatches(source)
+        Log.d(
+            EDITOR_TRACE_TAG,
+            "inline image preview scan done textLen=${source.length} matches=${matches.size} " +
+                "scanElapsed=${SystemClock.elapsedRealtime() - matchStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
         if (matches.isEmpty()) {
             clearInlineImagePreviewSpans()
             return
@@ -333,34 +390,40 @@ class EditorEditText @JvmOverloads constructor(
         val availableWidth =
             (width - totalPaddingLeft - totalPaddingRight - horizontalShadowPadding * 2).coerceAtLeast(dp(160))
         val maxPreviewHeight = dp(220)
-        imagePreviewExecutor.execute {
-            val previews = matches.take(IMAGE_PREVIEW_MAX_COUNT).mapNotNull { match ->
-                val bitmap = imagePreviewResolver.resolveBitmap(
-                    currentFolder = folder,
-                    reference = match.reference,
-                    maxWidthPx = availableWidth,
-                    maxHeightPx = maxPreviewHeight,
-                ) ?: return@mapNotNull null
-                val scale = minOf(
-                    availableWidth.toFloat() / bitmap.width.coerceAtLeast(1),
-                    maxPreviewHeight.toFloat() / bitmap.height.coerceAtLeast(1),
-                    1f,
-                )
-                val previewWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
-                val previewHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
-                KardLeafImagePreviewItem(
-                    lineStart = match.lineStart,
-                    lineEnd = match.lineEnd,
-                    bitmap = bitmap,
-                    widthPx = previewWidth,
-                    heightPx = previewHeight,
-                )
+        try {
+            imagePreviewExecutor.execute {
+                if (imagePreviewReleased) return@execute
+                val previews = matches.take(IMAGE_PREVIEW_MAX_COUNT).mapNotNull { match ->
+                    val bitmap = imagePreviewResolver.resolveBitmap(
+                        currentFolder = folder,
+                        reference = match.reference,
+                        maxWidthPx = availableWidth,
+                        maxHeightPx = maxPreviewHeight,
+                    ) ?: return@mapNotNull null
+                    val scale = minOf(
+                        availableWidth.toFloat() / bitmap.width.coerceAtLeast(1),
+                        maxPreviewHeight.toFloat() / bitmap.height.coerceAtLeast(1),
+                        1f,
+                    )
+                    val previewWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                    val previewHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                    KardLeafImagePreviewItem(
+                        lineStart = match.lineStart,
+                        lineEnd = match.lineEnd,
+                        bitmap = bitmap,
+                        widthPx = previewWidth,
+                        heightPx = previewHeight,
+                    )
+                }
+                post {
+                    if (imagePreviewReleased) return@post
+                    if (token != imagePreviewToken.get()) return@post
+                    if (source != text?.toString().orEmpty()) return@post
+                    applyInlineImagePreviewSpans(previews)
+                }
             }
-            post {
-                if (token != imagePreviewToken.get()) return@post
-                if (source != text?.toString().orEmpty()) return@post
-                applyInlineImagePreviewSpans(previews)
-            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            // The editor view may already be released while a delayed image preview refresh is running.
         }
     }
 
@@ -373,6 +436,7 @@ class EditorEditText @JvmOverloads constructor(
         }
         val editable = text ?: return
         val extraPadding = dp(12)
+        val animationStartMs = SystemClock.uptimeMillis()
         previews.forEach { preview ->
             val start = preview.lineStart.coerceIn(0, editable.length)
             val end = preview.lineEnd.coerceIn(start, editable.length)
@@ -384,6 +448,9 @@ class EditorEditText @JvmOverloads constructor(
                         heightPx = preview.heightPx,
                         verticalPaddingPx = extraPadding / 2,
                         horizontalShadowPaddingPx = dp(4),
+                        animationStartMs = animationStartMs,
+                        animationDurationMs = IMAGE_PREVIEW_FADE_DURATION_MS,
+                        invalidateCallback = { postInvalidateOnAnimation() },
                     ),
                     start,
                     end,
@@ -607,21 +674,70 @@ class EditorEditText @JvmOverloads constructor(
     }
 
     fun setInitialText(text: String, selection: TextRange? = null) {
+        val startMs = SystemClock.elapsedRealtime()
+        Log.d(
+            EDITOR_TRACE_TAG,
+            "editor setInitialText start textLen=${text.length} selection=$selection watcherAttached=$markdownWatcherAttached",
+        )
+        if (text.length > LIVE_MARKDOWN_MAX_CHARS && markdownWatcherAttached && markdownWatcher != null) {
+            removeTextChangedListener(markdownWatcher)
+            markdownWatcherAttached = false
+            Log.d(
+                EDITOR_TRACE_TAG,
+                "editor setInitialText detached live markdown before large setText textLen=${text.length}",
+            )
+        }
         programmaticChange = true
         try {
+            val setTextStartMs = SystemClock.elapsedRealtime()
             setText(text)
+            Log.d(
+                EDITOR_TRACE_TAG,
+                "editor setInitialText setText done textLen=${text.length} viewLen=${length()} " +
+                    "setTextElapsed=${SystemClock.elapsedRealtime() - setTextStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
             val len = text.length
             val target = selection ?: TextRange(len, len)
+            val selectionStartMs = SystemClock.elapsedRealtime()
             setSelection(
                 target.start.coerceIn(0, len),
                 target.end.coerceIn(0, len),
             )
+            Log.d(
+                EDITOR_TRACE_TAG,
+                "editor setInitialText selection done selection=${selectionStart}..${selectionEnd} " +
+                    "selectionElapsed=${SystemClock.elapsedRealtime() - selectionStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
         } finally {
             programmaticChange = false
         }
+        val clearHistoryStartMs = SystemClock.elapsedRealtime()
         clearHistory()
-        post { refreshMarkdownWatcher() }
+        Log.d(
+            EDITOR_TRACE_TAG,
+            "editor setInitialText clearHistory done elapsed=${SystemClock.elapsedRealtime() - clearHistoryStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        if (text.length <= LIVE_MARKDOWN_MAX_CHARS) {
+            post {
+                val markdownStartMs = SystemClock.elapsedRealtime()
+                refreshMarkdownWatcher()
+                Log.d(
+                    EDITOR_TRACE_TAG,
+                    "editor setInitialText refreshMarkdownWatcher posted done textLen=${length()} watcherAttached=$markdownWatcherAttached " +
+                        "elapsed=${SystemClock.elapsedRealtime() - markdownStartMs}ms elapsedFromStart=${SystemClock.elapsedRealtime() - startMs}ms",
+                )
+            }
+        } else {
+            Log.d(
+                EDITOR_TRACE_TAG,
+                "editor setInitialText skipped live markdown refresh for large text textLen=${text.length} max=$LIVE_MARKDOWN_MAX_CHARS",
+            )
+        }
         scheduleInlineImagePreviewRefresh()
+        Log.d(
+            EDITOR_TRACE_TAG,
+            "editor setInitialText end textLen=${text.length} totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
     }
 
     fun replaceAll(newText: String, selection: TextRange? = null) {

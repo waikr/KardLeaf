@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -105,6 +106,7 @@ fun PreviewWebView(
     onUserInteraction: () -> Unit = {},
     onScrollRatioChanged: (Float) -> Unit = {},
     onFastScrollSourceScrolled: () -> Unit = {},
+    onContentRendered: (Int, Int) -> Unit = { _, _ -> },
     onCheckboxToggled: (Int, Boolean) -> Unit,
     doubleTapIntervalMs: Int = 260,
 ) {
@@ -114,6 +116,7 @@ fun PreviewWebView(
     val currentOnUserInteraction = rememberUpdatedState(onUserInteraction)
     val currentOnScrollRatioChanged = rememberUpdatedState(onScrollRatioChanged)
     val currentOnFastScrollSourceScrolled = rememberUpdatedState(onFastScrollSourceScrolled)
+    val currentOnContentRendered = rememberUpdatedState(onContentRendered)
     val currentOnCheckboxToggled = rememberUpdatedState(onCheckboxToggled)
     val currentDoubleTapIntervalMs = rememberUpdatedState(doubleTapIntervalMs.coerceIn(120, 600))
     val currentSearchQuery = rememberUpdatedState(searchQuery)
@@ -131,6 +134,27 @@ fun PreviewWebView(
                 "scrollToHeading(${JSONObject.quote(currentHeadingScrollText.value)}, ${currentHeadingScrollLevel.value})",
                 null,
             )
+        }
+    }
+
+    fun WebView.notifyPreviewContentRendered() {
+        val renderedContent = contentRef.get()
+        val renderedLength = renderedContent.length
+        val renderedHash = renderedContent.hashCode()
+        val notifyRendered = Runnable {
+            currentOnContentRendered.value(renderedLength, renderedHash)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            postVisualStateCallback(
+                SystemClock.elapsedRealtimeNanos(),
+                object : WebView.VisualStateCallback() {
+                    override fun onComplete(requestId: Long) {
+                        postDelayed(notifyRendered, 120L)
+                    }
+                },
+            )
+        } else {
+            postDelayed(notifyRendered, 700L)
         }
     }
 
@@ -269,6 +293,7 @@ fun PreviewWebView(
                                 )
                                 webView.applyPreviewSearch()
                                 webView.applyPreviewHeadingScroll()
+                                webView.notifyPreviewContentRendered()
                             }
                         }
 
@@ -315,6 +340,7 @@ fun PreviewWebView(
                         view.applyPreviewSearch()
                         view.setTag(R.id.preview_heading_scroll_token_tag, currentHeadingScrollToken.value)
                         view.applyPreviewHeadingScroll()
+                        view.notifyPreviewContentRendered()
                     }
                 }
             } else {

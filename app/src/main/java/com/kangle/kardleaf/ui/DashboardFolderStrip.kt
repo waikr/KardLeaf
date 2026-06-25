@@ -1,5 +1,6 @@
 package com.kangle.kardleaf.ui
 
+import android.util.Log
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -28,6 +29,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.first
+
+private const val CUSTOM_SORT_FLASH_TAG = "KardLeafCustomSortFlash"
 
 @Composable
 fun FolderPathStrip(
@@ -154,26 +157,45 @@ internal fun buildFolderPagerPages(
         .distinct()
         .sorted()
 
-    if (currentFilter is MainViewModel.NoteFilter.All) {
-        if (normalizedLabels.isEmpty()) return emptyList()
-        val rootPage = FolderChipData("全部笔记", "")
-        val topLevel = directChildFolders(normalizedLabels, "")
-        return listOf(rootPage) + topLevel
+    val result = if (currentFilter is MainViewModel.NoteFilter.All) {
+        if (normalizedLabels.isEmpty()) {
+            emptyList()
+        } else {
+            val rootPage = FolderChipData("全部笔记", "")
+            val topLevel = directChildFolders(normalizedLabels, "")
+            listOf(rootPage) + topLevel
+        }
+    } else {
+        val currentPath = (currentFilter as? MainViewModel.NoteFilter.Label)?.name
+            ?.let(::normalizeFolderPathForUi)
+            .orEmpty()
+        if (currentPath.isBlank()) {
+            emptyList()
+        } else {
+            val parent = currentPath.substringBeforeLast("/", missingDelimiterValue = "")
+            val siblings = directChildFolders(normalizedLabels, parent)
+            if (siblings.any { it.path == currentPath }) {
+                siblings
+            } else {
+                val currentName = currentPath.substringAfterLast("/")
+                (siblings + FolderChipData(currentName, currentPath))
+                    .distinctBy { it.path }
+                    .sortedBy { it.name }
+            }
+        }
     }
+    Log.d(
+        CUSTOM_SORT_FLASH_TAG,
+        "buildFolderPagerPages filter=$currentFilter labels=${normalizedLabels.size} result=${folderChipSummary(result)}",
+    )
+    return result
+}
 
-    val currentPath = (currentFilter as? MainViewModel.NoteFilter.Label)?.name
-        ?.let(::normalizeFolderPathForUi)
-        .orEmpty()
-    if (currentPath.isBlank()) return emptyList()
 
-    val parent = currentPath.substringBeforeLast("/", missingDelimiterValue = "")
-    val siblings = directChildFolders(normalizedLabels, parent)
-    if (siblings.any { it.path == currentPath }) return siblings
-
-    val currentName = currentPath.substringAfterLast("/")
-    return (siblings + FolderChipData(currentName, currentPath))
-        .distinctBy { it.path }
-        .sortedBy { it.name }
+private fun folderChipSummary(pages: Collection<FolderChipData>, limit: Int = 8): String {
+    val paths = pages.map { it.path.ifBlank { "<ALL>" } }
+    val suffix = if (paths.size > limit) ", ..." else ""
+    return "size=${paths.size} head=${paths.take(limit)}$suffix"
 }
 
 private fun buildFolderRows(

@@ -615,13 +615,16 @@ class MainActivity : FragmentActivity() {
                                         }
                                     },
                         ) {
+                            // Keep the dashboard resident for fast return, but do not animate the
+                            // whole note grid behind the editor. Moving/fading a large lazy grid
+                            // during open/close keeps thumbnails and layout work active on frames.
                             val mainContentOffsetX by animateDpAsState(
-                                targetValue = if (isEditorOpen) -maxWidth * 0.10f else 0.dp,
+                                targetValue = 0.dp,
                                 animationSpec = tween(durationMillis = 300),
                                 label = "MainContentOffset",
                             )
                             val mainContentAlpha by animateFloatAsState(
-                                targetValue = if (isEditorOpen) 0.92f else 1f,
+                                targetValue = 1f,
                                 animationSpec = tween(durationMillis = 300),
                                 label = "MainContentAlpha",
                             )
@@ -652,6 +655,7 @@ class MainActivity : FragmentActivity() {
                                             launchOpenDocumentTree()
                                         },
                                         edgeDrawerWidthPx = edgeDrawerWidthPx,
+                                        pauseBackgroundWork = isEditorOpen,
                                 onNoteClick = { note ->
                                             if (!isDrawerContentBlocked()) {
                                                 blockDrawerOpenBriefly()
@@ -661,7 +665,11 @@ class MainActivity : FragmentActivity() {
                                         onFabClick = {
                                             if (!isDrawerContentBlocked()) {
                                                 blockDrawerOpenBriefly()
-                                                viewModel.createNote(source = "dashboard_fab")
+                                                if (currentFilter is MainViewModel.NoteFilter.Drafts) {
+                                                    viewModel.createTemporaryNote(source = "dashboard_drafts_fab")
+                                                } else {
+                                                    viewModel.createNote(source = "dashboard_fab")
+                                                }
                                             }
                                         },
                                         onCreateDrawingClick = {

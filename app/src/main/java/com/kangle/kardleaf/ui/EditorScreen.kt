@@ -66,7 +66,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -327,6 +327,16 @@ fun EditorScreen(
                     defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT),
         )
     }
+    var openingPreviewRenderPending by remember(editorDocumentKey) { mutableStateOf(false) }
+    var lastRenderedPreviewSignature by remember(editorDocumentKey) { mutableStateOf<Pair<Int, Int>?>(null) }
+    val visiblePreviewContent = if (isOpeningNoteContent) "" else renderedPreview
+    val visiblePreviewSignature = visiblePreviewContent.length to visiblePreviewContent.hashCode()
+    val showOpeningContentProgress =
+        isOpeningNoteContent ||
+            (!isEditing &&
+                openingPreviewRenderPending &&
+                visiblePreviewContent.isNotEmpty() &&
+                lastRenderedPreviewSignature != visiblePreviewSignature)
 
     var editorFocusRequestToken by remember { mutableStateOf(0) }
 
@@ -804,6 +814,13 @@ fun EditorScreen(
         }
     }
 
+    fun shouldSaveEditorOnLeave(): Boolean =
+        if (isPrivacyEditor) {
+            privacyEditorDirty || isNewPrivacyNote
+        } else {
+            currentNote == null || viewModel.editorDirty.value
+        }
+
     fun syncUndoRedoState() {
         val nextCanUndo = editorController.canUndo()
         val nextCanRedo = editorController.canRedo()
@@ -1222,13 +1239,9 @@ fun EditorScreen(
     }
 
     LaunchedEffect(currentNote?.file?.path, isPrivacyEditor, rawInitialContent, noteRemarkRefreshVersion) {
-        val noteId = currentNote?.file?.path
-        noteFrontMatterProperties =
-            if (!isPrivacyEditor && noteId != null) {
-                viewModel.getNoteFrontMatterProperties(noteId)
-            } else {
-                initialFrontMatter.properties
-            }
+        // Opening the editor already loaded the markdown text. Reuse that parsed
+        // front matter instead of reading the same file again during the first frame.
+        noteFrontMatterProperties = initialFrontMatter.properties
     }
 
     if (showHistoryDialog && currentNote != null) {
@@ -1322,7 +1335,7 @@ fun EditorScreen(
         requestKeyboardOnEdit = false
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
-        editorController.releaseForClose()
+        editorController.releaseForClose(clearText = false)
         onBack()
     }
 
@@ -1413,12 +1426,37 @@ fun EditorScreen(
         isEditing = true
     }
 
-    LaunchedEffect(blocksDirectEditForLargeNote, isOpeningNoteContent, isEditing) {
-        if ((blocksDirectEditForLargeNote || isOpeningNoteContent) && isEditing) {
+    LaunchedEffect(blocksDirectEditForLargeNote, isEditing) {
+        if (blocksDirectEditForLargeNote && isEditing) {
+            Log.d(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "screen leave editor mode because large note blocks direct edit key=$editorDocumentKey initialContentLen=${initialContent.length}",
+            )
             requestKeyboardOnEdit = false
             pendingEditScrollRatio = null
             pendingEditScrollOffset = null
             isEditing = false
+        }
+    }
+
+    LaunchedEffect(
+        effectiveEditorOpen,
+        isOpeningNoteContent,
+        isEditing,
+        visiblePreviewContent.length,
+        visiblePreviewSignature,
+        lastRenderedPreviewSignature,
+    ) {
+        if (isOpeningNoteContent && effectiveEditorOpen) {
+            openingPreviewRenderPending = true
+            return@LaunchedEffect
+        }
+        if (!effectiveEditorOpen || isEditing || visiblePreviewContent.isEmpty()) {
+            openingPreviewRenderPending = false
+            return@LaunchedEffect
+        }
+        if (openingPreviewRenderPending && lastRenderedPreviewSignature == visiblePreviewSignature) {
+            openingPreviewRenderPending = false
         }
     }
 
@@ -1453,12 +1491,13 @@ fun EditorScreen(
         }
     }
 
-    LaunchedEffect(effectiveEditorOpen, isEditing, currentNote, externalDraft, isLeavingEditor, showDrawingPad) {
+    LaunchedEffect(effectiveEditorOpen, isEditing, isOpeningNoteContent, currentNote, externalDraft, isLeavingEditor, showDrawingPad) {
         if (!isLeavingEditor &&
             !showDrawingPad &&
             !showNoteSearch &&
             effectiveEditorOpen &&
             isEditing &&
+            !isOpeningNoteContent &&
             (currentNote == null || requestKeyboardOnEdit || defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT)
         ) {
             withFrameNanos { }
@@ -1530,7 +1569,7 @@ fun EditorScreen(
                 "sidePanelActive=$noteSidePanelsActive sidePanelOffset=$noteSidePanelOffsetPx " +
                 "showLabelMenu=$showLabelMenu showMoreMenu=$showMoreMenu showHeadingMenu=$showHeadingMenu showMathMenu=$showMathMenu",
         )
-        if (isEditing) {
+        if (isEditing && shouldSaveEditorOnLeave()) {
             saveNote(saveHistory = true)
         }
         leaveEditor()
@@ -1567,7 +1606,7 @@ fun EditorScreen(
     }
 
     val latestAutoSave by rememberUpdatedState(newValue = {
-        if (isEditing) {
+        if (isEditing && shouldSaveEditorOnLeave()) {
             saveNote(saveHistory = true)
         }
     })
@@ -2538,6 +2577,11 @@ fun EditorScreen(
                     .then(noteSidePanelActiveDragModifier),
         ) {
             if (effectiveEditorOpen && isEditing && !isClosingEditor && !blocksDirectEditForLargeNote) {
+                Log.d(
+                    LARGE_NOTE_OPEN_TRACE_TAG,
+                    "screen compose native editor key=$editorDocumentKey initialContentLen=${initialContent.length} " +
+                        "isOpening=$isOpeningNoteContent editing=$isEditing closing=$isClosingEditor",
+                )
                 KardLeafNativeEditor(
                     initialTitle = initialTitle,
                     initialContent = initialContent,
@@ -2563,9 +2607,8 @@ fun EditorScreen(
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                val previewContent = if (isOpeningNoteContent) "" else renderedPreview
                 PreviewWebView(
-                    content = previewContent,
+                    content = visiblePreviewContent,
                     isDark = isDark,
                     controller = previewController,
                     modifier = Modifier.fillMaxSize(),
@@ -2577,6 +2620,9 @@ fun EditorScreen(
                     onUserInteraction = { hideNoteSearchCursor("preview touch") },
                     onScrollRatioChanged = { previewScrollRatio = it },
                     onFastScrollSourceScrolled = { fastScrollSignal.notifyScrollChanged() },
+                    onContentRendered = { length, contentHash ->
+                        lastRenderedPreviewSignature = length to contentHash
+                    },
                     doubleTapIntervalMs = previewDoubleTapIntervalMs,
                     onCheckboxToggled = { index, checked ->
                         if (!isOpeningNoteContent) {
@@ -2599,23 +2645,15 @@ fun EditorScreen(
                         }
                     },
                 )
-                if (isOpeningNoteContent) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(28.dp))
-                            Text(
-                                text = "正在加载正文",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
+                if (showOpeningContentProgress) {
+                    LinearProgressIndicator(
+                        modifier =
+                            Modifier
+                                .align(Alignment.TopCenter)
+                                .fillMaxWidth()
+                                .height(3.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
                 }
             }
             if (noteSidePanelGestureEnabled && (!noteSidePanelHasOffset || isNoteSidePanelDragging)) {
