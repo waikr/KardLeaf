@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.data.database.PrivacyNoteEntity
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -614,23 +615,11 @@ private fun PrivacyNoteCard(
 }
 
 private fun plainPrivacyCardPreview(content: String): String =
-    content
-        .lineSequence()
-        .map { line ->
-            line
-                .replace(Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]"""), "[图片: $1]")
-                .replace(Regex("""!\[[^]]*]\(([^)]+)\)"""), "[图片]")
-                .replace(Regex("""^#{1,6}\s+"""), "")
-                .replace(Regex("""^\s*[-*+]\s+\[[ xX]]\s+"""), "")
-                .replace(Regex("""^\s*[-*+]\s+"""), "")
-                .replace(Regex("""^\s*\d+\.\s+"""), "")
-                .replace(Regex("""[*_`~>#]"""), "")
-                .trim()
-        }
-        .filter { it.isNotBlank() }
-        .take(10)
-        .joinToString("\n")
-        .take(500)
+    NoteFormatUtils.buildPlainTextPreview(
+        content = content,
+        maxChars = 500,
+        maxLines = 10,
+    )
 
 @Composable
 private fun PrivacyNoteEditor(

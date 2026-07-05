@@ -44,6 +44,7 @@ class EditorFastScrollEdgeView(context: Context) : View(context) {
     private val minThumbHeightPx = 28f * density
     private val fastScrollDelayMs = 220L
     private val hideDelayMs = 1000L
+    private val sidePanelDragStartThresholdPx = max(touchSlop * 2.5f, 40f * density)
 
     private var metricsProvider: () -> EditorFastScrollMetrics = { EditorFastScrollMetrics() }
     private var onScrollToRatio: (Float) -> Unit = {}
@@ -185,7 +186,7 @@ class EditorFastScrollEdgeView(context: Context) : View(context) {
                 val totalDy = event.y - downY
                 val absDx = abs(totalDx)
                 val absDy = abs(totalDy)
-                if (canDragSidePanel && absDx > touchSlop && absDx > absDy * 1.5f) {
+                if (canDragSidePanel && absDx > sidePanelDragStartThresholdPx && absDx > absDy * 1.5f) {
                     removeCallbacks(beginFastScrollRunnable)
                     pendingFastScroll = false
                     isSidePanelDragging = true

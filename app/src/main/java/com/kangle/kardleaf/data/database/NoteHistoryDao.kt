@@ -58,9 +58,13 @@ interface NoteHistoryDao {
         FROM note_history
         WHERE title LIKE '%' || :query || '%' OR content LIKE '%' || :query || '%'
         ORDER BY savedAtMs DESC
+        LIMIT :limit
         """,
     )
-    fun searchHistoryPreview(query: String): Flow<List<NoteHistoryEntity>>
+    fun searchHistoryPreview(
+        query: String,
+        limit: Int,
+    ): Flow<List<NoteHistoryEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(history: NoteHistoryEntity)
@@ -96,35 +100,47 @@ interface NoteHistoryDao {
 
     @Query(
         """
-        SELECT COALESCE(MAX(n.filePath), h.noteId) AS noteId,
+        WITH mapped_history AS (
+            SELECT h.id,
+                COALESCE(note_by_path.filePath, note_by_record.filePath, h.noteId) AS noteId,
+                h.title AS historyTitle,
+                h.content AS historyContent,
+                h.savedAtMs,
+                COALESCE(note_by_path.title, note_by_record.title) AS noteTitle,
+                COALESCE(note_by_path.contentPreview, note_by_record.contentPreview) AS notePreview
+            FROM note_history h
+            LEFT JOIN notes note_by_path ON note_by_path.filePath = h.noteId
+            LEFT JOIN notes note_by_record ON note_by_record.recordId = h.noteId
+                AND note_by_path.filePath IS NULL
+        )
+        SELECT mh_outer.noteId AS noteId,
             COALESCE(
-                NULLIF(MAX(n.title), ''),
+                NULLIF(MAX(mh_outer.noteTitle), ''),
                 NULLIF((
-                    SELECT hh.title
-                    FROM note_history hh
-                    WHERE hh.noteId = h.noteId
-                    ORDER BY hh.savedAtMs DESC, hh.id DESC
+                    SELECT mh.historyTitle
+                    FROM mapped_history mh
+                    WHERE mh.noteId = mh_outer.noteId
+                    ORDER BY mh.savedAtMs DESC, mh.id DESC
                     LIMIT 1
                 ), ''),
-                '无标题'
+                mh_outer.noteId
             ) AS title,
             COALESCE(
-                NULLIF(MAX(n.contentPreview), ''),
+                NULLIF(MAX(mh_outer.notePreview), ''),
                 (
-                    SELECT substr(hh.content, 1, 200)
-                    FROM note_history hh
-                    WHERE hh.noteId = h.noteId
-                    ORDER BY hh.savedAtMs DESC, hh.id DESC
+                    SELECT substr(mh.historyContent, 1, 200)
+                    FROM mapped_history mh
+                    WHERE mh.noteId = mh_outer.noteId
+                    ORDER BY mh.savedAtMs DESC, mh.id DESC
                     LIMIT 1
                 ),
                 ''
             ) AS contentPreview,
-            COUNT(DISTINCT h.id) AS recordCount,
-            MAX(h.savedAtMs) AS updatedAtMs
-        FROM note_history h
-        LEFT JOIN notes n ON n.filePath = h.noteId OR n.recordId = h.noteId
-        GROUP BY h.noteId
-        ORDER BY MAX(h.savedAtMs) DESC, h.noteId ASC
+            COUNT(DISTINCT mh_outer.id) AS recordCount,
+            MAX(mh_outer.savedAtMs) AS updatedAtMs
+        FROM mapped_history mh_outer
+        GROUP BY mh_outer.noteId
+        ORDER BY MAX(mh_outer.savedAtMs) DESC, mh_outer.noteId ASC
         """,
     )
     suspend fun getHistoryNoteSummaries(): List<NoteRecordSummary>

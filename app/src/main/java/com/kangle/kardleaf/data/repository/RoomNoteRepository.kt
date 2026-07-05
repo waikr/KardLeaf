@@ -1,8 +1,10 @@
 package com.kangle.kardleaf.data.repository
 
+import com.kangle.kardleaf.data.utils.KardLeafLog
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.content.pm.ApplicationInfo
 import android.provider.DocumentsContract
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -27,8 +29,11 @@ import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.model.NoteHistory
 import com.kangle.kardleaf.data.model.NoteRecordSummary
 import com.kangle.kardleaf.data.model.NoteRemark
+import com.kangle.kardleaf.data.model.NoteSearchMatch
+import com.kangle.kardleaf.data.utils.KardLeafContentLimits
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import com.kangle.kardleaf.data.utils.NoteTextStats
+import com.kangle.kardleaf.data.utils.SearchQueryUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -37,6 +42,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,13 +51,16 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.OutputStreamWriter
 import android.os.SystemClock
 import android.util.Base64
-import android.util.Log
 import android.util.LruCache
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
 
 class RoomNoteRepository(
@@ -69,16 +78,32 @@ class RoomNoteRepository(
         val dataUri: String,
     )
 
+    private data class ReferencedDocument(
+        val parent: DocumentFile,
+        val file: DocumentFile,
+    )
+
+    private data class LimitedImageRead(
+        val bytes: ByteArray? = null,
+        val exceededLimit: Boolean = false,
+    )
+
     companion object {
         private const val MAX_TEXT_CACHE_ENTRIES = 200
         private const val NOTE_PREVIEW_CHAR_LIMIT = 200
         private const val HISTORY_DIALOG_PREVIEW_CHAR_LIMIT = 200
         private const val HISTORY_DIALOG_FULL_CONTENT_CHAR_LIMIT = 80_000
+        private const val SEARCH_RESULT_LIMIT = 100
         private const val LOCAL_WRITE_OBSERVER_COOLDOWN_MS = 1500L
         private const val STARTUP_PERF_TRACE_TAG = "KardLeafStartupPerf"
         private const val NOTE_THUMBNAIL_CACHE_MAX_BYTES = 12 * 1024 * 1024
         private const val YAML_TAG_TRACE_TAG = "KardLeafYamlTags"
         private const val LARGE_NOTE_OPEN_TRACE_TAG = "KardLeafLargeNoteOpen"
+        private const val OPEN_PATH_PROBE_TAG = "KardLeafOpenPathProbe"
+        private const val IMAGE_TRACE_TAG = "KardLeafImageTrace"
+        private const val ENABLE_IMAGE_TRACE = false
+        private const val ROOM_CONTENT_AUDIT_TAG = "KardLeafRoomContentAudit"
+        private const val SEARCH_TRACE_TAG = "KardLeafSearchTrace"
     }
 
     private data class UserDataBackup(
@@ -113,6 +138,7 @@ class RoomNoteRepository(
     private val noteRemarkDao: NoteRemarkDao = AppDatabase.getDatabase(context).noteRemarkDao()
     private var rootDir: DocumentFile? = null
     private var rootTreeUri: Uri? = null
+    private var rootDocumentId: String? = null
     private var appConfig = AppConfig()
 
     private data class CachedText(
@@ -126,13 +152,24 @@ class RoomNoteRepository(
         val length: Long,
     )
 
+    private data class HistorySnapshotContentSource(
+        val rawContent: String? = null,
+        val cleanContent: String? = null,
+        val tags: List<String> = emptyList(),
+        val fallbackReason: String? = null,
+    )
+
     private val cacheMutex = Mutex()
     private val refreshMutex = Mutex()
+    private val pendingRefresh = AtomicBoolean(false)
+    private val pendingRefreshForceReload = AtomicBoolean(false)
+    private val refreshGeneration = AtomicLong(0L)
     private val textReadLocks = mutableMapOf<String, Mutex>()
     private val indexingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val contentCache = LinkedHashMap<String, CachedText>(64, 0.75f, true)
     private val fileSignatures = mutableMapOf<String, FileSignature>()
     private val flowEmissionCounts = ConcurrentHashMap<String, Int>()
+    private val roomContentAuditKeys = ConcurrentHashMap<String, Boolean>()
     private val noteThumbnailCache =
         object : LruCache<String, Bitmap>(NOTE_THUMBNAIL_CACHE_MAX_BYTES) {
             override fun sizeOf(key: String, value: Bitmap): Int =
@@ -144,7 +181,11 @@ class RoomNoteRepository(
     private val backupGson = Gson()
 
     private fun logStartupPerf(message: String) {
-        android.util.Log.d(STARTUP_PERF_TRACE_TAG, message)
+        KardLeafLog.d(STARTUP_PERF_TRACE_TAG, message)
+    }
+
+    private fun markWebDavRealtimeLocalDirty() {
+        prefsManager.markWebDavRealtimeLocalDirty()
     }
 
     private fun logFlowEmission(name: String, size: Int, elapsedMs: Long) {
@@ -154,6 +195,46 @@ class RoomNoteRepository(
                 "repository flow $name emit#$count size=$size mapElapsed=${elapsedMs}ms thread=${Thread.currentThread().name}",
             )
         }
+    }
+
+    private fun logRoomContentAuditOnce(
+        key: String,
+        message: String,
+    ) {
+        if (!isDebuggableBuild()) return
+        if (roomContentAuditKeys.putIfAbsent(key, true) == null) {
+            KardLeafLog.d(ROOM_CONTENT_AUDIT_TAG, message)
+        }
+    }
+
+    private fun logRoomContentAudit(message: String) {
+        if (isDebuggableBuild()) {
+            KardLeafLog.d(ROOM_CONTENT_AUDIT_TAG, message)
+        }
+    }
+
+    private fun isDebuggableBuild(): Boolean =
+        (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+    private fun logLightweightListQueryOnce(
+        name: String,
+        size: Int,
+    ) {
+        logRoomContentAuditOnce(
+            key = "light-list-$name",
+            message = "list query uses lightweight Room projection source=$name rows=$size contentColumn=preview",
+        )
+    }
+
+    private suspend fun getFullNoteEntityByPathForAudit(
+        filePath: String,
+        reason: String,
+    ): NoteEntity? {
+        logRoomContentAuditOnce(
+            key = "select-star-notes-$reason",
+            message = "remaining SELECT * notes path reason=$reason",
+        )
+        return noteDao.getNoteByPath(filePath)
     }
 
     override suspend fun setRootFolder(
@@ -171,18 +252,20 @@ class RoomNoteRepository(
                 )
             } catch (e: SecurityException) {
                 // Permission might already be granted or not persistable, proceed with caution
-                android.util.Log.w("RoomNoteRepository", "Could not take persistable permission: ${e.message}")
+                KardLeafLog.w("RoomNoteRepository", "Could not take persistable permission: ${e.message}")
             }
 
-            val docFile = DocumentFile.fromTreeUri(context, uri)
+            val resolvedRoot = resolveRootDocument(uri)
+            val docFile = resolvedRoot?.documentFile
             val canRead = docFile?.canRead() == true
-            if (docFile == null || !canRead) {
-                android.util.Log.e("RoomNoteRepository", "Root folder is not readable or null: $uriString")
+            if (resolvedRoot == null || docFile == null || !canRead) {
+                KardLeafLog.e("RoomNoteRepository", "Root folder is not readable or null: $uriString")
                 return
             }
 
             rootDir = docFile
-            rootTreeUri = uri
+            rootTreeUri = resolvedRoot.treeUri
+            rootDocumentId = resolvedRoot.documentId
             val rootName = docFile.name
 
             appConfig = metadataManager.loadConfig(docFile)
@@ -193,12 +276,62 @@ class RoomNoteRepository(
                 refreshNotes()
             }
         } catch (e: Exception) {
-            android.util.Log.e("RoomNoteRepository", "Error setting root folder: $uriString", e)
+            KardLeafLog.e("RoomNoteRepository", "Error setting root folder: $uriString", e)
         }
     }
 
+    private data class ResolvedRootDocument(
+        val documentFile: DocumentFile,
+        val treeUri: Uri,
+        val documentId: String,
+    )
+
+    private fun resolveRootDocument(uri: Uri): ResolvedRootDocument? {
+        val requestedDocumentId = resolveRootDocumentId(uri) ?: return null
+        val directResolved = resolveRootDocumentFromTreeUri(uri, requestedDocumentId)
+        if (directResolved?.documentFile?.canRead() == true) return directResolved
+
+        return context.contentResolver.persistedUriPermissions
+            .asSequence()
+            .filter { it.isReadPermission }
+            .mapNotNull { permission -> resolveRootDocumentFromTreeUri(permission.uri, requestedDocumentId) }
+            .firstOrNull()
+    }
+
+    private fun resolveRootDocumentFromTreeUri(
+        treeUri: Uri,
+        requestedDocumentId: String,
+    ): ResolvedRootDocument? {
+        val treeDocumentId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull() ?: return null
+        if (requestedDocumentId != treeDocumentId && !requestedDocumentId.startsWith("$treeDocumentId/")) {
+            return null
+        }
+        val treeRoot = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+        val documentFile = if (requestedDocumentId == treeDocumentId) {
+            treeRoot
+        } else {
+            val relativePath = requestedDocumentId.removePrefix("$treeDocumentId/")
+            relativePath
+                .split('/')
+                .filter { it.isNotBlank() }
+                .fold(treeRoot as DocumentFile?) { current, segment -> current?.findFile(segment) }
+        } ?: return null
+        return ResolvedRootDocument(
+            documentFile = documentFile,
+            treeUri = treeUri,
+            documentId = requestedDocumentId,
+        )
+    }
+
+    private fun currentRootDocumentId(): String? = rootDocumentId
+
+    private fun resolveRootDocumentId(uri: Uri): String? =
+        runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull()
+            ?: runCatching { DocumentsContract.getTreeDocumentId(uri) }.getOrNull()
+
     override fun getAllNotes(): Flow<List<Note>> {
         return noteDao.getAllActiveNotes().map { entities ->
+            logLightweightListQueryOnce("activeNotes", entities.size)
             val startMs = SystemClock.elapsedRealtime()
             val result = entities.map { it.toNote() }
             logFlowEmission("activeNotes", result.size, SystemClock.elapsedRealtime() - startMs)
@@ -208,6 +341,7 @@ class RoomNoteRepository(
 
     override fun getAllNotesWithArchive(): Flow<List<Note>> {
         return noteDao.getAllNotesWithArchive().map { entities ->
+            logLightweightListQueryOnce("allNotesWithArchive", entities.size)
             val startMs = SystemClock.elapsedRealtime()
             val result = entities.map { it.toNote() }
             logFlowEmission("allNotesWithArchive", result.size, SystemClock.elapsedRealtime() - startMs)
@@ -217,24 +351,28 @@ class RoomNoteRepository(
 
     override fun getFavoriteNotes(): Flow<List<Note>> {
         return noteDao.getFavoriteNotes().map { entities ->
+            logLightweightListQueryOnce("favoriteNotes", entities.size)
             entities.map { it.toNote() }
         }
     }
 
     fun getTrashedNotes(): Flow<List<Note>> {
         return noteDao.getTrashedNotes().map { entities ->
+            logLightweightListQueryOnce("trashedNotes", entities.size)
             entities.map { it.toNote() }
         }
     }
 
     fun getArchivedNotes(): Flow<List<Note>> {
         return noteDao.getArchivedNotes().map { entities ->
+            logLightweightListQueryOnce("archivedNotes", entities.size)
             entities.map { it.toNote() }
         }
     }
 
     fun getNotesByFolder(folder: String): Flow<List<Note>> {
         return noteDao.getNotesByFolder(folder).map { entities ->
+            logLightweightListQueryOnce("notesByFolder", entities.size)
             val startMs = SystemClock.elapsedRealtime()
             val result = entities.map { it.toNote() }
             logFlowEmission("notesByFolder:$folder", result.size, SystemClock.elapsedRealtime() - startMs)
@@ -245,6 +383,7 @@ class RoomNoteRepository(
     fun getNotesByFolderRecursive(folder: String): Flow<List<Note>> {
         val normalized = folder.trimEnd('/')
         return noteDao.getNotesByFolderRecursive(normalized, "$normalized/%").map { entities ->
+            logLightweightListQueryOnce("notesByFolderRecursive", entities.size)
             val startMs = SystemClock.elapsedRealtime()
             val result = entities.map { it.toNote() }
             logFlowEmission("notesByFolderRecursive:$normalized", result.size, SystemClock.elapsedRealtime() - startMs)
@@ -255,7 +394,7 @@ class RoomNoteRepository(
     override fun getLabels(): Flow<List<String>> = labelDao.getAllLabels()
 
     private fun logYamlTagTrace(message: String) {
-        android.util.Log.d(YAML_TAG_TRACE_TAG, message)
+        KardLeafLog.d(YAML_TAG_TRACE_TAG, message)
     }
 
     fun getYamlTags(): Flow<List<String>> =
@@ -270,6 +409,7 @@ class RoomNoteRepository(
     fun getNotesByYamlTag(tag: String): Flow<List<Note>> {
         val needle = NoteFormatUtils.tagsToStorage(listOf(tag))
         return noteDao.getNotesByYamlTag(needle).map { entities ->
+            logLightweightListQueryOnce("notesByYamlTag", entities.size)
             entities.map { it.toNote() }
         }
     }
@@ -279,7 +419,7 @@ class RoomNoteRepository(
         tags: Collection<String>,
     ): Boolean =
         withContext(Dispatchers.IO) {
-            val entity = noteDao.getNoteByPath(notePath)
+            val entity = noteDao.getNoteShellByPath(notePath)
             if (entity == null) {
                 logYamlTagTrace("updateNoteTags missing entity path=$notePath inputTags=${NoteFormatUtils.normalizeTags(tags)}")
                 return@withContext false
@@ -334,7 +474,7 @@ class RoomNoteRepository(
         val rawContent = readText(file)
         val frontMatter = NoteFormatUtils.parseFrontMatter(rawContent)
         val normalizedTags = NoteFormatUtils.normalizeTags(tags)
-        val rawTags = NoteFormatUtils.extractTags(rawContent)
+        val rawTags = NoteFormatUtils.extractTags(frontMatter)
         logYamlTagTrace(
             "writeYamlTags start path=${entity.filePath} title=${entity.title} rawTags=$rawTags dbTags=${NoteFormatUtils.tagsFromStorage(entity.yamlTags)} inputTags=$normalizedTags rawLen=${rawContent.length}",
         )
@@ -348,8 +488,10 @@ class RoomNoteRepository(
             existingRawContent = rawContent,
             replaceTags = true,
         )
+        val outputFrontMatter = NoteFormatUtils.parseFrontMatter(fullContent)
+        val outputTags = NoteFormatUtils.extractTags(outputFrontMatter)
         logYamlTagTrace(
-            "writeYamlTags prepared path=${entity.filePath} outputTags=${NoteFormatUtils.extractTags(fullContent)} outputLen=${fullContent.length}",
+            "writeYamlTags prepared path=${entity.filePath} outputTags=$outputTags outputLen=${fullContent.length}",
         )
         context.contentResolver.openOutputStream(file.uri, "wt")?.use { outputStream ->
             OutputStreamWriter(outputStream).use { writer -> writer.write(fullContent) }
@@ -360,7 +502,7 @@ class RoomNoteRepository(
         val writtenLastModified = file.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
         noteDao.insertNote(
             entity.copy(
-                recordId = NoteFormatUtils.extractKardLeafId(fullContent)?.takeIf { it.isNotBlank() } ?: entity.filePath,
+                recordId = NoteFormatUtils.extractKardLeafId(outputFrontMatter) ?: entity.filePath,
                 contentPreview = frontMatter.cleanContent.take(200),
                 content = frontMatter.cleanContent,
                 lastModifiedMs = writtenLastModified,
@@ -368,6 +510,7 @@ class RoomNoteRepository(
             ),
         )
         fileSignatures[entity.filePath] = FileSignature(writtenLastModified, file.length())
+        markWebDavRealtimeLocalDirty()
         logYamlTagTrace(
             "writeYamlTags done path=${entity.filePath} savedDbTags=${NoteFormatUtils.tagsFromStorage(NoteFormatUtils.tagsToStorage(normalizedTags))} lastModified=$writtenLastModified length=${file.length()}",
         )
@@ -388,6 +531,7 @@ class RoomNoteRepository(
             val newDir = getOrCreateFolder(root, name)
             if (newDir != null) {
                 labelDao.insert(LabelEntity(name))
+                markWebDavRealtimeLocalDirty()
                 return@withContext true
             }
             return@withContext false
@@ -406,6 +550,7 @@ class RoomNoteRepository(
             }
 
             labelDao.delete(name)
+            markWebDavRealtimeLocalDirty()
             return@withContext true
         }
 
@@ -418,17 +563,19 @@ class RoomNoteRepository(
             val folderPrefix = "$folder/%"
             val entities = noteDao.getNoteShellsInFolderTree(folder, folderPrefix)
                 .filter { !it.isTrashed }
-            val paths = entities.map { it.filePath }
-
             if (entities.isNotEmpty()) {
-                moveNoteEntitiesToSystemFolder(entities, isArchive = false)
-                entities.forEach { prefsManager.setNotePinned(it.filePath, false) }
-                entities.forEach { prefsManager.setNoteFavorite(it.filePath, false) }
-                noteDao.trashNotes(paths, System.currentTimeMillis())
+                val movedEntities = moveNoteEntitiesToSystemFolder(entities, isArchive = false)
+                if (movedEntities.isNotEmpty()) {
+                    movedEntities.forEach { prefsManager.setNotePinned(it.filePath, false) }
+                    movedEntities.forEach { prefsManager.setNoteFavorite(it.filePath, false) }
+                    noteDao.trashNotes(movedEntities.map { it.filePath }, System.currentTimeMillis())
+                }
+                if (movedEntities.size != entities.size) return@withContext false
             }
 
             deleteFolder(root, folder)
             labelDao.deleteTree(folder, folderPrefix)
+            markWebDavRealtimeLocalDirty()
             return@withContext true
         }
 
@@ -459,6 +606,7 @@ class RoomNoteRepository(
                 ?.renameTo(newSegment)
 
             refreshNotes()
+            markWebDavRealtimeLocalDirty()
             return@withContext true
         }
 
@@ -470,14 +618,24 @@ class RoomNoteRepository(
     suspend fun getCachedNote(id: String): Note? {
         return withContext(Dispatchers.IO) {
             val startMs = SystemClock.elapsedRealtime()
-            Log.d(LARGE_NOTE_OPEN_TRACE_TAG, "repo getCachedNote start path=$id")
+            KardLeafLog.d(LARGE_NOTE_OPEN_TRACE_TAG, "repo getCachedNote start path=$id")
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "internal cachedNote start path=$id thread=${Thread.currentThread().name}",
+            )
             // Do not read the full `content` column here. Very large notes can exceed
             // Android CursorWindow's per-row limit when Room executes SELECT *.
             val result = noteDao.getNoteShellByPath(id)?.toNote()
-            Log.d(
+            KardLeafLog.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo getCachedNote done path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
                     "contentLen=${result?.content?.length ?: -1} previewLen=${result?.contentPreview?.length ?: -1}",
+            )
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "internal cachedNote done path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                    "ok=${result != null} folder=${result?.folder} contentLen=${result?.content?.length ?: -1} " +
+                    "previewLen=${result?.contentPreview?.length ?: -1} thread=${Thread.currentThread().name}",
             )
             result
         }
@@ -486,49 +644,92 @@ class RoomNoteRepository(
     suspend fun getNoteForEditor(id: String): Note? {
         return withContext(Dispatchers.IO) {
             val startMs = SystemClock.elapsedRealtime()
-            Log.d(LARGE_NOTE_OPEN_TRACE_TAG, "repo getNoteForEditor start path=$id")
+            KardLeafLog.d(LARGE_NOTE_OPEN_TRACE_TAG, "repo getNoteForEditor start path=$id")
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "editorLoad start path=$id parent=${normalizeFolderPath(id.substringBeforeLast("/", missingDelimiterValue = ""))} " +
+                    "thread=${Thread.currentThread().name}",
+            )
             // Editor opening should load metadata from Room and full text from the
             // markdown file, instead of selecting a huge cached content column.
             val entityQueryStartMs = SystemClock.elapsedRealtime()
             val entity = noteDao.getNoteShellByPath(id) ?: run {
-                Log.w(LARGE_NOTE_OPEN_TRACE_TAG, "repo getNoteForEditor no entity path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms entityQueryElapsed=${SystemClock.elapsedRealtime() - entityQueryStartMs}ms")
+                KardLeafLog.w(LARGE_NOTE_OPEN_TRACE_TAG, "repo getNoteForEditor no entity path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms entityQueryElapsed=${SystemClock.elapsedRealtime() - entityQueryStartMs}ms")
+                KardLeafLog.w(
+                    OPEN_PATH_PROBE_TAG,
+                    "internal entity missing path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                        "entityQueryElapsed=${SystemClock.elapsedRealtime() - entityQueryStartMs}ms",
+                )
                 return@withContext null
             }
-            Log.d(
+            KardLeafLog.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo getNoteForEditor entity query done path=$id entityQueryElapsed=${SystemClock.elapsedRealtime() - entityQueryStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
             )
-            Log.d(
+            KardLeafLog.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo getNoteForEditor entity path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
                     "entityContentLen=${entity.content.length} entityPreviewLen=${entity.contentPreview.length}",
             )
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "internal entity done path=$id folder=${entity.folder} fileName=${entity.fileName} archived=${entity.isArchived} " +
+                    "trashed=${entity.isTrashed} pinned=${entity.isPinned} entityQueryElapsed=${SystemClock.elapsedRealtime() - entityQueryStartMs}ms " +
+                    "contentLen=${entity.content.length} previewLen=${entity.contentPreview.length}",
+            )
             val findFileStartMs = SystemClock.elapsedRealtime()
-            val file = findNoteDocument(entity) ?: findDocumentByPath(id) ?: run {
-                Log.w(
-                    LARGE_NOTE_OPEN_TRACE_TAG,
-                    "repo getNoteForEditor no file path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
-                        "findFileElapsed=${SystemClock.elapsedRealtime() - findFileStartMs}ms returnEntityContentLen=${entity.content.length}",
-                )
-                return@withContext entity.toNote()
-            }
-            Log.d(
+            KardLeafLog.d(OPEN_PATH_PROBE_TAG, "external locate start path=$id folder=${entity.folder} fileName=${entity.fileName}")
+            val file = findNoteDocumentDirectFirst(entity, traceReason = "getNoteForEditor")
+                ?: findDocumentByPath(id, traceReason = "getNoteForEditor.fallbackPath")
+                ?: run {
+                    KardLeafLog.w(
+                        LARGE_NOTE_OPEN_TRACE_TAG,
+                        "repo getNoteForEditor no file path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                            "findFileElapsed=${SystemClock.elapsedRealtime() - findFileStartMs}ms",
+                    )
+                    KardLeafLog.w(
+                        OPEN_PATH_PROBE_TAG,
+                        "external locate missing path=$id folder=${entity.folder} fileName=${entity.fileName} " +
+                            "findFileElapsed=${SystemClock.elapsedRealtime() - findFileStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                    )
+                    return@withContext null
+                }
+            KardLeafLog.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo getNoteForEditor find file done path=$id findFileElapsed=${SystemClock.elapsedRealtime() - findFileStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
             )
-            Log.d(
+            KardLeafLog.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo getNoteForEditor file path=$id name=${file.name} length=${file.length()} lastModified=${file.lastModified()} " +
                     "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
             )
-            val result = readNoteFromFileForEditor(entity, file).toNote()
-            Log.d(
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external locate done path=$id fileName=${file.name} uri=${file.uri} " +
+                    "length=${file.length()} lastModified=${file.lastModified()} " +
+                    "findFileElapsed=${SystemClock.elapsedRealtime() - findFileStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            val result = readNoteFromFileForEditor(entity, file)?.toNote() ?: return@withContext null
+            KardLeafLog.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo getNoteForEditor done path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
                     "contentLen=${result.content.length} previewLen=${result.contentPreview.length}",
             )
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "editorLoad done path=$id elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
+                    "contentLen=${result.content.length} previewLen=${result.contentPreview.length} folder=${result.folder}",
+            )
             result
         }
+    }
+
+    suspend fun getNoteForShare(id: String): Note? {
+        val note = getNoteForEditor(id)
+        logRoomContentAudit(
+            "share external markdown full read success=${note != null} fullLen=${note?.content?.length ?: -1}",
+        )
+        return note
     }
 
     override suspend fun getNote(id: String): Note? {
@@ -536,13 +737,15 @@ class RoomNoteRepository(
             // Do not SELECT * here. This method is also used by editor side panels
             // and external-open paths, and large cached content can exceed CursorWindow.
             val entity = noteDao.getNoteShellByPath(id) ?: return@withContext null
-            val file = findNoteDocument(entity) ?: findDocumentByPath(id) ?: run {
-                return@withContext entity.toNote()
-            }
+            val file = findNoteDocumentDirectFirst(entity, traceReason = "getNote")
+                ?: findDocumentByPath(id, traceReason = "getNote.fallbackPath")
+                ?: run {
+                    return@withContext entity.toNote()
+                }
             val fileModified = file.lastModified()
-            val updated = readNoteFromFileForEditor(entity, file).copy(
+            val updated = readNoteFromFileForEditor(entity, file)?.copy(
                 lastModifiedMs = fileModified.takeIf { it > 0L } ?: System.currentTimeMillis(),
-            )
+            ) ?: return@withContext null
             if (fileModified > 0L && fileModified != entity.lastModifiedMs) {
                 noteDao.insertNote(updated)
             }
@@ -577,117 +780,145 @@ class RoomNoteRepository(
                 targetDir = targetDir.findFile("Archived") ?: targetDir.createDirectory("Archived") ?: targetDir
             }
 
-            var baseTitle = note.title.trim().ifEmpty { "Untitled" }
-            var finalFileName = "$baseTitle.md"
-
-            var conflict = false
-            var targetFileDoc = targetDir.findFile(finalFileName)
-
-            if (targetFileDoc != null) {
-                if (oldFile != null && oldFile.name == finalFileName) {
-                    conflict = false
-                } else {
-                    conflict = true
-                }
-            }
-
-            var counter = 1
+            val baseTitle = NoteFormatUtils.sanitizeMarkdownFileBaseName(note.title)
             var finalTitle = baseTitle
-            while (conflict) {
-                finalTitle = "$baseTitle ($counter)"
-                finalFileName = "$finalTitle.md"
-                targetFileDoc = targetDir.findFile(finalFileName)
-                if (targetFileDoc == null) conflict = false else counter++
-            }
+            var finalFileName = "$finalTitle.md"
 
-            val filePath = joinPath(folderName, finalFileName)
-            logYamlTagTrace(
-                "saveNote start targetPath=$filePath oldFile=${oldFile?.path} noteTitle=${note.title} noteTags=${note.tags} noteContentLen=${note.content.length} saveHistory=$saveHistory",
-            )
             var previousPath: String? = null
             var previousRawContent: String? = null
+            var previousRawTags: List<String> = emptyList()
             var previousDbTags: List<String> = emptyList()
+            var oldFileDoc: DocumentFile? = null
 
             if (oldFile != null) {
                 val oldName = oldFile.name
                 val oldParentName = normalizeFolderPath(oldFile.parent.orEmpty())
                 previousPath = joinPath(oldParentName, oldName)
-                val previousEntity = noteDao.getNoteByPath(previousPath)
+                val previousEntity = getFullNoteEntityByPathForAudit(previousPath, "save-history-snapshot")
                 previousDbTags = NoteFormatUtils.tagsFromStorage(previousEntity?.yamlTags)
                 logYamlTagTrace(
                     "saveNote oldEntity path=$previousPath exists=${previousEntity != null} oldDbTags=${previousEntity?.yamlTags?.let { NoteFormatUtils.tagsFromStorage(it) }.orEmpty()} oldTitle=${previousEntity?.title}",
                 )
 
-                if (saveHistory && previousEntity != null && hasTitleOrContentChanged(previousEntity, note)) {
-                    saveHistorySnapshot(previousEntity)
-                }
-
                 val folderDoc = findFolder(root, oldParentName)
                 val trashDoc = getTrashRoot(root, create = false)?.let { findFolder(it, oldParentName) }
 
-                var oldFileDoc: DocumentFile? = folderDoc?.findFile(oldName)
+                oldFileDoc = folderDoc?.findFile(oldName)
                     ?: folderDoc?.findFile("Pinned")?.findFile(oldName)
                     ?: folderDoc?.findFile("Archived")?.findFile(oldName)
                     ?: trashDoc?.findFile(oldName)
 
-                previousRawContent = oldFileDoc?.let { readText(it) }
+                val historySnapshotContentSource = readHistorySnapshotContentSource(oldFileDoc)
+                previousRawContent = historySnapshotContentSource.rawContent
+                previousRawTags = historySnapshotContentSource.tags
                 logYamlTagTrace(
-                    "saveNote oldFileDoc path=$previousPath found=${oldFileDoc != null} oldRawLen=${previousRawContent?.length ?: -1} oldRawTags=${previousRawContent?.let { NoteFormatUtils.extractTags(it) }.orEmpty()} targetExistsBeforeCreate=${targetFileDoc != null}",
+                    "saveNote oldFileDoc path=$previousPath found=${oldFileDoc != null} oldRawLen=${previousRawContent?.length ?: -1} oldRawTags=$previousRawTags",
                 )
 
-                if (oldFileDoc != null && oldFileDoc.uri != targetFileDoc?.uri) {
-                    if (oldName != finalFileName || oldFileDoc.parentFile?.name != targetDir.name) {
-                        logYamlTagTrace("saveNote deleting old file oldPath=${joinPath(oldParentName, oldName)} newPath=$filePath oldName=$oldName finalFileName=$finalFileName")
-                        oldFileDoc.delete()
-                        noteDao.deleteNoteByPath(joinPath(oldParentName, oldName))
-                    }
+                if (saveHistory &&
+                    previousEntity != null &&
+                    hasTitleOrContentChanged(previousEntity, note, historySnapshotContentSource.cleanContent)
+                ) {
+                    saveHistorySnapshot(
+                        entity = previousEntity,
+                        externalContent = historySnapshotContentSource.cleanContent,
+                        externalFallbackReason = historySnapshotContentSource.fallbackReason,
+                    )
                 }
             }
 
-            if (targetFileDoc == null) {
-                targetFileDoc = targetDir.createFile("text/markdown", finalFileName)
+            var targetFileDoc = targetDir.findFile(finalFileName)
+            var filePath = joinPath(folderName, finalFileName)
+            var counter = 1
+            while (true) {
+                val sameFile = targetFileDoc != null && oldFileDoc != null && targetFileDoc.uri == oldFileDoc.uri
+                val fileConflict = targetFileDoc != null && !sameFile
+                val dbConflict = filePath != previousPath && noteDao.getNoteShellByPath(filePath) != null
+                if (!fileConflict && !dbConflict) break
+
+                finalTitle = "$baseTitle ($counter)"
+                finalFileName = "$finalTitle.md"
+                filePath = joinPath(folderName, finalFileName)
+                targetFileDoc = targetDir.findFile(finalFileName)
+                counter++
             }
 
-            val targetRawContent = targetFileDoc?.let { readText(it) }
+            logYamlTagTrace(
+                "saveNote start targetPath=$filePath oldFile=${oldFile?.path} noteTitle=${note.title} noteTags=${note.tags} noteContentLen=${note.content.length} saveHistory=$saveHistory",
+            )
+
+            val createdNewFile = targetFileDoc == null
+            if (createdNewFile) {
+                targetFileDoc = targetDir.createFile("text/markdown", finalFileName)
+            }
+            val writableTarget = targetFileDoc ?: run {
+                KardLeafLog.e("RoomNoteRepository", "Failed to create note file: $filePath")
+                return@withContext ""
+            }
+
+            val targetRawContent = if (createdNewFile) null else readText(writableTarget)
+            val targetFrontMatter = targetRawContent?.let(NoteFormatUtils::parseFrontMatter)
+            val targetTags = targetFrontMatter?.let { NoteFormatUtils.extractTags(it) }.orEmpty()
             val existingContent =
                 if (previousPath != null && previousPath != filePath && !previousRawContent.isNullOrBlank()) {
                     previousRawContent
                 } else {
                     targetRawContent ?: previousRawContent
                 }
+            val existingTags =
+                when {
+                    existingContent == null -> emptyList()
+                    previousRawContent != null && existingContent == previousRawContent -> previousRawTags
+                    targetRawContent != null && existingContent == targetRawContent -> targetTags
+                    else -> NoteFormatUtils.extractTags(existingContent)
+                }
             val preservedTags =
                 if (note.tags.isEmpty()) {
-                    NoteFormatUtils.extractTags(existingContent.orEmpty()).ifEmpty { previousDbTags }
+                    existingTags.ifEmpty { previousDbTags }
                 } else {
                     note.tags
                 }
             val noteForWrite = if (preservedTags == note.tags) note else note.copy(tags = preservedTags)
             logYamlTagTrace(
-                "saveNote contentSource targetPath=$filePath previousPath=$previousPath targetLen=${targetRawContent?.length ?: -1} targetTags=${targetRawContent?.let { NoteFormatUtils.extractTags(it) }.orEmpty()} existingLen=${existingContent?.length ?: -1} existingTags=${existingContent?.let { NoteFormatUtils.extractTags(it) }.orEmpty()} previousLen=${previousRawContent?.length ?: -1} previousTags=${previousRawContent?.let { NoteFormatUtils.extractTags(it) }.orEmpty()} previousDbTags=$previousDbTags preservedTags=$preservedTags",
+                "saveNote contentSource targetPath=$filePath previousPath=$previousPath targetLen=${targetRawContent?.length ?: -1} targetTags=$targetTags existingLen=${existingContent?.length ?: -1} existingTags=$existingTags previousLen=${previousRawContent?.length ?: -1} previousTags=$previousRawTags previousDbTags=$previousDbTags preservedTags=$preservedTags",
             )
-            val fullContent = NoteFormatUtils.constructFileContent(noteForWrite, existingContent)
-            val noteRecordId = NoteFormatUtils.extractKardLeafId(fullContent)?.takeIf { it.isNotBlank() } ?: filePath
-            val outputTags = NoteFormatUtils.extractTags(fullContent)
+            val fullContent = NoteFormatUtils.constructFileContent(noteForWrite, existingContent, replaceTags = true)
+            val outputFrontMatter = NoteFormatUtils.parseFrontMatter(fullContent)
+            val noteRecordId = NoteFormatUtils.extractKardLeafId(outputFrontMatter) ?: filePath
+            val outputTags = NoteFormatUtils.extractTags(outputFrontMatter)
             val writtenYamlTags = NoteFormatUtils.tagsToStorage(outputTags)
             logYamlTagTrace(
                 "saveNote output targetPath=$filePath recordId=$noteRecordId outputTags=$outputTags writtenYamlTags=${NoteFormatUtils.tagsFromStorage(writtenYamlTags)} outputLen=${fullContent.length}",
             )
 
             val writtenLastModified =
-                targetFileDoc?.let { doc ->
-                    context.contentResolver.openOutputStream(doc.uri, "wt")?.use { outputStream ->
+                try {
+                    context.contentResolver.openOutputStream(writableTarget.uri, "wt")?.use { outputStream ->
                         OutputStreamWriter(outputStream).use { writer ->
                             writer.write(fullContent)
                         }
-                    }
+                    } ?: throw IOException("openOutputStream returned null")
                     lastLocalWriteElapsedMs = SystemClock.elapsedRealtime()
-                    updateTextCache(doc, fullContent)
-                    doc.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
-                } ?: System.currentTimeMillis()
+                    updateTextCache(writableTarget, fullContent)
+                    writableTarget.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
+                } catch (e: Exception) {
+                    KardLeafLog.e("RoomNoteRepository", "Failed to write note file: $filePath", e)
+                    if (createdNewFile && previousPath != filePath) {
+                        writableTarget.delete()
+                    }
+                    return@withContext ""
+                }
+
+            val oldPathToRemove =
+                previousPath?.takeIf { it != filePath && oldFileDoc != null && oldFileDoc.uri != writableTarget.uri }
+            if (oldPathToRemove != null && oldFileDoc?.delete() != true) {
+                KardLeafLog.e("RoomNoteRepository", "Failed to delete old note file after save: $oldPathToRemove")
+                return@withContext ""
+            }
 
             val createdAtMs =
-                previousPath?.let { noteDao.getNoteByPath(it)?.createdAtMs }
-                    ?: noteDao.getNoteByPath(filePath)?.createdAtMs
+                previousPath?.let { noteDao.getNoteShellByPath(it)?.createdAtMs }
+                    ?: noteDao.getNoteShellByPath(filePath)?.createdAtMs
                     ?: note.createdAt.time
             val entity =
                 NoteEntity(
@@ -711,12 +942,11 @@ class RoomNoteRepository(
                     yamlTags = writtenYamlTags,
                 )
             noteDao.insertNote(entity)
+            oldPathToRemove?.let { noteDao.deleteNoteByPath(it) }
             logYamlTagTrace(
                 "saveNote dbInserted path=$filePath dbTags=${NoteFormatUtils.tagsFromStorage(entity.yamlTags)} createdAtMs=$createdAtMs lastModifiedMs=$writtenLastModified",
             )
-            targetFileDoc?.let { doc ->
-                fileSignatures[filePath] = FileSignature(writtenLastModified, doc.length())
-            }
+            fileSignatures[filePath] = FileSignature(writtenLastModified, writableTarget.length())
             syncNoteRecordsWithResolvedId(filePath, noteRecordId)
             previousPath?.takeIf { it != filePath }?.let {
                 logYamlTagTrace("saveNote pathChanged oldPath=$it newPath=$filePath recordId=$noteRecordId outputTags=$outputTags")
@@ -725,16 +955,22 @@ class RoomNoteRepository(
                 prefsManager.replaceFavoriteNotePath(it, filePath)
                 if (noteRecordId == filePath) {
                     noteHistoryDao.replaceNoteId(it, filePath)
-                    noteRemarkDao.deleteByNoteId(filePath)
                     noteRemarkDao.replaceNoteId(it, filePath)
-                    noteHistoryDao.pruneOldVersions(filePath, prefsManager.getHistoryVersionLimit())
+                    val historyLimit = prefsManager.getHistoryVersionLimit()
+                    if (historyLimit > 0) {
+                        noteHistoryDao.pruneOldVersions(filePath, historyLimit)
+                    }
                 } else {
                     syncNoteRecordsWithResolvedId(it, noteRecordId)
-                    noteHistoryDao.pruneOldVersions(noteRecordId, prefsManager.getHistoryVersionLimit())
+                    val historyLimit = prefsManager.getHistoryVersionLimit()
+                    if (historyLimit > 0) {
+                        noteHistoryDao.pruneOldVersions(noteRecordId, historyLimit)
+                    }
                 }
             }
             prefsManager.setNotePinned(filePath, note.isPinned && !note.isArchived && !note.isTrashed)
             prefsManager.setNoteFavorite(filePath, note.isFavorite && !note.isTrashed)
+            markWebDavRealtimeLocalDirty()
 
             return@withContext filePath
         }
@@ -755,12 +991,36 @@ class RoomNoteRepository(
     }
 
     override fun searchHistoryPreview(query: String): Flow<List<NoteHistory>> {
-        return noteHistoryDao.searchHistoryPreview(query).map { histories ->
+        val safeQuery = query.trim()
+        val meaningful = SearchQueryUtils.isMeaningfulSearchQuery(safeQuery)
+        KardLeafLog.d(SEARCH_TRACE_TAG, "history request ${SearchQueryUtils.describeForLog(query)}")
+        if (!meaningful) {
+            KardLeafLog.d(SEARCH_TRACE_TAG, "history skip reason=notMeaningful ${SearchQueryUtils.describeForLog(query)}")
+            return flowOf(emptyList())
+        }
+        return noteHistoryDao.searchHistoryPreview(safeQuery, SEARCH_RESULT_LIMIT).map { histories ->
+            KardLeafLog.d(SEARCH_TRACE_TAG, "history result queryLen=${safeQuery.length} count=${histories.size}")
             histories.map { it.toNoteHistory() }
         }
     }
 
-    override fun searchNoteIds(query: String): Flow<List<String>> = noteDao.searchNoteIds(query)
+    override fun searchNoteMatches(query: String): Flow<List<NoteSearchMatch>> {
+        val safeQuery = query.trim()
+        val meaningful = SearchQueryUtils.isMeaningfulSearchQuery(safeQuery)
+        KardLeafLog.d(SEARCH_TRACE_TAG, "notes request ${SearchQueryUtils.describeForLog(query)}")
+        if (!meaningful) {
+            KardLeafLog.d(SEARCH_TRACE_TAG, "notes skip reason=notMeaningful ${SearchQueryUtils.describeForLog(query)}")
+            return flowOf(emptyList())
+        }
+        return noteDao.searchNoteMatches(safeQuery, SEARCH_RESULT_LIMIT).map { matches ->
+            KardLeafLog.d(
+                SEARCH_TRACE_TAG,
+                "notes result queryLen=${safeQuery.length} count=${matches.size} " +
+                    "first=${matches.firstOrNull()?.let { it.scope + ":" + it.startOffset }}",
+            )
+            matches
+        }
+    }
 
     suspend fun exportUserDataBackup(): String =
         withContext(Dispatchers.IO) {
@@ -837,7 +1097,7 @@ class RoomNoteRepository(
         historyId: Long,
     ): String =
         withContext(Dispatchers.IO) {
-            val current = noteDao.getNoteByPath(noteId) ?: return@withContext ""
+            val current = noteDao.getNoteShellByPath(noteId) ?: return@withContext ""
             val recordId = resolveNoteRecordId(noteId)
             val history = noteHistoryDao.getHistoryById(historyId) ?: return@withContext ""
             if (history.noteId != recordId && history.noteId != noteId) return@withContext ""
@@ -893,7 +1153,9 @@ class RoomNoteRepository(
     suspend fun getNoteFrontMatterProperties(noteId: String): List<NoteFormatUtils.FrontMatterProperty> =
         withContext(Dispatchers.IO) {
             val entity = noteDao.getNoteShellByPath(noteId) ?: return@withContext emptyList()
-            val file = findNoteDocument(entity) ?: findDocumentByPath(noteId) ?: return@withContext emptyList()
+            val file = findNoteDocumentDirectFirst(entity, traceReason = "getNoteFrontMatterProperties")
+                ?: findDocumentByPath(noteId, traceReason = "getNoteFrontMatterProperties.fallbackPath")
+                ?: return@withContext emptyList()
             NoteFormatUtils.extractFrontMatterProperties(readText(file))
         }
 
@@ -901,7 +1163,8 @@ class RoomNoteRepository(
     suspend fun getNoteTextStatsForProperties(noteId: String): NoteTextStats =
         withContext(Dispatchers.IO) {
             val entity = noteDao.getNoteShellByPath(noteId) ?: return@withContext NoteTextStats()
-            val file = findNoteDocument(entity) ?: findDocumentByPath(noteId)
+            val file = findNoteDocumentDirectFirst(entity, traceReason = "getNoteTextStatsForProperties")
+                ?: findDocumentByPath(noteId, traceReason = "getNoteTextStatsForProperties.fallbackPath")
             if (file != null) {
                 countTextStatsFromDocument(file)
             } else {
@@ -918,7 +1181,7 @@ class RoomNoteRepository(
                 }
             } ?: NoteTextStats()
         } catch (e: Exception) {
-            android.util.Log.e("RoomNoteRepository", "Exception counting markdown text stats.", e)
+            KardLeafLog.e("RoomNoteRepository", "Exception counting markdown text stats.", e)
             NoteTextStats()
         }
     }
@@ -938,6 +1201,18 @@ class RoomNoteRepository(
             )
             recordId
         }
+
+    suspend fun updateNoteRemark(
+        remarkId: Long,
+        content: String,
+    ) = withContext(Dispatchers.IO) {
+        if (remarkId <= 0L || content.isBlank()) return@withContext
+        noteRemarkDao.updateContent(
+            id = remarkId,
+            content = content,
+            updatedAtMs = System.currentTimeMillis(),
+        )
+    }
 
     suspend fun deleteNoteRemark(remarkId: Long) =
         withContext(Dispatchers.IO) {
@@ -1026,7 +1301,7 @@ class RoomNoteRepository(
         contentOverride: String? = null,
     ): Boolean =
         withContext(Dispatchers.IO) {
-            val entity = noteDao.getNoteByPath(noteId) ?: return@withContext false
+            val entity = getFullNoteEntityByPathForAudit(noteId, "move-note-to-privacy-fallback") ?: return@withContext false
             val latestNote = getNote(noteId)
             val title = titleOverride?.trim()?.takeIf { it.isNotBlank() }
                 ?: latestNote?.title?.takeIf { it.isNotBlank() }
@@ -1051,6 +1326,7 @@ class RoomNoteRepository(
             prefsManager.setNotePinned(noteId, false)
             prefsManager.setNoteFavorite(noteId, false)
             fileSignatures.remove(noteId)
+            markWebDavRealtimeLocalDirty()
             true
         }
 
@@ -1103,36 +1379,42 @@ class RoomNoteRepository(
 
     override suspend fun deleteNote(id: String) =
         withContext(Dispatchers.IO) {
-            moveNoteToSystemFolder(id, isArchive = false)
+            if (!moveNoteToSystemFolder(id, isArchive = false)) return@withContext
             prefsManager.setNotePinned(id, false)
             prefsManager.setNoteFavorite(id, false)
             noteDao.trashNote(id, System.currentTimeMillis())
+            markWebDavRealtimeLocalDirty()
         }
 
     override suspend fun deleteNotes(noteIds: List<String>) =
         withContext(Dispatchers.IO) {
             val entities = noteDao.getNoteShellsByPaths(noteIds)
             if (entities.isEmpty()) return@withContext
-            moveNoteEntitiesToSystemFolder(entities, isArchive = false)
-            entities.forEach { prefsManager.setNotePinned(it.filePath, false) }
-            entities.forEach { prefsManager.setNoteFavorite(it.filePath, false) }
-            noteDao.trashNotes(entities.map { it.filePath }, System.currentTimeMillis())
+            val movedEntities = moveNoteEntitiesToSystemFolder(entities, isArchive = false)
+            if (movedEntities.isEmpty()) return@withContext
+            movedEntities.forEach { prefsManager.setNotePinned(it.filePath, false) }
+            movedEntities.forEach { prefsManager.setNoteFavorite(it.filePath, false) }
+            noteDao.trashNotes(movedEntities.map { it.filePath }, System.currentTimeMillis())
+            markWebDavRealtimeLocalDirty()
         }
 
     override suspend fun archiveNote(id: String) =
         withContext(Dispatchers.IO) {
-            moveNoteToSystemFolder(id, isArchive = true)
+            if (!moveNoteToSystemFolder(id, isArchive = true)) return@withContext
             prefsManager.setNotePinned(id, false)
             noteDao.archiveNote(id)
+            markWebDavRealtimeLocalDirty()
         }
 
     override suspend fun archiveNotes(noteIds: List<String>) =
         withContext(Dispatchers.IO) {
             val entities = noteDao.getNoteShellsByPaths(noteIds)
             if (entities.isEmpty()) return@withContext
-            moveNoteEntitiesToSystemFolder(entities, isArchive = true)
-            entities.forEach { prefsManager.setNotePinned(it.filePath, false) }
-            noteDao.archiveNotes(entities.map { it.filePath })
+            val movedEntities = moveNoteEntitiesToSystemFolder(entities, isArchive = true)
+            if (movedEntities.isEmpty()) return@withContext
+            movedEntities.forEach { prefsManager.setNotePinned(it.filePath, false) }
+            noteDao.archiveNotes(movedEntities.map { it.filePath })
+            markWebDavRealtimeLocalDirty()
         }
 
     override suspend fun restoreNote(id: String) =
@@ -1153,19 +1435,13 @@ class RoomNoteRepository(
             val archiveSource = findFolder(root, folder)?.findFile("Archived")?.findFile(fileName)
             val sourceFile = deletedSource ?: archiveSource
 
-            if (sourceFile != null) {
-                val targetFolder = getOrCreateFolder(root, folder)
-                val content = readText(sourceFile)
-                val newFile = targetFolder?.createFile("text/markdown", fileName)
-                newFile?.let { nf ->
-                    context.contentResolver.openOutputStream(nf.uri)?.use { os ->
-                        OutputStreamWriter(os).use { it.write(content) }
-                    }
-                    sourceFile.delete()
-                }
+            val targetFolder = getOrCreateFolder(root, folder) ?: return@withContext
+            if (sourceFile == null || !moveMarkdownDocument(sourceFile, targetFolder, fileName, "restoreNote")) {
+                return@withContext
             }
 
             noteDao.restoreNote(id)
+            markWebDavRealtimeLocalDirty()
         }
 
     override suspend fun togglePinStatus(
@@ -1211,19 +1487,14 @@ class RoomNoteRepository(
             val isTrashed = it.isTrashed
             val isPinned = it.isPinned
 
-            val effectiveRoot =
-                when {
-                    isTrashed -> getTrashRoot(root, create = false)
-                    else -> root
-                }
-
-            val sourceFolderDoc = effectiveRoot?.let { rootDoc -> findFolder(rootDoc, sourceFolder) }
-            var sourceFile = sourceFolderDoc?.findFile(fileName)
-            if (sourceFile == null && !isTrashed && !isArchived) {
-                sourceFile = sourceFolderDoc?.findFile("Pinned")?.findFile(fileName)
-            } else if (isArchived && !isTrashed) {
-                sourceFile = sourceFolderDoc?.findFile("Archived")?.findFile(fileName)
-            }
+            val sourceFile = findMoveSourceDocument(
+                root = root,
+                folder = sourceFolder,
+                fileName = fileName,
+                isArchived = isArchived,
+                isTrashed = isTrashed,
+                isPinned = isPinned,
+            )
 
             var targetRoot =
                 when {
@@ -1240,7 +1511,7 @@ class RoomNoteRepository(
             if (sourceFile != null && targetFolderDoc != null) {
                 try {
                     // 如果源和目标在同一文件夹，跳过
-                    if (sourceFolder == targetFolder && !isArchived) {
+                    if (sourceFolder == targetFolder) {
                         return@forEach
                     }
 
@@ -1266,19 +1537,35 @@ class RoomNoteRepository(
                     }
 
                     val newFile = targetFolderDoc.createFile("text/markdown", resolvedFileName)
-                    newFile?.let { nf ->
-                        context.contentResolver.openOutputStream(nf.uri)?.use { os ->
+                    if (newFile == null) {
+                        KardLeafLog.e("RoomNoteRepository", "Failed to create moved note: $resolvedFileName")
+                        return@forEach
+                    }
+                    try {
+                        context.contentResolver.openOutputStream(newFile.uri)?.use { os ->
                             OutputStreamWriter(os).use { it.write(content) }
-                        }
-                        sourceFile.delete()
+                        } ?: throw IOException("openOutputStream returned null")
+                    } catch (e: Exception) {
+                        KardLeafLog.e("RoomNoteRepository", "Failed to write moved note: $resolvedFileName", e)
+                        newFile.delete()
+                        return@forEach
+                    }
+                    if (!sourceFile.delete()) {
+                        KardLeafLog.e("RoomNoteRepository", "Failed to delete moved source note: $fileName")
+                        newFile.delete()
+                        return@forEach
                     }
 
                     val oldPath = joinPath(sourceFolder, fileName)
                     val newPath = joinPath(targetFolder, resolvedFileName)
-                    val entity = noteDao.getNoteByPath(oldPath)
+                    val entity = getFullNoteEntityByPathForAudit(oldPath, "move-note-copy-cached-content")
                     if (entity != null) {
+                        val movedRecordId =
+                            NoteFormatUtils.extractKardLeafId(NoteFormatUtils.parseFrontMatter(content))
+                                ?: entity.recordId.takeIf { recordId -> recordId.isNotBlank() && recordId != oldPath }
+                                ?: newPath
                         noteDao.deleteNoteByPath(oldPath)
-                        noteDao.insertNote(entity.copy(filePath = newPath, folder = targetFolder, fileName = resolvedFileName))
+                        noteDao.insertNote(entity.copy(filePath = newPath, recordId = movedRecordId, folder = targetFolder, fileName = resolvedFileName))
                         movedPaths += MovedNotePath(oldPath = oldPath, newPath = newPath)
                         if (isPinned) {
                             prefsManager.replacePinnedNotePath(oldPath, newPath)
@@ -1286,14 +1573,22 @@ class RoomNoteRepository(
                         if (entity.isFavorite) {
                             prefsManager.replaceFavoriteNotePath(oldPath, newPath)
                         }
-                        noteHistoryDao.replaceNoteId(oldPath, newPath)
-                        noteRemarkDao.deleteByNoteId(newPath)
-                        noteRemarkDao.replaceNoteId(oldPath, newPath)
+                        if (movedRecordId == newPath) {
+                            noteHistoryDao.replaceNoteId(oldPath, newPath)
+                            noteRemarkDao.replaceNoteId(oldPath, newPath)
+                        } else {
+                            noteHistoryDao.replaceNoteId(oldPath, movedRecordId)
+                            noteRemarkDao.replaceNoteId(oldPath, movedRecordId)
+                            syncNoteRecordsWithResolvedId(newPath, movedRecordId)
+                        }
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("RoomNoteRepository", "Failed to move note: $fileName", e)
+                    KardLeafLog.e("RoomNoteRepository", "Failed to move note: $fileName", e)
                 }
             }
+        }
+        if (movedPaths.isNotEmpty()) {
+            markWebDavRealtimeLocalDirty()
         }
         movedPaths
     }
@@ -1340,11 +1635,11 @@ class RoomNoteRepository(
             return null
         }
 
-        val existing = noteDao.getNoteByPath(path)
+        val existing = noteDao.getNoteShellByPath(path)
         val file =
             preferredFile?.takeIf { it.isFile }
-                ?: existing?.let { findNoteDocument(it) }
-                ?: findDocumentByPath(path)
+                ?: existing?.let { findNoteDocumentDirectFirst(it, traceReason = "refreshSingleNoteByPath") }
+                ?: findDocumentByPath(path, traceReason = "refreshSingleNoteByPath.fallbackPath")
 
         if (file == null || !file.isFile) {
             if (existing != null) {
@@ -1373,8 +1668,8 @@ class RoomNoteRepository(
     ): NoteEntity {
         val rawContent = readText(file, bypassCache = bypassCache)
         val frontMatter = NoteFormatUtils.parseFrontMatter(rawContent)
-        val parsedYamlTags = NoteFormatUtils.extractTags(rawContent)
-        val parsedRecordId = NoteFormatUtils.extractKardLeafId(rawContent)?.takeIf { it.isNotBlank() } ?: path
+        val parsedYamlTags = NoteFormatUtils.extractTags(frontMatter)
+        val parsedRecordId = NoteFormatUtils.extractKardLeafId(frontMatter) ?: path
         val existingYamlTags = existing?.yamlTags?.let { NoteFormatUtils.tagsFromStorage(it) }.orEmpty()
         if (parsedYamlTags.isNotEmpty() || existingYamlTags.isNotEmpty()) {
             logYamlTagTrace("upsertNoteFromDocument path=$path parsedTags=$parsedYamlTags existingDbTags=$existingYamlTags rawLen=${rawContent.length} bypassCache=$bypassCache")
@@ -1412,7 +1707,7 @@ class RoomNoteRepository(
         return entity
     }
 
-    private suspend fun refreshNotesInternal(forceReloadIfMetadataUnchanged: Boolean) =
+    private suspend fun refreshNotesInternal(forceReloadIfMetadataUnchanged: Boolean): Unit =
         withContext(Dispatchers.IO) {
             val refreshStartMs = SystemClock.elapsedRealtime()
             val root = rootDir ?: run {
@@ -1420,12 +1715,17 @@ class RoomNoteRepository(
                 return@withContext
             }
             if (!refreshMutex.tryLock()) {
+                pendingRefresh.set(true)
+                if (forceReloadIfMetadataUnchanged) {
+                    pendingRefreshForceReload.set(true)
+                }
                 logStartupPerf("refreshNotesInternal skip busy force=$forceReloadIfMetadataUnchanged")
                 return@withContext
             }
 
             var indexingContinuesInBackground = false
             try {
+                val generation = refreshGeneration.incrementAndGet()
                 _isIndexing.value = true
                 logStartupPerf("refreshNotesInternal start force=$forceReloadIfMetadataUnchanged thread=${Thread.currentThread().name}")
                 // 1. Get current DB state
@@ -1458,7 +1758,7 @@ class RoomNoteRepository(
                         "refreshNotesInternal scan done files=${fsFiles.size} elapsed=${SystemClock.elapsedRealtime() - scanStartMs}ms total=${SystemClock.elapsedRealtime() - refreshStartMs}ms",
                     )
                 } catch (e: Exception) {
-                    android.util.Log.e("RoomNoteRepository", "Error scanning root structure", e)
+                    KardLeafLog.e("RoomNoteRepository", "Error scanning root structure", e)
                     logStartupPerf("refreshNotesInternal scan failed elapsed=${SystemClock.elapsedRealtime() - scanStartMs}ms")
                 }
 
@@ -1568,7 +1868,7 @@ class RoomNoteRepository(
                     labelDao.deleteAll()
                     labelDao.insertAll(currentLabels.map { LabelEntity(it) })
                 } catch (e: Exception) {
-                    android.util.Log.e("RoomNoteRepository", "Error syncing labels", e)
+                    KardLeafLog.e("RoomNoteRepository", "Error syncing labels", e)
                 }
 
                 fileSignatures.clear()
@@ -1588,6 +1888,7 @@ class RoomNoteRepository(
                                 targets = contentTargets,
                                 existing = dbNotes,
                                 bypassCache = shouldForceReloadAllContent,
+                                generation = generation,
                             )
                         } finally {
                             _isIndexing.value = false
@@ -1600,13 +1901,18 @@ class RoomNoteRepository(
                     logStartupPerf("refreshNotesInternal indexing not needed total=${SystemClock.elapsedRealtime() - refreshStartMs}ms")
                 }
             } catch (e: Exception) {
-                android.util.Log.e("RoomNoteRepository", "Critical error in refreshNotes", e)
+                KardLeafLog.e("RoomNoteRepository", "Critical error in refreshNotes", e)
             } finally {
                 if (!indexingContinuesInBackground) {
                     _isIndexing.value = false
                 }
                 refreshMutex.unlock()
                 logStartupPerf("refreshNotesInternal done total=${SystemClock.elapsedRealtime() - refreshStartMs}ms")
+                if (pendingRefresh.getAndSet(false)) {
+                    val pendingForce = pendingRefreshForceReload.getAndSet(false)
+                    logStartupPerf("refreshNotesInternal run pending force=$pendingForce")
+                    refreshNotesInternal(forceReloadIfMetadataUnchanged = pendingForce)
+                }
             }
         }
 
@@ -1645,16 +1951,18 @@ class RoomNoteRepository(
         targets: List<Pair<String, FileMeta>>,
         existing: Map<String, NoteMetadataEntity>,
         bypassCache: Boolean,
+        generation: Long,
     ) {
         targets.chunked(25).forEachIndexed { batchIndex, batch ->
+            if (generation != refreshGeneration.get()) return
             val batchStartMs = SystemClock.elapsedRealtime()
             val notesToUpsert =
                 batch.mapNotNull { (path, meta) ->
                     try {
                         val rawContent = readText(meta.file, bypassCache = bypassCache)
                         val frontMatter = NoteFormatUtils.parseFrontMatter(rawContent)
-                        val parsedYamlTags = NoteFormatUtils.extractTags(rawContent)
-                        val parsedRecordId = NoteFormatUtils.extractKardLeafId(rawContent)?.takeIf { it.isNotBlank() } ?: path
+                        val parsedYamlTags = NoteFormatUtils.extractTags(frontMatter)
+                        val parsedRecordId = NoteFormatUtils.extractKardLeafId(frontMatter) ?: path
                         val existingYamlTags = existing[path]?.yamlTags?.let { NoteFormatUtils.tagsFromStorage(it) }.orEmpty()
                         if (parsedYamlTags.isNotEmpty() || existingYamlTags.isNotEmpty()) {
                             logYamlTagTrace("indexNoteContent path=$path parsedTags=$parsedYamlTags existingDbTags=$existingYamlTags rawLen=${rawContent.length} bypassCache=$bypassCache")
@@ -1680,12 +1988,25 @@ class RoomNoteRepository(
                             yamlTags = NoteFormatUtils.tagsToStorage(parsedYamlTags),
                         )
                     } catch (e: Exception) {
-                        android.util.Log.e("RoomNoteRepository", "Error indexing file: $path", e)
+                        KardLeafLog.e("RoomNoteRepository", "Error indexing file: $path", e)
                         null
                     }
-                }
+            }
             if (notesToUpsert.isNotEmpty()) {
-                noteDao.insertNotes(notesToUpsert)
+                if (generation != refreshGeneration.get()) return
+                val currentByPath = noteDao.getNoteShellsByPaths(notesToUpsert.map { it.filePath }).associateBy { it.filePath }
+                val freshNotes = notesToUpsert.filter { note ->
+                    currentByPath[note.filePath]?.let { current ->
+                        current.lastModifiedMs == note.lastModifiedMs &&
+                            current.fileName == note.fileName &&
+                            current.folder == note.folder &&
+                            current.isArchived == note.isArchived &&
+                            current.isTrashed == note.isTrashed
+                    } == true
+                }
+                if (freshNotes.isNotEmpty()) {
+                    noteDao.insertNotes(freshNotes)
+                }
             }
             val batchElapsedMs = SystemClock.elapsedRealtime() - batchStartMs
             if (batchIndex < 8 || batchElapsedMs >= 40L) {
@@ -1726,10 +2047,7 @@ class RoomNoteRepository(
         folderOutput: MutableSet<String>,
     ): Boolean {
         val treeUri = rootTreeUri ?: return false
-        val rootDocumentId =
-            runCatching { DocumentsContract.getTreeDocumentId(treeUri) }
-                .getOrNull()
-                ?: return false
+        val rootDocumentId = currentRootDocumentId() ?: return false
 
         scanSafFolderMeta(
             treeUri = treeUri,
@@ -1864,6 +2182,7 @@ class RoomNoteRepository(
         treeUri: Uri,
         documentId: String,
     ): List<SafChild> {
+        val startMs = SystemClock.elapsedRealtime()
         val childUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId)
         val projection =
             arrayOf(
@@ -1874,6 +2193,7 @@ class RoomNoteRepository(
                 DocumentsContract.Document.COLUMN_SIZE,
             )
         return runCatching {
+            val queryStartMs = SystemClock.elapsedRealtime()
             val result =
                 context.contentResolver.query(childUri, projection, null, null, null)?.use { cursor ->
                     val idIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
@@ -1897,8 +2217,23 @@ class RoomNoteRepository(
                     }
                     result
                 } ?: emptyList()
+            val elapsedMs = SystemClock.elapsedRealtime() - startMs
+            if (elapsedMs >= 48L || result.size >= 100) {
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "external querySafChildren documentId=$documentId count=${result.size} " +
+                        "queryElapsed=${SystemClock.elapsedRealtime() - queryStartMs}ms totalElapsed=${elapsedMs}ms",
+                )
+            }
             result
-        }.getOrElse { emptyList() }
+        }.getOrElse { error ->
+            KardLeafLog.w(
+                OPEN_PATH_PROBE_TAG,
+                "external querySafChildren failed documentId=$documentId elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                error,
+            )
+            emptyList()
+        }
     }
 
     private fun findSafChildDirectoryId(
@@ -1918,7 +2253,7 @@ class RoomNoteRepository(
 
     private fun relativeNotePathFromDocumentUri(uri: Uri): String? {
         val treeUri = rootTreeUri ?: return null
-        val rootDocumentId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull() ?: return null
+        val rootDocumentId = currentRootDocumentId() ?: return null
         val documentId = runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull() ?: return null
         if (documentId == rootDocumentId) return null
         if (!documentId.startsWith("$rootDocumentId/")) return null
@@ -1926,12 +2261,41 @@ class RoomNoteRepository(
         return relativePath.takeIf { isMarkdownTextFile(it.substringAfterLast("/")) }
     }
 
-    private fun findDocumentByPath(path: String): DocumentFile? {
-        val root = rootDir ?: return null
+    private fun findDocumentByPath(
+        path: String,
+        traceReason: String? = null,
+    ): DocumentFile? {
+        val startMs = SystemClock.elapsedRealtime()
+        val root = rootDir ?: run {
+            if (traceReason != null) {
+                KardLeafLog.w(OPEN_PATH_PROBE_TAG, "external findDocumentByPath noRoot reason=$traceReason path=$path")
+            }
+            return null
+        }
         val normalized = normalizeFolderPath(path)
         val folder = normalized.substringBeforeLast("/", missingDelimiterValue = "")
         val fileName = normalized.substringAfterLast("/")
-        return findFolder(root, folder)?.findFile(fileName)?.takeIf { it.isFile }
+        if (traceReason != null) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external findDocumentByPath start reason=$traceReason path=$path folder=$folder fileName=$fileName",
+            )
+        }
+        val folderStartMs = SystemClock.elapsedRealtime()
+        val parentFolder = findFolder(root, folder, traceReason = traceReason?.let { "$it.parent" })
+        val folderElapsedMs = SystemClock.elapsedRealtime() - folderStartMs
+        val findFileStartMs = SystemClock.elapsedRealtime()
+        val result = parentFolder?.findFile(fileName)?.takeIf { it.isFile }
+        val findFileElapsedMs = SystemClock.elapsedRealtime() - findFileStartMs
+        if (traceReason != null || folderElapsedMs >= 16L || findFileElapsedMs >= 16L) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external findDocumentByPath done reason=${traceReason ?: "slow"} path=$path folder=$folder fileName=$fileName " +
+                    "parentFound=${parentFolder != null} fileFound=${result != null} folderElapsed=${folderElapsedMs}ms " +
+                    "findFileElapsed=${findFileElapsedMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+        }
+        return result
     }
 
     private fun isMarkdownTextFile(fileName: String): Boolean =
@@ -1962,7 +2326,16 @@ class RoomNoteRepository(
             isArchiveTarget: Boolean,
         ) {
             try {
+                val listStartMs = SystemClock.elapsedRealtime()
                 val listed = dir.listFiles()
+                val listElapsedMs = SystemClock.elapsedRealtime() - listStartMs
+                if (listElapsedMs >= 48L || listed.size >= 100) {
+                    KardLeafLog.d(
+                        OPEN_PATH_PROBE_TAG,
+                        "external scanFolder listFiles folder=$folderName dir=${dir.name} count=${listed.size} " +
+                            "elapsed=${listElapsedMs}ms pinned=$isPinned archived=$isArchiveTarget trashed=$isTrashed",
+                    )
+                }
                 listed.filter { it.isFile && (it.name?.endsWith(".md") == true || it.name?.endsWith(".txt") == true) }.forEach {
                         file ->
                     val fileName = file.name ?: return@forEach
@@ -1980,7 +2353,7 @@ class RoomNoteRepository(
                         )
                 }
             } catch (e: Exception) {
-                android.util.Log.e("RoomNoteRepository", "Error scanning folder: ${dir.uri}", e)
+                KardLeafLog.e("RoomNoteRepository", "Error scanning folder: ${dir.uri}", e)
             }
         }
 
@@ -1992,11 +2365,20 @@ class RoomNoteRepository(
                     processFiles(it, isPinned = false, isArchiveTarget = true)
                 }
             } catch (e: Exception) {
-                android.util.Log.e("RoomNoteRepository", "Error scanning subfolders in $folderName", e)
+                KardLeafLog.e("RoomNoteRepository", "Error scanning subfolders in $folderName", e)
             }
         }
 
+        val childListStartMs = SystemClock.elapsedRealtime()
         val children = folder.listFiles()
+        val childListElapsedMs = SystemClock.elapsedRealtime() - childListStartMs
+        if (childListElapsedMs >= 48L || children.size >= 100) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external scanFolder children folder=$folderName dir=${folder.name} count=${children.size} " +
+                    "elapsed=${childListElapsedMs}ms archived=$isArchived trashed=$isTrashed",
+            )
+        }
         children
             .filter { it.isDirectory }
             .filter { child ->
@@ -2023,70 +2405,144 @@ class RoomNoteRepository(
     private suspend fun moveNoteToSystemFolder(
         id: String,
         isArchive: Boolean
-    ) {
-        val entity = noteDao.getNoteShellByPath(id) ?: return
-        moveNoteEntitiesToSystemFolder(listOf(entity), isArchive)
+    ): Boolean {
+        val entity = noteDao.getNoteShellByPath(id) ?: return false
+        return moveNoteEntitiesToSystemFolder(listOf(entity), isArchive).isNotEmpty()
     }
 
     private suspend fun moveNoteEntitiesToSystemFolder(
         entities: List<NoteEntity>,
         isArchive: Boolean
-    ) {
-        val root = rootDir ?: return
+    ): List<NoteEntity> {
+        val root = rootDir ?: return emptyList()
+        val movedEntities = mutableListOf<NoteEntity>()
         entities.forEach { entity ->
             val folder = entity.folder
             val fileName = entity.fileName
 
-            var sourceFile =
-                findFolder(root, folder)?.findFile(fileName)
-                    ?: findFolder(root, folder)?.findFile("Pinned")?.findFile(fileName)
-                    ?: findFolder(root, folder)?.findFile("Archived")?.findFile(fileName)
-                    ?: getTrashRoot(root, create = false)?.let { findFolder(it, folder) }?.findFile(fileName)
+            val sourceFile = findMoveSourceDocument(
+                root = root,
+                folder = folder,
+                fileName = fileName,
+                isArchived = entity.isArchived,
+                isTrashed = entity.isTrashed,
+                isPinned = entity.isPinned,
+            )
 
-            if (sourceFile != null) {
-                val targetLabelFolder = if (isArchive) {
-                    val base = getOrCreateFolder(root, folder)
-                    base?.findFile("Archived") ?: base?.createDirectory("Archived")
-                } else {
-                    val sysRoot = getTrashRoot(root, create = true)
-                    sysRoot?.let { getOrCreateFolder(it, folder) }
-                }
+            if (sourceFile == null) {
+                KardLeafLog.e("RoomNoteRepository", "Missing source note file for system move: ${entity.filePath}")
+                return@forEach
+            }
 
-                if (targetLabelFolder != null) {
-                    val content = readText(sourceFile)
-                    val newFile = targetLabelFolder.createFile("text/markdown", fileName)
-                    newFile?.let { nf ->
-                        context.contentResolver.openOutputStream(nf.uri)?.use { os ->
-                            OutputStreamWriter(os).use { it.write(content) }
-                        }
-                        sourceFile.delete()
-                    }
-                }
+            val targetLabelFolder = if (isArchive) {
+                val base = getOrCreateFolder(root, folder)
+                base?.findFile("Archived") ?: base?.createDirectory("Archived")
+            } else {
+                val sysRoot = getTrashRoot(root, create = true)
+                sysRoot?.let { getOrCreateFolder(it, folder) }
+            }
+
+            if (targetLabelFolder != null &&
+                moveMarkdownDocument(sourceFile, targetLabelFolder, fileName, "moveNoteToSystemFolder")
+            ) {
+                movedEntities += entity
             }
         }
+        return movedEntities
+    }
+
+    private fun findMoveSourceDocument(
+        root: DocumentFile,
+        folder: String,
+        fileName: String,
+        isArchived: Boolean,
+        isTrashed: Boolean,
+        isPinned: Boolean,
+    ): DocumentFile? {
+        val effectiveRoot = if (isTrashed) getTrashRoot(root, create = false) else root
+        val sourceFolderDoc = effectiveRoot?.let { findFolder(it, folder) } ?: return null
+        return when {
+            isTrashed -> sourceFolderDoc.findFile(fileName)
+            isArchived -> sourceFolderDoc.findFile("Archived")?.findFile(fileName)
+            isPinned -> sourceFolderDoc.findFile("Pinned")?.findFile(fileName)
+                ?: sourceFolderDoc.findFile(fileName)
+            else -> sourceFolderDoc.findFile(fileName)
+        }?.takeIf { it.isFile }
+    }
+
+    private suspend fun moveMarkdownDocument(
+        sourceFile: DocumentFile,
+        targetFolder: DocumentFile,
+        fileName: String,
+        reason: String,
+    ): Boolean {
+        if (targetFolder.findFile(fileName) != null) {
+            KardLeafLog.e("RoomNoteRepository", "$reason target conflict: $fileName")
+            return false
+        }
+        val content =
+            try {
+                readText(sourceFile)
+            } catch (e: Exception) {
+                KardLeafLog.e("RoomNoteRepository", "$reason failed to read source: $fileName", e)
+                return false
+            }
+        val newFile = targetFolder.createFile("text/markdown", fileName) ?: run {
+            KardLeafLog.e("RoomNoteRepository", "$reason failed to create target: $fileName")
+            return false
+        }
+        try {
+            context.contentResolver.openOutputStream(newFile.uri)?.use { os ->
+                OutputStreamWriter(os).use { it.write(content) }
+            } ?: throw IOException("openOutputStream returned null")
+        } catch (e: Exception) {
+            KardLeafLog.e("RoomNoteRepository", "$reason failed to write target: $fileName", e)
+            newFile.delete()
+            return false
+        }
+        if (!sourceFile.delete()) {
+            KardLeafLog.e("RoomNoteRepository", "$reason failed to delete source: $fileName")
+            newFile.delete()
+            return false
+        }
+        return true
     }
 
     private suspend fun readText(
         file: DocumentFile,
         bypassCache: Boolean = false,
-    ): String =
+    ): String = readTextOrNull(file, bypassCache).orEmpty()
+
+    private suspend fun readTextOrNull(
+        file: DocumentFile,
+        bypassCache: Boolean = false,
+    ): String? =
         withContext(Dispatchers.IO) {
             val startMs = SystemClock.elapsedRealtime()
             val pathKey = file.uri.toString()
             val lastModified = file.lastModified()
             val length = file.length()
-            Log.d(
+            KardLeafLog.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo readText start name=${file.name} length=$length lastModified=$lastModified bypassCache=$bypassCache uri=$pathKey",
+            )
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external readText start name=${file.name} length=$length lastModified=$lastModified bypassCache=$bypassCache uri=$pathKey",
             )
 
             if (!bypassCache) {
                 cacheMutex.withLock {
                     val cached = contentCache[pathKey]
                     if (cached != null && cached.lastModified == lastModified && cached.length == length) {
-                        Log.d(
+                        KardLeafLog.d(
                             LARGE_NOTE_OPEN_TRACE_TAG,
                             "repo readText cache hit name=${file.name} length=$length textLen=${cached.text.length} " +
+                                "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                        )
+                        KardLeafLog.d(
+                            OPEN_PATH_PROBE_TAG,
+                            "external readText cacheHit name=${file.name} length=$length textLen=${cached.text.length} " +
                                 "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
                         )
                         return@withContext cached.text
@@ -2102,7 +2558,7 @@ class RoomNoteRepository(
                     cacheMutex.withLock {
                         val cached = contentCache[pathKey]
                         if (cached != null && cached.lastModified == lastModified && cached.length == length) {
-                            Log.d(
+                            KardLeafLog.d(
                                 LARGE_NOTE_OPEN_TRACE_TAG,
                                 "repo readText cache hit after wait name=${file.name} length=$length textLen=${cached.text.length} " +
                                     "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
@@ -2122,7 +2578,7 @@ class RoomNoteRepository(
                 try {
                     var text = readTextFromUri(file.uri, file.name.orEmpty())
                     if (text != null && text.isEmpty() && length > 0L) {
-                        Log.w(
+                        KardLeafLog.w(
                             LARGE_NOTE_OPEN_TRACE_TAG,
                             "repo readText empty result for non-empty file, retry name=${file.name} length=$length " +
                                 "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
@@ -2138,28 +2594,33 @@ class RoomNoteRepository(
                         if (text.isNotEmpty() || length == 0L) {
                             cacheText(pathKey, lastModified, length, text)
                         } else {
-                            Log.w(
+                            KardLeafLog.w(
                                 LARGE_NOTE_OPEN_TRACE_TAG,
                                 "repo readText skipped caching suspicious empty text name=${file.name} length=$length",
                             )
                         }
-                        Log.d(
+                        KardLeafLog.d(
                             LARGE_NOTE_OPEN_TRACE_TAG,
                             "repo readText done name=${file.name} fileLength=$length textLen=${text.length} " +
                                 "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
                         )
+                        KardLeafLog.d(
+                            OPEN_PATH_PROBE_TAG,
+                            "external readText done name=${file.name} fileLength=$length textLen=${text.length} " +
+                                "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                        )
                         text
                     } else {
-                        Log.w(
+                        KardLeafLog.w(
                             LARGE_NOTE_OPEN_TRACE_TAG,
                             "repo readText empty stream name=${file.name} length=$length elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
                         )
-                        ""
+                        null
                     }
                 } catch (e: Exception) {
-                    Log.e(LARGE_NOTE_OPEN_TRACE_TAG, "repo readText failed name=${file.name} length=$length", e)
-                    android.util.Log.e("RoomNoteRepository", "Exception reading markdown.", e)
-                    ""
+                    KardLeafLog.e(LARGE_NOTE_OPEN_TRACE_TAG, "repo readText failed name=${file.name} length=$length", e)
+                    KardLeafLog.e("RoomNoteRepository", "Exception reading markdown.", e)
+                    null
                 }
             }
         }
@@ -2170,15 +2631,19 @@ class RoomNoteRepository(
     ): String? {
         val startMs = SystemClock.elapsedRealtime()
         val inputStream = context.contentResolver.openInputStream(uri) ?: run {
-            Log.w(
+            KardLeafLog.w(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo readText openInputStream null name=$traceName elapsed=${SystemClock.elapsedRealtime() - startMs}ms uri=$uri",
             )
             return null
         }
-        Log.d(
+        KardLeafLog.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
             "repo readText openInputStream done name=$traceName elapsed=${SystemClock.elapsedRealtime() - startMs}ms uri=$uri",
+        )
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "external openInputStream done name=$traceName elapsed=${SystemClock.elapsedRealtime() - startMs}ms uri=$uri",
         )
         val readStartMs = SystemClock.elapsedRealtime()
         return inputStream.use { stream ->
@@ -2186,9 +2651,14 @@ class RoomNoteRepository(
                 reader.readText()
             }
         }.also { text ->
-            Log.d(
+            KardLeafLog.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "repo readText stream read done name=$traceName textLen=${text.length} readElapsed=${SystemClock.elapsedRealtime() - readStartMs}ms " +
+                    "totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external streamRead done name=$traceName textLen=${text.length} readElapsed=${SystemClock.elapsedRealtime() - readStartMs}ms " +
                     "totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
             )
         }
@@ -2229,59 +2699,64 @@ class RoomNoteRepository(
     private suspend fun readNoteFromFileForEditor(
         entity: NoteEntity,
         file: DocumentFile,
-    ): NoteEntity {
+    ): NoteEntity? {
         val startMs = SystemClock.elapsedRealtime()
-        Log.d(
+        KardLeafLog.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
             "repo readNoteForEditor start path=${entity.filePath} fileName=${file.name} length=${file.length()}",
         )
-        val rawContent = readText(file)
-        Log.d(
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "external readNoteForEditor start path=${entity.filePath} folder=${entity.folder} fileName=${file.name} length=${file.length()}",
+        )
+        val rawContent = readTextOrNull(file) ?: run {
+            KardLeafLog.w(
+                LARGE_NOTE_OPEN_TRACE_TAG,
+                "repo readNoteForEditor readText missing path=${entity.filePath} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            return null
+        }
+        KardLeafLog.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
             "repo readNoteForEditor readText done path=${entity.filePath} rawLen=${rawContent.length} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
         )
         val parseStartMs = SystemClock.elapsedRealtime()
         val frontMatter = NoteFormatUtils.parseFrontMatter(rawContent)
-        Log.d(
+        KardLeafLog.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
             "repo readNoteForEditor parseFrontMatter done path=${entity.filePath} cleanLen=${frontMatter.cleanContent.length} " +
                 "parseElapsed=${SystemClock.elapsedRealtime() - parseStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
         )
         val tagsStartMs = SystemClock.elapsedRealtime()
-        val parsedTags = frontMatter.properties
-            .firstOrNull { it.key.equals(NoteFormatUtils.TAGS_KEY, ignoreCase = true) }
-            ?.values
-            ?.let(NoteFormatUtils::normalizeTags)
-            .orEmpty()
-        Log.d(
+        val parsedTags = NoteFormatUtils.extractTags(frontMatter)
+        KardLeafLog.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
             "repo readNoteForEditor extractTags done path=${entity.filePath} tags=${parsedTags.size} " +
                 "tagsElapsed=${SystemClock.elapsedRealtime() - tagsStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
         )
         val recordIdStartMs = SystemClock.elapsedRealtime()
-        val parsedRecordId = frontMatter.properties
-            .firstOrNull { it.key.equals(NoteFormatUtils.KARDLEAF_ID_KEY, ignoreCase = true) }
-            ?.values
-            ?.firstOrNull()
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: entity.filePath
-        Log.d(
+        val parsedRecordId = NoteFormatUtils.extractKardLeafId(frontMatter) ?: entity.filePath
+        KardLeafLog.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
             "repo readNoteForEditor extractRecordId done path=${entity.filePath} recordIdElapsed=${SystemClock.elapsedRealtime() - recordIdStartMs}ms " +
                 "totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
         )
         val imageRefStartMs = SystemClock.elapsedRealtime()
         val firstImageReference = extractFirstImageReference(frontMatter.cleanContent).orEmpty()
-        Log.d(
+        KardLeafLog.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
             "repo readNoteForEditor extractFirstImage done path=${entity.filePath} imageRefLen=${firstImageReference.length} " +
                 "imageElapsed=${SystemClock.elapsedRealtime() - imageRefStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
         )
-        Log.d(
+        KardLeafLog.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
             "repo readNoteForEditor parsed path=${entity.filePath} rawLen=${rawContent.length} cleanLen=${frontMatter.cleanContent.length} " +
                 "tags=${parsedTags.size} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "external readNoteForEditor parsed path=${entity.filePath} rawLen=${rawContent.length} cleanLen=${frontMatter.cleanContent.length} " +
+                "tags=${parsedTags.size} firstImageRefLen=${firstImageReference.length} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
         )
         return entity.copy(
             recordId = parsedRecordId,
@@ -2300,10 +2775,10 @@ class RoomNoteRepository(
         entity: NoteEntity,
         file: DocumentFile,
         fileModified: Long,
-    ): NoteEntity {
-        val updated = readNoteFromFileForEditor(entity, file).copy(
+    ): NoteEntity? {
+        val updated = readNoteFromFileForEditor(entity, file)?.copy(
             lastModifiedMs = fileModified.takeIf { it > 0L } ?: System.currentTimeMillis(),
-        )
+        ) ?: return null
         noteDao.insertNote(updated)
         return updated
     }
@@ -2313,30 +2788,46 @@ class RoomNoteRepository(
         currentFolder: String,
     ): String =
         withContext(Dispatchers.IO) {
+            val startMs = SystemClock.elapsedRealtime()
             if (markdown.isBlank()) return@withContext markdown
-
-            val obsidianImageRegex = Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
-            val standardImageRegex = Regex("""!\[([^]]*)]\((?!https?://|data:|file:)([^)]+)\)""", RegexOption.IGNORE_CASE)
+            val obsidianCount = NoteFormatUtils.obsidianImageReferenceRegex.findAll(markdown).count()
+            val markdownCount = NoteFormatUtils.localMarkdownImageReferenceWithAltRegex.findAll(markdown).count()
+            if (obsidianCount > 0 || markdownCount > 0) {
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "external resolveMarkdownImages start folder=$currentFolder markdownLen=${markdown.length} " +
+                        "obsidianRefs=$obsidianCount markdownRefs=$markdownCount",
+                )
+            }
 
             val withObsidianImages =
-                obsidianImageRegex.replace(markdown) { match ->
+                NoteFormatUtils.obsidianImageReferenceRegex.replace(markdown) { match ->
                     val reference = match.groupValues[1].trim()
-                    resolveImageDataUri(currentFolder, reference)?.let { dataUri ->
+                    resolveImageDataUri(currentFolder, reference, mode = "preview")?.let { dataUri ->
                         "![]($dataUri)"
                     } ?: match.value
                 }
 
-            standardImageRegex.replace(withObsidianImages) { match ->
+            val resolvedMarkdown = NoteFormatUtils.localMarkdownImageReferenceWithAltRegex.replace(withObsidianImages) { match ->
                 val alt = match.groupValues[1]
-                val reference = match.groupValues[2].trim().trim('"', '\'')
-                resolveImageDataUri(currentFolder, reference)?.let { dataUri ->
+                val reference = match.groupValues[2].trim().trim('\"', '\'')
+                resolveImageDataUri(currentFolder, reference, mode = "preview")?.let { dataUri ->
                     "![$alt]($dataUri)"
                 } ?: match.value
             }
+            if (obsidianCount > 0 || markdownCount > 0) {
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "external resolveMarkdownImages done folder=$currentFolder markdownLen=${markdown.length} " +
+                        "resultLen=${resolvedMarkdown.length} refs=${obsidianCount + markdownCount} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                )
+            }
+            resolvedMarkdown
         }
 
     suspend fun importDrawingImage(
         bitmap: Bitmap,
+        drawingSource: String,
         currentFolder: String,
     ): String =
         withContext(Dispatchers.IO) {
@@ -2360,19 +2851,24 @@ class RoomNoteRepository(
             val baseName = "drawing_${System.currentTimeMillis()}"
             var targetName = "$baseName.png"
             var index = 1
-            while (targetFolder.findFile(targetName) != null) {
+            while (targetFolder.findFile(targetName) != null || targetFolder.findFile(drawingSourceNameForImageName(targetName)) != null) {
                 targetName = "$baseName-$index.png"
                 index++
             }
 
             val targetFile = targetFolder.createFile("image/png", targetName) ?: return@withContext ""
-            val copied = runCatching {
-                context.contentResolver.openOutputStream(targetFile.uri, "wt")?.use { output ->
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
-                } == true
-            }.getOrDefault(false)
+            val copied = writeDrawingBitmap(targetFile, bitmap)
             if (!copied) {
                 targetFile.delete()
+                return@withContext ""
+            }
+
+            val sourceName = drawingSourceNameForImageName(targetName)
+            val sourceFile = targetFolder.createFile("application/json", sourceName)
+            val sourceSaved = sourceFile?.let { writeTextDocument(it, drawingSource) } == true
+            if (!sourceSaved) {
+                targetFile.delete()
+                sourceFile?.delete()
                 return@withContext ""
             }
 
@@ -2395,11 +2891,97 @@ class RoomNoteRepository(
             "![[${reference}]]"
         }
 
+    suspend fun updateDrawingImage(
+        bitmap: Bitmap,
+        drawingSource: String,
+        currentFolder: String,
+        reference: String,
+    ): Boolean =
+        withContext(Dispatchers.IO) {
+            val target = findReferencedDocument(currentFolder, reference) ?: return@withContext false
+            if (!writeDrawingBitmap(target.file, bitmap)) return@withContext false
+
+            val sourceName = drawingSourceNameForImageName(target.file.name.orEmpty())
+            val sourceFile = target.parent.findFile(sourceName)
+                ?: target.parent.createFile("application/json", sourceName)
+                ?: return@withContext false
+            writeTextDocument(sourceFile, drawingSource)
+        }
+
+    suspend fun loadDrawingSource(
+        currentFolder: String,
+        reference: String,
+    ): String? =
+        withContext(Dispatchers.IO) {
+            val sourceReference = drawingSourceReferenceForImageReference(reference) ?: return@withContext null
+            val sourceFile = findImageFile(currentFolder, sourceReference) ?: return@withContext null
+            readText(sourceFile, bypassCache = true).takeIf { it.isNotBlank() }
+        }
+
+    private fun writeDrawingBitmap(
+        targetFile: DocumentFile,
+        bitmap: Bitmap,
+    ): Boolean =
+        runCatching {
+            context.contentResolver.openOutputStream(targetFile.uri, "wt")?.use { output ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+            } == true
+        }.getOrDefault(false)
+
+    private fun writeTextDocument(
+        targetFile: DocumentFile,
+        text: String,
+    ): Boolean =
+        runCatching {
+            val output = context.contentResolver.openOutputStream(targetFile.uri, "wt") ?: return@runCatching false
+            output.use { stream ->
+                OutputStreamWriter(stream).use { writer -> writer.write(text) }
+            }
+            true
+        }.getOrDefault(false)
+
+    private fun drawingSourceNameForImageName(imageName: String): String {
+        val baseName = imageName.substringBeforeLast(".", missingDelimiterValue = imageName).ifBlank { "drawing" }
+        return "$baseName.json"
+    }
+
+    private fun drawingSourceReferenceForImageReference(reference: String): String? {
+        val cleanRef = normalizeFolderPath(Uri.decode(reference).substringBefore("#"))
+        if (cleanRef.isBlank()) return null
+        val parent = cleanRef.substringBeforeLast("/", missingDelimiterValue = "")
+        val name = cleanRef.substringAfterLast("/")
+        val sourceName = drawingSourceNameForImageName(name)
+        return if (parent.isBlank()) sourceName else joinPath(parent, sourceName)
+    }
+
+    suspend fun getImageImportTooLargeMessage(sourceUri: Uri): String? =
+        withContext(Dispatchers.IO) {
+            val sourceSize = queryOpenableSize(sourceUri) ?: return@withContext null
+            if (sourceSize > KardLeafContentLimits.IMAGE_IMPORT_MAX_BYTES) {
+                "图片过大（${formatFileSize(sourceSize)}），已取消导入。建议压缩到 ${formatFileSize(KardLeafContentLimits.IMAGE_IMPORT_MAX_BYTES)} 以内。"
+            } else {
+                null
+            }
+        }
+
     suspend fun importImage(
         sourceUri: Uri,
         currentFolder: String,
     ): String =
         withContext(Dispatchers.IO) {
+            val importStartMs = SystemClock.elapsedRealtime()
+            KardLeafLog.d(
+                "KardLeafCM6Trace",
+                "[insert-image] repository import start currentFolder=$currentFolder scheme=${sourceUri.scheme.orEmpty()} mime=${context.contentResolver.getType(sourceUri).orEmpty()}",
+            )
+            val sourceSize = queryOpenableSize(sourceUri)
+            if (sourceSize != null && sourceSize > KardLeafContentLimits.IMAGE_IMPORT_MAX_BYTES) {
+                KardLeafLog.w(
+                    "KardLeafCM6Trace",
+                    "[insert-image] repository import blocked size=$sourceSize limit=${KardLeafContentLimits.IMAGE_IMPORT_MAX_BYTES}",
+                )
+                return@withContext ""
+            }
             val root = rootDir ?: return@withContext ""
             val configuredImageFolder = prefsManager.getImageFolder()
             val imageFolderUri = prefsManager.getImageFolderUri()?.let { Uri.parse(it) }
@@ -2416,7 +2998,12 @@ class RoomNoteRepository(
                         ?.let { DocumentFile.fromTreeUri(context, it)?.takeIf { folder -> folder.isDirectory && folder.canWrite() } }
                         ?: getOrCreateFolder(root, configuredImageFolder)
                 } ?: return@withContext ""
+            val nameStartMs = SystemClock.elapsedRealtime()
             val sourceName = queryDisplayName(sourceUri).ifBlank { "image" }
+            KardLeafLog.d(
+                "KardLeafCM6Trace",
+                "[insert-image] repository query name elapsed=${SystemClock.elapsedRealtime() - nameStartMs}ms sourceName=$sourceName",
+            )
             val extension = sourceName.substringAfterLast(".", "")
                 .lowercase()
                 .takeIf { it in setOf("png", "jpg", "jpeg", "gif", "webp", "svg") }
@@ -2429,21 +3016,41 @@ class RoomNoteRepository(
 
             var targetName = "$baseName.$extension"
             var index = 1
+            val nameConflictStartMs = SystemClock.elapsedRealtime()
             while (targetFolder.findFile(targetName) != null) {
                 targetName = "$baseName-$index.$extension"
                 index++
             }
+            KardLeafLog.d(
+                "KardLeafCM6Trace",
+                "[insert-image] repository target name elapsed=${SystemClock.elapsedRealtime() - nameConflictStartMs}ms conflictChecks=$index targetName=$targetName",
+            )
 
             val mimeType = imageMimeType(targetName) ?: "image/$extension"
+            val createStartMs = SystemClock.elapsedRealtime()
             val targetFile = targetFolder.createFile(mimeType, targetName) ?: return@withContext ""
+            KardLeafLog.d(
+                "KardLeafCM6Trace",
+                "[insert-image] repository create file elapsed=${SystemClock.elapsedRealtime() - createStartMs}ms mime=$mimeType targetName=$targetName",
+            )
+            var copiedBytes = -1L
+            val copyStartMs = SystemClock.elapsedRealtime()
             val copied =
                 runCatching {
-                    context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                    copiedBytes = context.contentResolver.openInputStream(sourceUri)?.use { input ->
                         context.contentResolver.openOutputStream(targetFile.uri, "wt")?.use { output ->
                             input.copyTo(output)
-                        }
-                    }
-                }.isSuccess
+                        } ?: -1L
+                    } ?: -1L
+                    copiedBytes >= 0L
+                }.getOrElse { error ->
+                    KardLeafLog.w("KardLeafCM6Trace", "[insert-image] repository copy failed targetName=$targetName", error)
+                    false
+                }
+            KardLeafLog.d(
+                "KardLeafCM6Trace",
+                "[insert-image] repository copy done elapsed=${SystemClock.elapsedRealtime() - copyStartMs}ms bytes=$copiedBytes success=$copied targetName=$targetName",
+            )
             if (!copied) {
                 targetFile.delete()
                 return@withContext ""
@@ -2465,15 +3072,23 @@ class RoomNoteRepository(
                 } else {
                     joinPath(referenceFolder, targetName)
                 }
+            KardLeafLog.d(
+                "KardLeafCM6Trace",
+                "[insert-image] repository import done elapsed=${SystemClock.elapsedRealtime() - importStartMs}ms reference=$reference",
+            )
             "![[${reference}]]"
         }
 
     private fun extractFirstImageReference(markdown: String): String? {
         if (markdown.isBlank()) return null
-        val obsidian = Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
-        val standard = Regex("""!\[[^]]*]\((?!https?://|data:|file:)([^)]+)\)""", RegexOption.IGNORE_CASE)
-        return (obsidian.findAll(markdown).map { it.range.first to it.groupValues[1].trim() } +
-            standard.findAll(markdown).map { it.range.first to it.groupValues[1].trim().trim('"', '\'') })
+        return (
+            NoteFormatUtils.obsidianImageReferenceRegex
+                .findAll(markdown)
+                .map { it.range.first to it.groupValues[1].trim() } +
+                NoteFormatUtils.localMarkdownImageReferenceRegex
+                    .findAll(markdown)
+                    .map { it.range.first to it.groupValues[1].trim().trim('"', '\'') }
+            )
             .filter { (_, reference) -> reference.isNotBlank() && !isExternalImageReference(reference) }
             .minByOrNull { it.first }
             ?.second
@@ -2491,22 +3106,8 @@ class RoomNoteRepository(
      * RELATIVE 图片路径模式下，移动笔记时把笔记内的图片引用从“相对源目录”改写为“相对目标目录”。
      * 仅处理本地图片引用（Obsidian `![[ref]]` 与标准 `![alt](ref)`），跳过 http/data/file 等绝对 URL。
      */
-    private fun rewriteRelativeImageRefs(markdown: String, fromFolder: String, toFolder: String): String {
-        if (fromFolder == toFolder) return markdown
-        val obsidian = Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
-        val standard = Regex("""!\[([^]]*)]\((?!https?://|data:|file:)([^)]+)\)""", RegexOption.IGNORE_CASE)
-        val r1 = obsidian.replace(markdown) { m ->
-            val ref = m.groupValues[1].trim()
-            val realPath = normalizePath(joinPath(fromFolder, ref))
-            "![[${relativePath(toFolder, realPath)}]]"
-        }
-        return standard.replace(r1) { m ->
-            val alt = m.groupValues[1]
-            val ref = m.groupValues[2].trim().trim('"', '\'')
-            val realPath = normalizePath(joinPath(fromFolder, ref))
-            "![${alt}](${relativePath(toFolder, realPath)})"
-        }
-    }
+    private fun rewriteRelativeImageRefs(markdown: String, fromFolder: String, toFolder: String): String =
+        NoteFormatUtils.rewriteRelativeImageRefsForMove(markdown, fromFolder, toFolder)
 
     private fun normalizePath(path: String): String {
         val parts = path.split("/").filter { it.isNotBlank() }
@@ -2536,51 +3137,130 @@ class RoomNoteRepository(
 
     suspend fun resolveNoteThumbnailBitmap(note: Note): Bitmap? =
         withContext(Dispatchers.IO) {
+            val startMs = SystemClock.elapsedRealtime()
             val reference = note.firstImageReference?.takeIf { it.isNotBlank() }
                 ?: extractFirstImageReference(note.content)
-                ?: return@withContext null
-            val cacheKey = "${note.file.path}|${note.lastModified.time}|$reference"
-            val cached = synchronized(noteThumbnailCache) { noteThumbnailCache.get(cacheKey) }
-            if (cached != null) {
-                if (!cached.isRecycled) {
-                    return@withContext cached
+                ?: run {
+                    KardLeafLog.d(
+                        OPEN_PATH_PROBE_TAG,
+                        "external thumbnail noReference path=${note.file.path} folder=${note.folder} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                    )
+                    return@withContext null
                 }
-                synchronized(noteThumbnailCache) { noteThumbnailCache.remove(cacheKey) }
-            }
-
-            val imageFile = findImageFile(note.folder, reference) ?: return@withContext null
-            val bitmap = decodeSampledBitmap(imageFile, maxWidthPx = 240, maxHeightPx = 200) ?: return@withContext null
-            synchronized(noteThumbnailCache) {
-                noteThumbnailCache.put(cacheKey, bitmap)
-            }
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external thumbnail start path=${note.file.path} folder=${note.folder} ref=$reference contentLen=${note.content.length}",
+            )
+            val bitmap = resolveImageThumbnailBitmapInternal(note, reference, maxWidthPx = 240, maxHeightPx = 200)
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external thumbnail done path=${note.file.path} folder=${note.folder} ref=$reference ok=${bitmap != null} " +
+                    "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
             bitmap
         }
+
+    suspend fun resolveImageThumbnailBitmap(
+        note: Note,
+        reference: String,
+    ): Bitmap? =
+        withContext(Dispatchers.IO) {
+            resolveImageThumbnailBitmapInternal(note, reference, maxWidthPx = 360, maxHeightPx = 360)
+        }
+
+    private fun resolveImageThumbnailBitmapInternal(
+        note: Note,
+        reference: String,
+        maxWidthPx: Int,
+        maxHeightPx: Int,
+    ): Bitmap? {
+        val startMs = SystemClock.elapsedRealtime()
+        val cleanReference = reference.takeIf { it.isNotBlank() } ?: return null
+        val cacheKey = "${note.file.path}|${note.lastModified.time}|$maxWidthPx|$maxHeightPx|$cleanReference"
+        val cached = synchronized(noteThumbnailCache) { noteThumbnailCache.get(cacheKey) }
+        if (cached != null) {
+            if (!cached.isRecycled) {
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "external thumbnail cacheHit path=${note.file.path} folder=${note.folder} ref=$cleanReference elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                )
+                return cached
+            }
+            synchronized(noteThumbnailCache) { noteThumbnailCache.remove(cacheKey) }
+        }
+
+        val locateStartMs = SystemClock.elapsedRealtime()
+        val imageFile = findImageFile(note.folder, cleanReference) ?: run {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external thumbnail imageMissing path=${note.file.path} folder=${note.folder} ref=$cleanReference " +
+                    "locateElapsed=${SystemClock.elapsedRealtime() - locateStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            return null
+        }
+        val locateElapsedMs = SystemClock.elapsedRealtime() - locateStartMs
+        val decodeStartMs = SystemClock.elapsedRealtime()
+        val bitmap = decodeSampledBitmap(imageFile, maxWidthPx = maxWidthPx, maxHeightPx = maxHeightPx) ?: run {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external thumbnail decodeNull path=${note.file.path} folder=${note.folder} ref=$cleanReference name=${imageFile.name} " +
+                    "locateElapsed=${locateElapsedMs}ms decodeElapsed=${SystemClock.elapsedRealtime() - decodeStartMs}ms " +
+                    "totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            return null
+        }
+        synchronized(noteThumbnailCache) {
+            noteThumbnailCache.put(cacheKey, bitmap)
+        }
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "external thumbnail decoded path=${note.file.path} folder=${note.folder} ref=$cleanReference name=${imageFile.name} " +
+                "locateElapsed=${locateElapsedMs}ms decodeElapsed=${SystemClock.elapsedRealtime() - decodeStartMs}ms " +
+                "totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        return bitmap
+    }
 
     suspend fun resolveNoteImages(
         markdown: String,
         currentFolder: String,
     ): List<NoteImage> =
         withContext(Dispatchers.IO) {
+            val startMs = SystemClock.elapsedRealtime()
             if (markdown.isBlank()) return@withContext emptyList()
 
             val found = linkedSetOf<String>()
-            Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
+            NoteFormatUtils.obsidianImageReferenceRegex
                 .findAll(markdown)
                 .forEach { found.add(it.groupValues[1].trim()) }
-            Regex("""!\[[^]]*]\((?!https?://|data:|file:)([^)]+)\)""", RegexOption.IGNORE_CASE)
+            NoteFormatUtils.localMarkdownImageReferenceRegex
                 .findAll(markdown)
                 .forEach { found.add(it.groupValues[1].trim().trim('"', '\'')) }
 
-            found.mapNotNull { reference ->
-                resolveImageDataUri(currentFolder, reference)?.let { dataUri ->
+            if (found.isNotEmpty()) {
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "external resolveNoteImages start folder=$currentFolder markdownLen=${markdown.length} refs=${found.size}",
+                )
+            }
+            val result = found.mapNotNull { reference ->
+                resolveImageDataUri(currentFolder, reference, mode = "livePreview")?.let { dataUri ->
                     NoteImage(reference = reference, dataUri = dataUri)
                 }
             }
+            if (found.isNotEmpty()) {
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "external resolveNoteImages done folder=$currentFolder refs=${found.size} resolved=${result.size} " +
+                        "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                )
+            }
+            result
         }
 
     private fun relativeFolderFromTreeUri(uri: Uri): String? {
         val treeUri = rootTreeUri ?: return null
-        val rootDocumentId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull() ?: return null
+        val rootDocumentId = currentRootDocumentId() ?: return null
         val imageDocumentId = runCatching { DocumentsContract.getTreeDocumentId(uri) }.getOrNull() ?: return null
         return when {
             imageDocumentId == rootDocumentId -> ""
@@ -2598,6 +3278,22 @@ class RoomNoteRepository(
         }.getOrNull().orEmpty()
     }
 
+    private fun queryOpenableSize(uri: Uri): Long? {
+        val queriedSize = runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)
+                ?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getLong(0) else -1L
+                }
+        }.getOrNull()?.takeIf { it > 0L }
+        if (queriedSize != null) return queriedSize
+
+        return runCatching {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+                descriptor.length.takeIf { it > 0L }
+            }
+        }.getOrNull()
+    }
+
     private fun extensionFromMime(mimeType: String?): String? =
         when (mimeType?.lowercase()) {
             "image/png" -> "png"
@@ -2611,62 +3307,292 @@ class RoomNoteRepository(
     private fun resolveImageDataUri(
         currentFolder: String,
         reference: String,
+        mode: String,
     ): String? {
-        val imageFile = findImageFile(currentFolder, reference) ?: return null
-        val mimeType = imageMimeType(imageFile.name.orEmpty()) ?: return null
-        val bytes =
-            runCatching {
-                context.contentResolver.openInputStream(imageFile.uri)?.use { it.readBytes() }
-            }.getOrNull() ?: return null
-
-        return "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}"
+        val startMs = SystemClock.elapsedRealtime()
+        val traceRef = imageTraceRef(reference)
+        imageTrace { "imageResolve start ref=$traceRef mode=$mode" }
+        val directStartMs = SystemClock.elapsedRealtime()
+        findImageFileByDirectUri(currentFolder, reference)?.let { directFile ->
+            readImageDataUri(directFile, currentFolder, reference, startMs)?.let { dataUri ->
+                imageTrace { "imageResolve directUri hit cost=${SystemClock.elapsedRealtime() - directStartMs}ms" }
+                imageTrace { "imageResolve done source=directUri total=${SystemClock.elapsedRealtime() - startMs}ms" }
+                return dataUri
+            }
+            imageTrace { "imageResolve directUri failed reason=unreadable_or_unknown_type cost=${SystemClock.elapsedRealtime() - directStartMs}ms" }
+        }
+        imageTrace { "imageResolve fallback findFile start" }
+        val fallbackStartMs = SystemClock.elapsedRealtime()
+        val imageFile = findImageFile(currentFolder, reference) ?: run {
+            val fallbackElapsedMs = SystemClock.elapsedRealtime() - fallbackStartMs
+            imageTrace { "imageResolve fallback miss cost=${fallbackElapsedMs}ms" }
+            imageTrace { "imageResolve done source=miss total=${SystemClock.elapsedRealtime() - startMs}ms" }
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external resolveImageDataUri missing folder=$currentFolder ref=$reference elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            return null
+        }
+        imageTrace { "imageResolve fallback hit cost=${SystemClock.elapsedRealtime() - fallbackStartMs}ms" }
+        return readImageDataUri(imageFile, currentFolder, reference, startMs).also { dataUri ->
+            imageTrace { "imageResolve done source=${if (dataUri != null) "fallback" else "miss"} total=${SystemClock.elapsedRealtime() - startMs}ms" }
+        }
     }
+
+    private fun readImageDataUri(
+        imageFile: DocumentFile,
+        currentFolder: String,
+        reference: String,
+        startMs: Long,
+    ): String? {
+        val mimeType = imageMimeType(imageFile.name.orEmpty())
+            ?: context.contentResolver.getType(imageFile.uri)?.takeIf { it.startsWith("image/", ignoreCase = true) }
+            ?: return null
+        val imageSize = imageFile.length()
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "external resolveImageDataUri file folder=$currentFolder ref=$reference name=${imageFile.name} size=$imageSize " +
+                "locateElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        if (imageSize > KardLeafContentLimits.IMAGE_DATA_URI_MAX_BYTES) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external resolveImageDataUri oversized folder=$currentFolder ref=$reference size=$imageSize elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            return thumbnailImageDataUri(imageFile)
+        }
+        val readStartMs = SystemClock.elapsedRealtime()
+        val readResult = readImageBytesWithinLimit(imageFile.uri, KardLeafContentLimits.IMAGE_DATA_URI_MAX_BYTES)
+        if (readResult.exceededLimit) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external resolveImageDataUri exceededLimit folder=$currentFolder ref=$reference readElapsed=${SystemClock.elapsedRealtime() - readStartMs}ms " +
+                    "totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            return thumbnailImageDataUri(imageFile)
+        }
+        val bytes = readResult.bytes ?: return null
+
+        val dataUri = "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}"
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "external resolveImageDataUri done folder=$currentFolder ref=$reference bytes=${bytes.size} dataUriLen=${dataUri.length} " +
+                "readElapsed=${SystemClock.elapsedRealtime() - readStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        return dataUri
+    }
+
+    private inline fun imageTrace(message: () -> String) {
+        if (ENABLE_IMAGE_TRACE) KardLeafLog.d(IMAGE_TRACE_TAG, message())
+    }
+
+    private fun imageTraceRef(reference: String): String {
+        val clean = Uri.decode(reference).substringBefore("#").replace("\\", "/").trim()
+        val name = clean.substringAfterLast("/").take(80).ifBlank { "<blank>" }
+        return "name=$name hash=${Integer.toHexString(reference.hashCode())}"
+    }
+
+    private fun readImageBytesWithinLimit(
+        uri: Uri,
+        maxBytes: Long,
+    ): LimitedImageRead =
+        runCatching {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var total = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > maxBytes) return@runCatching LimitedImageRead(exceededLimit = true)
+                    output.write(buffer, 0, read)
+                }
+                LimitedImageRead(bytes = output.toByteArray())
+            } ?: LimitedImageRead()
+        }.getOrDefault(LimitedImageRead())
+
+    private fun thumbnailImageDataUri(imageFile: DocumentFile): String? {
+        val bitmap = decodeSampledBitmap(imageFile, maxWidthPx = 360, maxHeightPx = 360) ?: return null
+        val output = ByteArrayOutputStream()
+        return if (bitmap.compress(Bitmap.CompressFormat.JPEG, 82, output)) {
+            "data:image/jpeg;base64,${Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)}"
+        } else {
+            null
+        }
+    }
+
+    private fun formatFileSize(bytes: Long): String =
+        when {
+            bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
+            bytes >= 1024L -> "${bytes / 1024L} KB"
+            else -> "$bytes B"
+        }
 
     private fun findImageFile(
         currentFolder: String,
         reference: String,
+    ): DocumentFile? = findReferencedDocument(currentFolder, reference)?.file
+
+    private fun findImageFileByDirectUri(
+        currentFolder: String,
+        reference: String,
     ): DocumentFile? {
+        val rawRef = reference.trim().trim('"', '\'')
+        val parsedUri = runCatching { Uri.parse(rawRef) }.getOrNull()
+        if (parsedUri != null && parsedUri.scheme.equals("content", ignoreCase = true)) {
+            val direct = DocumentFile.fromSingleUri(context, parsedUri)?.takeIf { it.isFile }
+            if (direct == null) imageTrace { "imageResolve directUri missing" }
+            return direct
+        }
+
+        val treeUri = rootTreeUri ?: run {
+            imageTrace { "imageResolve directUri missing" }
+            return null
+        }
+        val rootDocumentId = currentRootDocumentId() ?: run {
+            imageTrace { "imageResolve directUri missing" }
+            return null
+        }
+        val cleanRef = normalizeFolderPath(Uri.decode(reference).substringBefore("#"))
+        if (cleanRef.isBlank()) {
+            imageTrace { "imageResolve directUri missing" }
+            return null
+        }
+        imageReferenceCandidates(currentFolder, cleanRef).forEach { path ->
+            val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, "$rootDocumentId/$path")
+            val document = DocumentFile.fromSingleUri(context, documentUri)
+            if (runCatching { document?.isFile == true }.getOrDefault(false) && document != null) {
+                return document
+            }
+        }
+        findImageFileInConfiguredImageFolder(currentFolder, cleanRef)?.let { return it }
+        imageTrace { "imageResolve directUri missing" }
+        return null
+    }
+
+    private fun findImageFileInConfiguredImageFolder(
+        currentFolder: String,
+        cleanRef: String,
+    ): DocumentFile? {
+        val imageFolderUri = prefsManager.getImageFolderUri()?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: return null
+        val imageFolderDocumentId = runCatching { DocumentsContract.getTreeDocumentId(imageFolderUri) }.getOrNull() ?: return null
+        val configuredFolder = normalizeFolderPath(prefsManager.getImageFolder())
+        if (configuredFolder.isBlank()) return null
+
+        imageReferenceCandidates(currentFolder, cleanRef)
+            .mapNotNull { path ->
+                normalizePath(path)
+                    .takeIf { it.startsWith("$configuredFolder/") }
+                    ?.removePrefix("$configuredFolder/")
+                    ?.takeIf { it.isNotBlank() }
+            }
+            .distinct()
+            .forEach { relativePath ->
+                val documentUri = DocumentsContract.buildDocumentUriUsingTree(imageFolderUri, "$imageFolderDocumentId/$relativePath")
+                val document = DocumentFile.fromSingleUri(context, documentUri)
+                if (runCatching { document?.isFile == true }.getOrDefault(false) && document != null) {
+                    return document
+                }
+            }
+        return null
+    }
+
+    private fun findReferencedDocument(
+        currentFolder: String,
+        reference: String,
+    ): ReferencedDocument? {
+        val startMs = SystemClock.elapsedRealtime()
         val root = rootDir ?: return null
         val cleanRef = normalizeFolderPath(Uri.decode(reference).substringBefore("#"))
         if (cleanRef.isBlank()) return null
 
         val current = normalizeFolderPath(currentFolder)
-        val candidates =
-            listOf(
-                joinPath(current, cleanRef),
-                cleanRef,
-                joinPath(current, "attachments/$cleanRef"),
-                joinPath(current, "附件/$cleanRef"),
-                "attachments/$cleanRef",
-                "附件/$cleanRef",
-            )
-                .map(::normalizePath)
-                .distinct()
+        val candidates = imageReferenceCandidates(current, cleanRef)
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "external findReferencedDocument start folder=$currentFolder ref=$reference cleanRef=$cleanRef candidates=${candidates.size}",
+        )
 
-        return candidates.firstNotNullOfOrNull { path ->
-            val parent = path.substringBeforeLast("/", missingDelimiterValue = "")
+        var result: ReferencedDocument? = null
+        candidates.forEachIndexed { index, path ->
+            if (result != null) return@forEachIndexed
+            val candidateStartMs = SystemClock.elapsedRealtime()
+            val parentPath = path.substringBeforeLast("/", missingDelimiterValue = "")
             val name = path.substringAfterLast("/")
-            findFolder(root, parent)?.findFile(name)?.takeIf { it.isFile }
+            val parent = findFolder(root, parentPath, traceReason = "imageRef[$index]")
+            val parentElapsedMs = SystemClock.elapsedRealtime() - candidateStartMs
+            val findFileStartMs = SystemClock.elapsedRealtime()
+            val file = parent?.findFile(name)?.takeIf { it.isFile }
+            val findFileElapsedMs = SystemClock.elapsedRealtime() - findFileStartMs
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external findReferencedDocument candidate folder=$currentFolder ref=$reference index=$index path=$path " +
+                    "parentFound=${parent != null} fileFound=${file != null} parentElapsed=${parentElapsedMs}ms " +
+                    "findFileElapsed=${findFileElapsedMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            if (parent != null && file != null) {
+                result = ReferencedDocument(parent = parent, file = file)
+            }
         }
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "external findReferencedDocument done folder=$currentFolder ref=$reference found=${result != null} " +
+                "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        return result
     }
+
+    private fun imageReferenceCandidates(
+        currentFolder: String,
+        cleanRef: String,
+    ): List<String> =
+        listOf(
+            joinPath(currentFolder, cleanRef),
+            cleanRef,
+            joinPath(currentFolder, "attachments/$cleanRef"),
+            joinPath(currentFolder, "附件/$cleanRef"),
+            "attachments/$cleanRef",
+            "附件/$cleanRef",
+        )
+            .map(::normalizePath)
+            .distinct()
 
     private fun decodeSampledBitmap(
         imageFile: DocumentFile,
         maxWidthPx: Int,
         maxHeightPx: Int,
     ): Bitmap? {
+        val startMs = SystemClock.elapsedRealtime()
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val boundsStartMs = SystemClock.elapsedRealtime()
         context.contentResolver.openInputStream(imageFile.uri)?.use { input ->
             BitmapFactory.decodeStream(input, null, bounds)
         }
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val boundsElapsedMs = SystemClock.elapsedRealtime() - boundsStartMs
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external decodeSampledBitmap invalidBounds name=${imageFile.name} boundsElapsed=${boundsElapsedMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            return null
+        }
 
         val options = BitmapFactory.Options().apply {
             inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, maxWidthPx, maxHeightPx)
         }
-        return context.contentResolver.openInputStream(imageFile.uri)?.use { input ->
+        val decodeStartMs = SystemClock.elapsedRealtime()
+        val bitmap = context.contentResolver.openInputStream(imageFile.uri)?.use { input ->
             BitmapFactory.decodeStream(input, null, options)
         }
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "external decodeSampledBitmap done name=${imageFile.name} bounds=${bounds.outWidth}x${bounds.outHeight} " +
+                "target=${maxWidthPx}x$maxHeightPx sample=${options.inSampleSize} ok=${bitmap != null} " +
+                "boundsElapsed=${boundsElapsedMs}ms decodeElapsed=${SystemClock.elapsedRealtime() - decodeStartMs}ms " +
+                "totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        return bitmap
     }
 
     private fun calculateInSampleSize(
@@ -2696,14 +3622,18 @@ class RoomNoteRepository(
 
     override suspend fun emptyTrash() =
         withContext(Dispatchers.IO) {
-            val root = rootDir ?: return@withContext
-            val deletedDir = getTrashRoot(root, create = false)
+            val deletedPaths = noteDao.getTrashedNoteShellsSync()
+                .filter { entity ->
+                    val deleted = findNoteDocument(entity)?.delete() == true
+                    if (!deleted) KardLeafLog.e("RoomNoteRepository", "Failed to delete trashed note file: ${entity.filePath}")
+                    deleted
+                }
+                .map { it.filePath }
 
-            deletedDir?.listFiles()?.forEach {
-                it.delete()
+            if (deletedPaths.isNotEmpty()) {
+                noteDao.deleteNotesByPaths(deletedPaths)
+                markWebDavRealtimeLocalDirty()
             }
-
-            noteDao.deleteAllTrashed()
         }
 
     override suspend fun cleanupExpiredTrash(olderThanDays: Int) =
@@ -2712,19 +3642,32 @@ class RoomNoteRepository(
             val cutoffMs = System.currentTimeMillis() - olderThanDays * 24L * 60L * 60L * 1000L
             val expiredPaths = noteDao.getTrashedNotePathsBefore(cutoffMs)
             if (expiredPaths.isEmpty()) return@withContext
-            val expiredEntities = noteDao.getNotesByPaths(expiredPaths)
-            expiredEntities.forEach { entity ->
-                findNoteDocument(entity)?.delete()
-                prefsManager.setNotePinned(entity.filePath, false)
-                prefsManager.setNoteFavorite(entity.filePath, false)
+            val expiredEntities = noteDao.getNoteShellsByPaths(expiredPaths)
+            val deletedPaths = expiredEntities
+                .filter { entity ->
+                    val deleted = findNoteDocument(entity)?.delete() == true
+                    if (!deleted) KardLeafLog.e("RoomNoteRepository", "Failed to delete expired trashed note file: ${entity.filePath}")
+                    deleted
+                }
+                .map { entity ->
+                    prefsManager.setNotePinned(entity.filePath, false)
+                    prefsManager.setNoteFavorite(entity.filePath, false)
+                    entity.filePath
+                }
+
+            if (deletedPaths.isNotEmpty()) {
+                noteDao.deleteNotesByPaths(deletedPaths)
+                markWebDavRealtimeLocalDirty()
             }
-            noteDao.deleteNotesByPaths(expiredPaths)
         }
 
     private suspend fun resolveNoteRecordId(notePath: String): String {
         if (notePath.isBlank()) return notePath
         val entity = noteDao.getNoteShellByPath(notePath) ?: return notePath
-        val rawContent = (findNoteDocument(entity) ?: findDocumentByPath(notePath))?.let { readText(it) }
+        val rawContent =
+            (findNoteDocumentDirectFirst(entity, traceReason = "resolveNoteRecordId")
+                ?: findDocumentByPath(notePath, traceReason = "resolveNoteRecordId.fallbackPath"))
+                ?.let { readText(it) }
         val kardLeafId = rawContent?.let { NoteFormatUtils.extractKardLeafId(it) }?.takeIf { it.isNotBlank() }
         val recordId = kardLeafId ?: notePath
         syncNoteRecordsWithResolvedId(notePath, recordId)
@@ -2734,17 +3677,19 @@ class RoomNoteRepository(
     private suspend fun resolveOrCreateNoteRecordIdForRemark(notePath: String): String {
         if (notePath.isBlank()) return notePath
         val entity = noteDao.getNoteShellByPath(notePath) ?: return notePath
-        val file = findNoteDocument(entity) ?: findDocumentByPath(notePath) ?: return notePath
+        val file = findNoteDocumentDirectFirst(entity, traceReason = "resolveOrCreateNoteRecordIdForRemark")
+            ?: findDocumentByPath(notePath, traceReason = "resolveOrCreateNoteRecordIdForRemark.fallbackPath")
+            ?: return notePath
         val rawContent = readText(file)
-        NoteFormatUtils.extractKardLeafId(rawContent)?.takeIf { it.isNotBlank() }?.let { recordId ->
+        val frontMatter = NoteFormatUtils.parseFrontMatter(rawContent)
+        NoteFormatUtils.extractKardLeafId(frontMatter)?.let { recordId ->
             syncNoteRecordsWithResolvedId(notePath, recordId)
             return recordId
         }
 
-        val frontMatter = NoteFormatUtils.parseFrontMatter(rawContent)
         val noteForFrontMatter = entity.toNote().copy(content = frontMatter.cleanContent)
         val fullContent = NoteFormatUtils.constructFileContent(noteForFrontMatter, rawContent)
-        val recordId = NoteFormatUtils.extractKardLeafId(fullContent)?.takeIf { it.isNotBlank() } ?: notePath
+        val recordId = NoteFormatUtils.extractKardLeafId(fullContent) ?: notePath
         if (recordId == notePath) return notePath
 
         context.contentResolver.openOutputStream(file.uri, "wt")?.use { outputStream ->
@@ -2756,7 +3701,8 @@ class RoomNoteRepository(
         updateTextCache(file, fullContent)
 
         val writtenLastModified = file.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
-        val updatedEntity = readNoteFromFileForEditor(entity, file).copy(lastModifiedMs = writtenLastModified)
+        val updatedEntity = readNoteFromFileForEditor(entity, file)?.copy(lastModifiedMs = writtenLastModified)
+            ?: return notePath
         noteDao.insertNote(updatedEntity)
         fileSignatures[notePath] = FileSignature(writtenLastModified, file.length())
         syncNoteRecordsWithResolvedId(notePath, recordId)
@@ -2832,24 +3778,56 @@ class RoomNoteRepository(
         )
     }
 
-    private suspend fun saveHistorySnapshot(entity: NoteEntity) {
+    private suspend fun readHistorySnapshotContentSource(oldFileDoc: DocumentFile?): HistorySnapshotContentSource {
+        if (oldFileDoc == null) {
+            return HistorySnapshotContentSource(fallbackReason = "old-file-missing")
+        }
+        return try {
+            val rawContent = readText(oldFileDoc)
+            if (rawContent.isEmpty() && oldFileDoc.length() > 0L) {
+                return HistorySnapshotContentSource(fallbackReason = "old-file-read-empty")
+            }
+            val frontMatter = NoteFormatUtils.parseFrontMatter(rawContent)
+            HistorySnapshotContentSource(
+                rawContent = rawContent,
+                cleanContent = frontMatter.cleanContent,
+                tags = NoteFormatUtils.extractTags(frontMatter),
+            )
+        } catch (e: Exception) {
+            HistorySnapshotContentSource(fallbackReason = "old-file-read-failed")
+        }
+    }
+
+    private suspend fun saveHistorySnapshot(
+        entity: NoteEntity,
+        externalContent: String?,
+        externalFallbackReason: String?,
+    ) {
+        val historyLimit = prefsManager.getHistoryVersionLimit()
+        if (historyLimit <= 0) return
         val recordId = resolveNoteRecordId(entity.filePath)
+        val snapshotContent = externalContent ?: entity.content.also {
+            logRoomContentAudit(
+                "history snapshot fallback to Room content reason=${externalFallbackReason ?: "external-content-null"} path=${entity.filePath} roomLen=${entity.content.length}",
+            )
+        }
         noteHistoryDao.insert(
             NoteHistoryEntity(
                 noteId = recordId,
                 title = entity.title,
-                content = entity.content,
+                content = snapshotContent,
                 savedAtMs = System.currentTimeMillis(),
             ),
         )
-        noteHistoryDao.pruneOldVersions(recordId, prefsManager.getHistoryVersionLimit())
+        noteHistoryDao.pruneOldVersions(recordId, historyLimit)
     }
 
     private fun hasTitleOrContentChanged(
         entity: NoteEntity,
         note: Note,
+        externalContent: String? = null,
     ): Boolean {
-        return entity.title != note.title || entity.content != note.content
+        return entity.title != note.title || (externalContent ?: entity.content) != note.content
     }
 
     private fun getTrashRoot(
@@ -2865,32 +3843,220 @@ class RoomNoteRepository(
         return if (create) root.createDirectory(configuredName) else null
     }
 
-    private fun findNoteDocument(entity: NoteEntity): DocumentFile? {
-        val root = rootDir ?: return null
+    private fun findNoteDocumentByDirectUri(
+        entity: NoteEntity,
+        traceReason: String? = null,
+    ): DocumentFile? {
+        val startMs = SystemClock.elapsedRealtime()
+        val treeUri = rootTreeUri ?: run {
+            if (traceReason != null) {
+                KardLeafLog.w(OPEN_PATH_PROBE_TAG, "external directUri noTreeUri reason=$traceReason path=${entity.filePath}")
+            }
+            return null
+        }
+        val rootDocumentId =
+            currentRootDocumentId()
+                ?: run {
+                    if (traceReason != null) {
+                        KardLeafLog.w(OPEN_PATH_PROBE_TAG, "external directUri noRootDocumentId reason=$traceReason path=${entity.filePath}")
+                    }
+                    return null
+                }
+
+        val basePath = joinPath(entity.folder, entity.fileName)
+        val candidates = mutableListOf<String>().apply {
+            if (!entity.isTrashed) {
+                if (entity.isArchived) add(joinPath(entity.folder, "Archived/${entity.fileName}"))
+                if (entity.isPinned) add(joinPath(entity.folder, "Pinned/${entity.fileName}"))
+                add(basePath)
+            }
+        }.distinct()
+
+        if (candidates.isEmpty()) {
+            if (traceReason != null) {
+                KardLeafLog.d(OPEN_PATH_PROBE_TAG, "external directUri skip reason=$traceReason path=${entity.filePath} trashed=${entity.isTrashed}")
+            }
+            return null
+        }
+
+        for (candidate in candidates) {
+            val documentId = "$rootDocumentId/$candidate"
+            val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
+            val checkStartMs = SystemClock.elapsedRealtime()
+            val document = DocumentFile.fromSingleUri(context, documentUri)
+            val isFile = runCatching { document?.isFile == true }.getOrDefault(false)
+            val checkElapsedMs = SystemClock.elapsedRealtime() - checkStartMs
+            if (traceReason != null || checkElapsedMs >= 16L) {
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "external directUri check reason=${traceReason ?: "slow"} path=${entity.filePath} " +
+                        "candidate=$candidate found=$isFile elapsed=${checkElapsedMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                )
+            }
+            if (isFile && document != null) {
+                if (traceReason != null) {
+                    KardLeafLog.d(
+                        OPEN_PATH_PROBE_TAG,
+                        "external directUri hit reason=$traceReason path=${entity.filePath} candidate=$candidate " +
+                            "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                    )
+                }
+                return document
+            }
+        }
+
+        if (traceReason != null) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external directUri miss reason=$traceReason path=${entity.filePath} candidates=${candidates.size} " +
+                    "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+        }
+        return null
+    }
+
+    private fun findNoteDocumentDirectFirst(
+        entity: NoteEntity,
+        traceReason: String,
+    ): DocumentFile? {
+        val direct = findNoteDocumentByDirectUri(entity, traceReason = "$traceReason.directUri")
+        if (direct != null) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external reuseDirectUri directUriReuseHit reason=$traceReason path=${entity.filePath} " +
+                    "uri=${direct.uri} skipFindFileAfterDirectHit",
+            )
+            return direct
+        }
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "external fallbackFindFileAfterDirectMiss reason=$traceReason path=${entity.filePath}",
+        )
+        return findNoteDocument(entity, traceReason = "$traceReason.fallbackFindFile")
+    }
+
+    private fun findNoteDocument(
+        entity: NoteEntity,
+        traceReason: String? = null,
+    ): DocumentFile? {
+        val startMs = SystemClock.elapsedRealtime()
+        val root = rootDir ?: run {
+            if (traceReason != null) {
+                KardLeafLog.w(OPEN_PATH_PROBE_TAG, "external findNoteDocument noRoot reason=$traceReason path=${entity.filePath}")
+            }
+            return null
+        }
+        if (traceReason != null) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external findNoteDocument start reason=$traceReason path=${entity.filePath} folder=${entity.folder} " +
+                    "fileName=${entity.fileName} archived=${entity.isArchived} trashed=${entity.isTrashed} pinned=${entity.isPinned}",
+            )
+        }
+        val baseFolderStartMs = SystemClock.elapsedRealtime()
         val baseFolder =
             if (entity.isTrashed) {
-                getTrashRoot(root, create = false)?.let { findFolder(it, entity.folder) }
+                getTrashRoot(root, create = false)?.let {
+                    findFolder(it, entity.folder, traceReason = traceReason?.let { reason -> "$reason.trashFolder" })
+                }
             } else {
-                findFolder(root, entity.folder)
-            } ?: return null
+                findFolder(root, entity.folder, traceReason = traceReason?.let { "$it.baseFolder" })
+            } ?: run {
+                if (traceReason != null) {
+                    KardLeafLog.w(
+                        OPEN_PATH_PROBE_TAG,
+                        "external findNoteDocument noBaseFolder reason=$traceReason path=${entity.filePath} folder=${entity.folder} " +
+                            "baseFolderElapsed=${SystemClock.elapsedRealtime() - baseFolderStartMs}ms",
+                    )
+                }
+                return null
+            }
+        val baseFolderElapsedMs = SystemClock.elapsedRealtime() - baseFolderStartMs
 
-        return when {
-            entity.isTrashed -> baseFolder.findFile(entity.fileName)
-            entity.isArchived -> baseFolder.findFile("Archived")?.findFile(entity.fileName) ?: baseFolder.findFile(entity.fileName)
-            entity.isPinned -> baseFolder.findFile("Pinned")?.findFile(entity.fileName) ?: baseFolder.findFile(entity.fileName)
-            else -> baseFolder.findFile(entity.fileName)
+        fun findDirect(label: String, folder: DocumentFile, fileName: String): DocumentFile? {
+            val findStartMs = SystemClock.elapsedRealtime()
+            val found = folder.findFile(fileName)?.takeIf { it.isFile }
+            val findElapsedMs = SystemClock.elapsedRealtime() - findStartMs
+            if (traceReason != null || findElapsedMs >= 16L) {
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "external findNoteDocument findFile reason=${traceReason ?: "slow"} label=$label path=${entity.filePath} " +
+                        "fileName=$fileName found=${found != null} elapsed=${findElapsedMs}ms",
+                )
+            }
+            return found
         }
+
+        val result = when {
+            entity.isTrashed -> findDirect("trashBase", baseFolder, entity.fileName)
+            entity.isArchived -> {
+                val archivedFolderStartMs = SystemClock.elapsedRealtime()
+                val archivedFolder = baseFolder.findFile("Archived")
+                val archivedFolderElapsedMs = SystemClock.elapsedRealtime() - archivedFolderStartMs
+                if (traceReason != null || archivedFolderElapsedMs >= 16L) {
+                    KardLeafLog.d(
+                        OPEN_PATH_PROBE_TAG,
+                        "external findNoteDocument archivedFolder reason=${traceReason ?: "slow"} path=${entity.filePath} " +
+                            "found=${archivedFolder != null} elapsed=${archivedFolderElapsedMs}ms",
+                    )
+                }
+                archivedFolder?.let { findDirect("archived", it, entity.fileName) } ?: findDirect("baseFallback", baseFolder, entity.fileName)
+            }
+            entity.isPinned -> {
+                val pinnedFolderStartMs = SystemClock.elapsedRealtime()
+                val pinnedFolder = baseFolder.findFile("Pinned")
+                val pinnedFolderElapsedMs = SystemClock.elapsedRealtime() - pinnedFolderStartMs
+                if (traceReason != null || pinnedFolderElapsedMs >= 16L) {
+                    KardLeafLog.d(
+                        OPEN_PATH_PROBE_TAG,
+                        "external findNoteDocument pinnedFolder reason=${traceReason ?: "slow"} path=${entity.filePath} " +
+                            "found=${pinnedFolder != null} elapsed=${pinnedFolderElapsedMs}ms",
+                    )
+                }
+                pinnedFolder?.let { findDirect("pinned", it, entity.fileName) } ?: findDirect("baseFallback", baseFolder, entity.fileName)
+            }
+            else -> findDirect("base", baseFolder, entity.fileName)
+        }
+        if (traceReason != null || baseFolderElapsedMs >= 16L) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "external findNoteDocument done reason=${traceReason ?: "slow"} path=${entity.filePath} " +
+                    "folder=${entity.folder} fileName=${entity.fileName} found=${result != null} " +
+                    "baseFolderElapsed=${baseFolderElapsedMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+        }
+        return result
     }
 
     private fun findFolder(
         root: DocumentFile,
         path: String,
+        traceReason: String? = null,
     ): DocumentFile? {
+        val startMs = SystemClock.elapsedRealtime()
         val normalized = normalizeFolderPath(path)
-        if (normalized.isBlank()) return root
+        if (normalized.isBlank()) {
+            if (traceReason != null) {
+                KardLeafLog.d(OPEN_PATH_PROBE_TAG, "external findFolder root reason=$traceReason path=$path elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
+            }
+            return root
+        }
         var current: DocumentFile = root
-        normalized.split("/").forEach { segment ->
-            current = current.findFile(segment)?.takeIf { it.isDirectory } ?: return null
+        normalized.split("/").forEachIndexed { index, segment ->
+            val segmentStartMs = SystemClock.elapsedRealtime()
+            val next = current.findFile(segment)?.takeIf { it.isDirectory }
+            val segmentElapsedMs = SystemClock.elapsedRealtime() - segmentStartMs
+            if (traceReason != null || segmentElapsedMs >= 16L) {
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "external findFolder segment reason=${traceReason ?: "slow"} path=$normalized index=$index segment=$segment " +
+                        "found=${next != null} elapsed=${segmentElapsedMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+                )
+            }
+            current = next ?: return null
+        }
+        if (traceReason != null) {
+            KardLeafLog.d(OPEN_PATH_PROBE_TAG, "external findFolder done reason=$traceReason path=$normalized elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
         }
         return current
     }
@@ -2928,7 +4094,7 @@ class RoomNoteRepository(
             .replace("\\", "/")
             .split("/")
             .map { it.trim() }
-            .filter { it.isNotBlank() && it != "Unknown" && it != "." }
+            .filter { it.isNotBlank() && it != "." }
             .joinToString("/")
     }
 

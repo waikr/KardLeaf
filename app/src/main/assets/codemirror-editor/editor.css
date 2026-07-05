@@ -1,0 +1,160 @@
+:root {
+  color-scheme: light dark;
+  --kardleaf-ime-safe-bottom: 0px;
+  --kl-shell-bg: #f4faff;
+  --kl-shell-fg: #172033;
+  --kl-shell-muted: #46627f;
+  --kl-shell-border: rgba(139, 178, 217, 0.72);
+  --kl-shell-soft: rgba(228, 241, 255, 0.72);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --kl-shell-bg: #101923;
+  --kl-shell-fg: #e5eef8;
+  --kl-shell-muted: #c8d8e8;
+  --kl-shell-border: rgba(255, 255, 255, 0.16);
+  --kl-shell-soft: rgba(255, 255, 255, 0.07);
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--kl-shell-bg);
+  color: var(--kl-shell-fg);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--kl-shell-bg);
+}
+
+#status {
+  display: none;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--kl-shell-border);
+  color: var(--kl-shell-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+#status.visible {
+  display: block;
+}
+
+#status.error {
+  display: block;
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+#editorRoot {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--kl-shell-bg);
+}
+
+.kl-fallback {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  resize: none;
+  padding: 16px;
+  background: var(--kl-shell-bg);
+  color: var(--kl-shell-fg);
+  font: 16px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  outline: none;
+}
+
+.cm-editor {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.cm-scroller {
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scroll-padding-bottom: calc(var(--kardleaf-ime-safe-bottom) + 96px);
+  font-family: inherit;
+}
+
+.cm-content {
+  box-sizing: border-box;
+  min-height: 100%;
+  padding-bottom: max(50vh, calc(32px + var(--kardleaf-ime-safe-bottom)));
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.cm-line {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.kl-wiki-image {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+}
+
+.kl-wiki-image-source-visible {
+  justify-content: flex-start;
+}
+
+.kl-wiki-image-frame {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: 1px solid var(--kl-shell-border);
+  background: var(--kl-shell-soft);
+  overflow: hidden;
+}
+
+.kl-wiki-image-frame img {
+  display: block;
+  max-width: min(100%, 720px);
+  max-height: 420px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+.kl-wiki-image-fallback {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  color: var(--kl-shell-muted);
+  font-size: 0.9em;
+  font-style: italic;
+}

@@ -1,9 +1,14 @@
 package com.kangle.kardleaf.ui
 
+import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.KardLeafLogTags
+import com.kangle.kardleaf.data.utils.KardLeafPerfLog
 import android.content.Context
 import android.graphics.Color as AndroidColor
+import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
-import android.util.Log
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -13,6 +18,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -34,6 +40,7 @@ import io.noties.markwon.editor.MarkwonEditorTextWatcher
 import io.noties.markwon.editor.handler.EmphasisEditHandler
 import io.noties.markwon.editor.handler.StrongEmphasisEditHandler
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -42,6 +49,16 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private const val EDITOR_TRACE_TAG = "KardLeafEditorTrace"
+private val USER_PERF_TRACE_TAG = KardLeafLogTags.USER_PERF
+private const val OPEN_PATH_PROBE_TAG = "KardLeafOpenPathProbe"
+
+private fun nativeEditorMemorySummary(): String {
+    val runtime = Runtime.getRuntime()
+    val usedMb = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024
+    val totalMb = runtime.totalMemory() / 1024 / 1024
+    val maxMb = runtime.maxMemory() / 1024 / 1024
+    return "mem=${usedMb}MB/${totalMb}MB max=${maxMb}MB"
+}
 
 /** A lightweight snapshot read from the native editor only on demand. */
 data class KardLeafEditorSnapshot(
@@ -66,11 +83,19 @@ class KardLeafEditorController {
     private var cachedTitle: String = ""
     private var cachedContent: String = ""
     private var cachedSelection: TextRange = TextRange(0, 0)
+    private var externalContentUpdater: ((String, TextRange) -> Unit)? = null
+    private var externalSnapshotRequester: (((KardLeafEditorSnapshot) -> Unit) -> Unit)? = null
+    private var externalUndoAction: (() -> Unit)? = null
+    private var externalRedoAction: (() -> Unit)? = null
+    private var externalCommandExecutor: ((String, List<Any>) -> Boolean)? = null
+    private var externalCanUndo: Boolean = false
+    private var externalCanRedo: Boolean = false
 
     fun acceptInitialSnapshot(
         documentKey: String,
         initialTitle: String,
         initialContent: String,
+        initialSelection: TextRange? = null,
     ) {
         val isDifferentDocument = this.documentKey != documentKey
         if (editorView != null && !isDifferentDocument) return
@@ -82,9 +107,9 @@ class KardLeafEditorController {
             lastLoadedContent = initialContent
             cachedTitle = initialTitle
             cachedContent = initialContent
-            cachedSelection = TextRange(initialContent.length, initialContent.length)
+            cachedSelection = initialSelection ?: TextRange(initialContent.length, initialContent.length)
             if (isDifferentDocument) {
-                Log.d(
+                KardLeafLog.d(
                     EDITOR_TRACE_TAG,
                     "controller accept new document key=$documentKey titleLen=${initialTitle.length} contentLen=${initialContent.length}",
                 )
@@ -102,7 +127,7 @@ class KardLeafEditorController {
         this.documentKey = documentKey
         lastLoadedTitle = loadedTitle
         lastLoadedContent = loadedContent
-        Log.d(
+        KardLeafLog.d(
             EDITOR_TRACE_TAG,
             "controller attach key=$documentKey loadedTitleLen=${loadedTitle.length} loadedContentLen=${loadedContent.length} " +
                 "viewTitleLen=${view.titleEditText.length()} viewContentLen=${view.contentLength()}",
@@ -113,12 +138,12 @@ class KardLeafEditorController {
         if (editorView === view) {
             if (isCurrentAttachedView(view)) {
                 captureFromView(view)
-                Log.d(
+                KardLeafLog.d(
                     EDITOR_TRACE_TAG,
                     "controller detach key=$documentKey cachedTitleLen=${cachedTitle.length} cachedContentLen=${cachedContent.length} selection=$cachedSelection",
                 )
             } else {
-                Log.w(
+                KardLeafLog.w(
                     EDITOR_TRACE_TAG,
                     "controller detach ignored stale view currentKey=$documentKey viewKey=${view.boundDocumentKey}",
                 )
@@ -130,7 +155,7 @@ class KardLeafEditorController {
 
     fun releaseForClose(clearText: Boolean = false) {
         editorView?.let { view ->
-            Log.d(
+            KardLeafLog.d(
                 EDITOR_TRACE_TAG,
                 "controller releaseForClose key=$documentKey viewKey=${view.boundDocumentKey} titleLen=${view.titleEditText.length()} contentLen=${view.contentLength()}",
             )
@@ -143,6 +168,13 @@ class KardLeafEditorController {
         cachedTitle = ""
         cachedContent = ""
         cachedSelection = TextRange(0, 0)
+        externalContentUpdater = null
+        externalSnapshotRequester = null
+        externalUndoAction = null
+        externalRedoAction = null
+        externalCommandExecutor = null
+        externalCanUndo = false
+        externalCanRedo = false
     }
 
     private fun captureFromView(view: KardLeafNativeEditorView) {
@@ -170,6 +202,82 @@ class KardLeafEditorController {
         content = cachedContent,
         selection = cachedSelection,
     )
+
+    internal fun setExternalContentUpdater(updater: ((String, TextRange) -> Unit)?) {
+        externalContentUpdater = updater
+    }
+
+    internal fun setExternalSnapshotRequester(requester: (((KardLeafEditorSnapshot) -> Unit) -> Unit)?) {
+        externalSnapshotRequester = requester
+    }
+
+    internal fun setExternalUndoRedoActions(
+        undoAction: (() -> Unit)?,
+        redoAction: (() -> Unit)?,
+    ) {
+        externalUndoAction = undoAction
+        externalRedoAction = redoAction
+        if (undoAction == null && redoAction == null) {
+            externalCanUndo = false
+            externalCanRedo = false
+        }
+    }
+
+    internal fun updateExternalUndoRedoState(
+        canUndo: Boolean,
+        canRedo: Boolean,
+    ) {
+        externalCanUndo = canUndo
+        externalCanRedo = canRedo
+    }
+
+    internal fun setExternalCommandExecutor(executor: ((String, List<Any>) -> Boolean)?) {
+        externalCommandExecutor = executor
+    }
+
+    fun executeExternalCommand(command: String, vararg args: Any): Boolean =
+        externalCommandExecutor?.invoke(command, args.toList()) == true
+
+    fun requestExternalSnapshot(onSnapshot: (KardLeafEditorSnapshot) -> Unit): Boolean {
+        val requester = externalSnapshotRequester ?: return false
+        requester(onSnapshot)
+        return true
+    }
+
+    fun updateExternalContentSnapshot(
+        content: String,
+        selection: TextRange = cachedSelection,
+    ) {
+        cachedContent = content
+        val len = cachedContent.length
+        cachedSelection = TextRange(selection.start.coerceIn(0, len), selection.end.coerceIn(0, len))
+    }
+
+    fun updateExternalTitle(title: String) {
+        cachedTitle = title
+    }
+
+    fun updateExternalSelection(start: Int, end: Int) {
+        val len = cachedContent.length
+        cachedSelection = TextRange(start.coerceIn(0, len), end.coerceIn(0, len))
+    }
+
+    fun applyExternalContentPatch(
+        start: Int,
+        deleteCount: Int,
+        insertedText: String,
+        selection: TextRange,
+    ) {
+        val safeStart = start.coerceIn(0, cachedContent.length)
+        val safeDeleteEnd = (safeStart + deleteCount).coerceIn(safeStart, cachedContent.length)
+        cachedContent = cachedContent.substring(0, safeStart) + insertedText + cachedContent.substring(safeDeleteEnd)
+        val len = cachedContent.length
+        cachedSelection = TextRange(selection.start.coerceIn(0, len), selection.end.coerceIn(0, len))
+    }
+
+    private fun notifyExternalContentUpdater() {
+        externalContentUpdater?.invoke(cachedContent, cachedSelection)
+    }
 
     fun getSnapshot(): KardLeafEditorSnapshot {
         currentEditorView()?.let { captureFromView(it) }
@@ -220,12 +328,13 @@ class KardLeafEditorController {
             cachedContent = cachedContent.substring(0, start) + insertion + cachedContent.substring(end)
             val cursor = start + prefix.length + selectedText.length
             cachedSelection = TextRange(cursor, cursor)
+            notifyExternalContentUpdater()
         }
     }
 
     fun replaceSelection(insertion: String) {
         val attached = currentEditorView()
-        Log.d(
+        KardLeafLog.d(
             EDITOR_TRACE_TAG,
             "controller replaceSelection before key=$documentKey attached=${attached != null} " +
                 "cachedLen=${cachedContent.length} cachedSelection=${cachedSelection.start}..${cachedSelection.end} insertionLen=${insertion.length}",
@@ -233,7 +342,7 @@ class KardLeafEditorController {
         if (attached != null) {
             attached.replaceContentSelection(insertion)
             cachedSelection = attached.getContentSelection()
-            Log.d(
+            KardLeafLog.d(
                 EDITOR_TRACE_TAG,
                 "controller replaceSelection after attached key=$documentKey viewLen=${attached.contentLength()} " +
                     "cachedSelection=${cachedSelection.start}..${cachedSelection.end}",
@@ -244,7 +353,8 @@ class KardLeafEditorController {
             cachedContent = cachedContent.substring(0, start) + insertion + cachedContent.substring(end)
             val cursor = start + insertion.length
             cachedSelection = TextRange(cursor, cursor)
-            Log.d(
+            notifyExternalContentUpdater()
+            KardLeafLog.d(
                 EDITOR_TRACE_TAG,
                 "controller replaceSelection after cached key=$documentKey newCachedLen=${cachedContent.length} " +
                     "cachedSelection=${cachedSelection.start}..${cachedSelection.end} replace=$start..$end",
@@ -263,6 +373,7 @@ class KardLeafEditorController {
         } else {
             cachedContent = newText
             cachedSelection = selection ?: TextRange(newText.length, newText.length)
+            notifyExternalContentUpdater()
         }
     }
 
@@ -277,6 +388,7 @@ class KardLeafEditorController {
         } else {
             val len = cachedContent.length
             cachedSelection = TextRange(start.coerceIn(0, len), end.coerceIn(0, len))
+            notifyExternalContentUpdater()
         }
     }
 
@@ -304,19 +416,23 @@ class KardLeafEditorController {
     }
 
     fun undo() {
-        currentEditorView()?.undoContent()
+        currentEditorView()?.undoContent() ?: externalUndoAction?.takeIf { externalCanUndo }?.invoke()
     }
 
     fun redo() {
-        currentEditorView()?.redoContent()
+        currentEditorView()?.redoContent() ?: externalRedoAction?.takeIf { externalCanRedo }?.invoke()
     }
 
-    fun canUndo(): Boolean = currentEditorView()?.canUndoContent() ?: false
+    fun canUndo(): Boolean = currentEditorView()?.canUndoContent() ?: (externalUndoAction != null && externalCanUndo)
 
-    fun canRedo(): Boolean = currentEditorView()?.canRedoContent() ?: false
+    fun canRedo(): Boolean = currentEditorView()?.canRedoContent() ?: (externalRedoAction != null && externalCanRedo)
 
     fun clearHistory() {
         currentEditorView()?.clearContentHistory()
+    }
+
+    fun refreshInlineImagePreviews() {
+        currentEditorView()?.refreshContentInlineImagePreviews()
     }
 }
 
@@ -342,6 +458,17 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         private set
     private var loadedTitle: String = ""
     private var loadedContent: String = ""
+    private var userPerfOpenStartRealtimeMs: Long? = null
+    private var userPerfSizeTier: String = "unknown"
+    private var userPerfFirstNativeTextLaidOutLogged = false
+    private val userPerfScrollHandler = Handler(Looper.getMainLooper())
+    private var userPerfScrollStartMs = 0L
+    private var userPerfScrollLastMs = 0L
+    private var userPerfScrollFrames = 0
+    private var userPerfScrollSlowFrames = 0
+    private var userPerfScrollMaxFrameMs = 0L
+    private var userPerfScrollStartY = 0
+    private val userPerfScrollSettleRunnable = Runnable { logUserPerfScrollSettled() }
 
     private val titleWatcher = object : TextWatcher {
         override fun beforeTextChanged(
@@ -445,7 +572,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
             contentEditText,
         )
         contentEditText.configureMarkdownWatcher(markdownWatcher)
-        Log.d(
+        KardLeafLog.d(
             EDITOR_TRACE_TAG,
             "native markdown watcher init done elapsed=${SystemClock.elapsedRealtime() - markdownInitStartMs}ms",
         )
@@ -454,6 +581,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         contentEditText.setOnTouchListener { _, event -> notifyUserInteractionOnTouch(event) }
         scrollView.setOnTouchListener { _, event -> notifyUserInteractionOnTouch(event) }
         scrollView.setOnScrollChangeListener { _, _, _, _, _ ->
+            recordUserPerfScrollFrame()
             scrollChangedCallback?.invoke()
         }
 
@@ -470,6 +598,68 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         return false
     }
 
+    private fun recordUserPerfScrollFrame() {
+        if (isDisposed) return
+        val now = SystemClock.elapsedRealtime()
+        if (userPerfScrollStartMs <= 0L) {
+            userPerfScrollStartMs = now
+            userPerfScrollLastMs = now
+            userPerfScrollFrames = 0
+            userPerfScrollSlowFrames = 0
+            userPerfScrollMaxFrameMs = 0L
+            userPerfScrollStartY = scrollView.scrollY
+            KardLeafLog.d(
+                USER_PERF_TRACE_TAG,
+                "editorScroll humanStart mode=nativeEditor contentLen=${contentEditText.length()} " +
+                    "sizeTier=$userPerfSizeTier scrollY=$userPerfScrollStartY maxScrollY=${maxScrollY()} key=$boundDocumentKey",
+            )
+        } else {
+            val frameMs = now - userPerfScrollLastMs
+            if (frameMs > 0L) {
+                userPerfScrollFrames++
+                userPerfScrollMaxFrameMs = maxOf(userPerfScrollMaxFrameMs, frameMs)
+                if (frameMs > 32L) userPerfScrollSlowFrames++
+            }
+            userPerfScrollLastMs = now
+        }
+        userPerfScrollHandler.removeCallbacks(userPerfScrollSettleRunnable)
+        userPerfScrollHandler.postDelayed(userPerfScrollSettleRunnable, 180L)
+    }
+
+    private fun logUserPerfScrollSettled() {
+        val startMs = userPerfScrollStartMs
+        if (startMs <= 0L) return
+        val elapsed = (userPerfScrollLastMs - startMs).coerceAtLeast(0L)
+        val endScrollY = scrollView.scrollY
+        val deltaPx = abs(endScrollY - userPerfScrollStartY)
+        val avgFrame = KardLeafPerfLog.avgFrame(elapsed, userPerfScrollFrames)
+        val msPerPx = KardLeafPerfLog.msPerPx(elapsed, deltaPx)
+        val smooth = userPerfScrollSlowFrames == 0 && userPerfScrollMaxFrameMs <= 32L
+        KardLeafLog.d(
+            USER_PERF_TRACE_TAG,
+            "editorScroll humanSettled mode=nativeEditor elapsed=${elapsed}ms " +
+                "frames=$userPerfScrollFrames slowFrames=$userPerfScrollSlowFrames " +
+                "maxFrame=${userPerfScrollMaxFrameMs}ms avgFrame=${avgFrame}ms " +
+                "smooth=$smooth contentLen=${contentEditText.length()} sizeTier=$userPerfSizeTier " +
+                "fromY=$userPerfScrollStartY toY=$endScrollY deltaPx=$deltaPx msPerPx=$msPerPx " +
+                "maxScrollY=${maxScrollY()} key=$boundDocumentKey",
+        )
+        userPerfScrollStartMs = 0L
+        userPerfScrollLastMs = 0L
+        userPerfScrollFrames = 0
+        userPerfScrollSlowFrames = 0
+        userPerfScrollMaxFrameMs = 0L
+        userPerfScrollStartY = 0
+    }
+
+    fun configureUserPerf(openStartRealtimeMs: Long?, sizeTier: String) {
+        if (userPerfOpenStartRealtimeMs != openStartRealtimeMs) {
+            userPerfFirstNativeTextLaidOutLogged = false
+        }
+        userPerfOpenStartRealtimeMs = openStartRealtimeMs
+        userPerfSizeTier = sizeTier
+    }
+
     fun configure(
         titleHint: String,
         contentHint: String,
@@ -477,14 +667,20 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         hintColor: Int,
         titleTextSizeSp: Float,
         contentTextSizeSp: Float,
+        contentLineHeightMultiplier: Float,
+        contentLetterSpacingSp: Float,
+        contentParagraphSpacingDp: Float,
+        contentFontFamily: String,
         showTitle: Boolean,
         currentFolder: String,
+        readOnly: Boolean,
         onTitleChanged: () -> Unit,
         onContentChanged: () -> Unit,
         onSelectionChanged: (Int, Int) -> Unit,
         onUndoRedoChanged: () -> Unit,
         onUserInteraction: () -> Unit,
         onFastScrollSourceScrolled: () -> Unit,
+        onInlineImageClicked: (String) -> Unit,
     ) {
         titleChangedCallback = onTitleChanged
         userInteractionCallback = onUserInteraction
@@ -494,15 +690,27 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         titleEditText.setHintTextColor(hintColor)
         titleEditText.setTextSize(TypedValue.COMPLEX_UNIT_SP, titleTextSizeSp)
         titleEditText.visibility = if (showTitle) View.VISIBLE else View.GONE
+        titleEditText.isFocusable = !readOnly
+        titleEditText.isFocusableInTouchMode = !readOnly
+        titleEditText.isCursorVisible = !readOnly
+        titleEditText.showSoftInputOnFocus = !readOnly
 
         contentEditText.hint = contentHint
         contentEditText.setTextColor(textColor)
         contentEditText.setHintTextColor(hintColor)
         contentEditText.setTextSize(TypedValue.COMPLEX_UNIT_SP, contentTextSizeSp)
+        contentEditText.typeface = editorTypeface(contentFontFamily)
+        contentEditText.setLineSpacing(dp(contentParagraphSpacingDp).toFloat(), contentLineHeightMultiplier)
+        contentEditText.letterSpacing = contentLetterSpacingSp / contentTextSizeSp.coerceAtLeast(1f)
+        contentEditText.isFocusable = !readOnly
+        contentEditText.isFocusableInTouchMode = !readOnly
+        contentEditText.isCursorVisible = !readOnly
+        contentEditText.showSoftInputOnFocus = !readOnly
         contentEditText.configureInlineImagePreviewFolder(currentFolder)
         contentEditText.kardLeafContentCallback = onContentChanged
         contentEditText.kardLeafSelectionCallback = onSelectionChanged
         contentEditText.kardLeafUndoRedoCallback = onUndoRedoChanged
+        contentEditText.kardLeafInlineImageClickCallback = onInlineImageClicked
     }
 
     fun bindDocument(
@@ -513,7 +721,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
     ) {
         val startMs = SystemClock.elapsedRealtime()
         if (boundDocumentKey == null) {
-            Log.d(
+            KardLeafLog.d(
                 EDITOR_TRACE_TAG,
                 "bindDocument first key=$documentKey initialTitleLen=${initialTitle.length} initialContentLen=${initialContent.length} " +
                     "preferredTitleLen=${preferredSnapshot.title.length} preferredContentLen=${preferredSnapshot.content.length}",
@@ -526,7 +734,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
             boundDocumentKey = documentKey
             loadedTitle = initialTitle
             loadedContent = initialContent
-            Log.d(EDITOR_TRACE_TAG, "bindDocument first done key=$documentKey elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
+            KardLeafLog.d(EDITOR_TRACE_TAG, "bindDocument first done key=$documentKey elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
             return
         }
 
@@ -542,7 +750,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
             (currentTitle.isEmpty() && initialTitle.isNotEmpty()) ||
                 (currentContent.isEmpty() && initialContent.isNotEmpty())
         val canSafelyReloadDifferentDocument = isDifferentDocument && !hasEditorFocus()
-        Log.d(
+        KardLeafLog.d(
             EDITOR_TRACE_TAG,
             "bindDocument change key=$documentKey oldKey=$boundDocumentKey currentTitleLen=${currentTitle.length} currentContentLen=${currentContent.length} " +
                 "initialTitleLen=${initialTitle.length} initialContentLen=${initialContent.length} loadedTitleLen=${loadedTitle.length} loadedContentLen=${loadedContent.length} " +
@@ -555,7 +763,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
                 boundDocumentKey = documentKey
                 loadedTitle = initialTitle
                 loadedContent = initialContent
-                Log.d(EDITOR_TRACE_TAG, "bindDocument metadata only key=$documentKey elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
+                KardLeafLog.d(EDITOR_TRACE_TAG, "bindDocument metadata only key=$documentKey elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
             }
             isEditorStillAtLoadedText || isMissingInitialText || canSafelyReloadDifferentDocument -> {
                 val previousSelection = getContentSelection()
@@ -563,14 +771,14 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
                 boundDocumentKey = documentKey
                 loadedTitle = initialTitle
                 loadedContent = initialContent
-                Log.d(EDITOR_TRACE_TAG, "bindDocument reloaded key=$documentKey elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
+                KardLeafLog.d(EDITOR_TRACE_TAG, "bindDocument reloaded key=$documentKey elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
             }
             else -> {
                 // Preserve newer local typing if repository emissions race with the editor.
                 boundDocumentKey = documentKey
                 loadedTitle = initialTitle
                 loadedContent = initialContent
-                Log.w(EDITOR_TRACE_TAG, "bindDocument preserve local text key=$documentKey elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
+                KardLeafLog.w(EDITOR_TRACE_TAG, "bindDocument preserve local text key=$documentKey elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
             }
         }
     }
@@ -645,17 +853,30 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         selection: TextRange? = null,
     ) {
         val startMs = SystemClock.elapsedRealtime()
-        Log.d(
+        val openStartMs = userPerfOpenStartRealtimeMs
+        KardLeafLog.d(
             EDITOR_TRACE_TAG,
             "setInitialSnapshot key=$boundDocumentKey titleLen=${title.length} contentLen=${content.length} selection=$selection",
         )
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "native setInitialSnapshot start key=$boundDocumentKey titleLen=${title.length} contentLen=${content.length} " +
+                "selection=$selection thread=${Thread.currentThread().name}",
+        )
+        if (openStartMs != null) {
+            KardLeafLog.d(
+                USER_PERF_TRACE_TAG,
+                "editorOpen nativeSetInitialTextStart elapsed=${SystemClock.elapsedRealtime() - openStartMs}ms " +
+                    "contentLen=${content.length} sizeTier=$userPerfSizeTier key=$boundDocumentKey",
+            )
+        }
         if (titleEditText.text?.toString().orEmpty() != title) {
             programmaticTitleChange.set(true)
             try {
                 val titleStartMs = SystemClock.elapsedRealtime()
                 titleEditText.setText(title)
                 titleEditText.setSelection(title.length.coerceIn(0, titleEditText.length()))
-                Log.d(
+                KardLeafLog.d(
                     EDITOR_TRACE_TAG,
                     "setInitialSnapshot title set done key=$boundDocumentKey titleLen=${title.length} elapsed=${SystemClock.elapsedRealtime() - titleStartMs}ms",
                 )
@@ -663,7 +884,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
                 programmaticTitleChange.set(false)
             }
         } else {
-            Log.d(
+            KardLeafLog.d(
                 EDITOR_TRACE_TAG,
                 "setInitialSnapshot title unchanged key=$boundDocumentKey titleLen=${title.length}",
             )
@@ -671,20 +892,66 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         val targetSelection = selection ?: TextRange(content.length, content.length)
         val contentStartMs = SystemClock.elapsedRealtime()
         contentEditText.setInitialText(content, targetSelection)
-        Log.d(
+        KardLeafLog.d(
             EDITOR_TRACE_TAG,
             "setInitialSnapshot content set done key=$boundDocumentKey contentLen=${content.length} " +
                 "contentSetElapsed=${SystemClock.elapsedRealtime() - contentStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
         )
+        KardLeafLog.d(
+            OPEN_PATH_PROBE_TAG,
+            "native setInitialSnapshot contentDone key=$boundDocumentKey contentLen=${content.length} " +
+                "contentSetElapsed=${SystemClock.elapsedRealtime() - contentStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        if (openStartMs != null) {
+            KardLeafLog.d(
+                USER_PERF_TRACE_TAG,
+                "editorOpen nativeSetTextDone elapsed=${SystemClock.elapsedRealtime() - openStartMs}ms " +
+                    "contentLen=${content.length} sizeTier=$userPerfSizeTier " +
+                    "setTextElapsed=${SystemClock.elapsedRealtime() - contentStartMs}ms key=$boundDocumentKey",
+            )
+        }
+        val layoutPostScheduledMs = SystemClock.elapsedRealtime()
         contentEditText.post {
-            Log.d(
+            val postNowMs = SystemClock.elapsedRealtime()
+            val editorChildHeight = scrollView.getChildAt(0)?.height ?: 0
+            val contentLayout = contentEditText.layout
+            KardLeafLog.d(
+                USER_PERF_TRACE_TAG,
+                "editorOpen nativeLayoutProbe postDelay=${postNowMs - layoutPostScheduledMs}ms " +
+                    "elapsed=${postNowMs - (openStartMs ?: startMs)}ms contentLen=${contentEditText.length()} sizeTier=$userPerfSizeTier " +
+                    "lineCount=${contentEditText.lineCount} layoutReady=${contentLayout != null} layoutHeight=${contentLayout?.height ?: -1} " +
+                    "editHeight=${contentEditText.height} editMinLines=${contentEditText.minLines} editMinHeight=${contentEditText.minimumHeight} " +
+                    "scrollViewHeight=${scrollView.height} editorColumnHeight=${editorColumn.height} childHeight=$editorChildHeight " +
+                    "rootHeight=$height scrollY=${scrollView.scrollY} key=$boundDocumentKey",
+            )
+            KardLeafLog.d(
                 EDITOR_TRACE_TAG,
                 "setInitialSnapshot content post key=$boundDocumentKey viewContentLen=${contentEditText.length()} " +
                     "lineCount=${contentEditText.lineCount} layoutReady=${contentEditText.layout != null} height=${contentEditText.height} " +
                     "elapsedFromStart=${SystemClock.elapsedRealtime() - startMs}ms",
             )
+            if (openStartMs != null && !userPerfFirstNativeTextLaidOutLogged) {
+                userPerfFirstNativeTextLaidOutLogged = true
+                KardLeafLog.d(
+                    USER_PERF_TRACE_TAG,
+                    "editorOpen nativeFirstTextLaidOut elapsed=${SystemClock.elapsedRealtime() - openStartMs}ms " +
+                        "contentLen=${contentEditText.length()} sizeTier=$userPerfSizeTier " +
+                        "layoutReady=${contentEditText.layout != null} lineCount=${contentEditText.lineCount} " +
+                        "viewHeight=${contentEditText.height} scrollHeight=${scrollView.getChildAt(0)?.height ?: 0} " +
+                        "key=$boundDocumentKey",
+                )
+                KardLeafLog.d(
+                    USER_PERF_TRACE_TAG,
+                    "editorOpen bodyRendered elapsed=${SystemClock.elapsedRealtime() - openStartMs}ms " +
+                        "mode=nativeEditor renderStatus=${if (contentEditText.length() > 0) "visible" else "empty"} " +
+                        "contentLen=${contentEditText.length()} sizeTier=$userPerfSizeTier " +
+                        "layoutReady=${contentEditText.layout != null} lineCount=${contentEditText.lineCount} " +
+                        "viewHeight=${contentEditText.height} scrollHeight=${scrollView.getChildAt(0)?.height ?: 0} " +
+                        "key=$boundDocumentKey",
+                )
+            }
         }
-        Log.d(
+        KardLeafLog.d(
             EDITOR_TRACE_TAG,
             "setInitialSnapshot done key=$boundDocumentKey viewTitleLen=${titleEditText.length()} viewContentLen=${contentEditText.length()} " +
                 "elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
@@ -701,14 +968,14 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
     fun replaceContentSelection(insertion: String) {
         val beforeSelection = getContentSelection()
         val beforeLen = contentLength()
-        Log.d(
+        KardLeafLog.d(
             EDITOR_TRACE_TAG,
             "native replaceContentSelection before key=$boundDocumentKey len=$beforeLen " +
                 "selection=${beforeSelection.start}..${beforeSelection.end} insertionLen=${insertion.length}",
         )
         contentEditText.replaceSelection(insertion)
         val afterSelection = getContentSelection()
-        Log.d(
+        KardLeafLog.d(
             EDITOR_TRACE_TAG,
             "native replaceContentSelection after key=$boundDocumentKey len=${contentLength()} " +
                 "selection=${afterSelection.start}..${afterSelection.end}",
@@ -731,11 +998,32 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
 
     fun focusContent() {
         val startMs = SystemClock.elapsedRealtime()
-        val result = contentEditText.requestFocus()
-        Log.d(
+        KardLeafLog.d(
             EDITOR_TRACE_TAG,
-            "native focusContent requested result=$result attached=$isAttachedToWindow hasFocus=${contentEditText.hasFocus()} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            "native focusContent start key=$boundDocumentKey attached=$isAttachedToWindow " +
+                "contentFocusable=${contentEditText.isFocusable} touchMode=${contentEditText.isFocusableInTouchMode} " +
+                "showSoftInput=${contentEditText.showSoftInputOnFocus} hasFocus=${contentEditText.hasFocus()} " +
+                "contentLen=${contentEditText.length()} ${nativeEditorMemorySummary()}",
         )
+        val result = contentEditText.requestFocus()
+        KardLeafLog.d(
+            EDITOR_TRACE_TAG,
+            "native focusContent requested key=$boundDocumentKey result=$result attached=$isAttachedToWindow " +
+                "hasFocus=${contentEditText.hasFocus()} elapsed=${SystemClock.elapsedRealtime() - startMs}ms ${nativeEditorMemorySummary()}",
+        )
+        contentEditText.postDelayed({
+            val inputMethodManager = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            val shown = if (contentEditText.isAttachedToWindow && contentEditText.hasFocus()) {
+                inputMethodManager?.showSoftInput(contentEditText, InputMethodManager.SHOW_IMPLICIT) == true
+            } else {
+                false
+            }
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "native focusContent showKeyboard key=$boundDocumentKey shown=$shown attached=${contentEditText.isAttachedToWindow} " +
+                    "hasFocus=${contentEditText.hasFocus()} elapsed=${SystemClock.elapsedRealtime() - startMs}ms ${nativeEditorMemorySummary()}",
+            )
+        }, 80L)
     }
 
     fun scrollContentOffsetToVisible(offset: Int) {
@@ -785,10 +1073,16 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         contentEditText.clearHistory()
     }
 
+    fun refreshContentInlineImagePreviews() {
+        contentEditText.refreshInlineImagePreviews()
+    }
+
     fun hasEditorFocus(): Boolean = titleEditText.hasFocus() || contentEditText.hasFocus()
 
     fun dispose(clearText: Boolean = false) {
         if (isDisposed) return
+        userPerfScrollHandler.removeCallbacks(userPerfScrollSettleRunnable)
+        logUserPerfScrollSettled()
         isDisposed = true
         titleChangedCallback = null
         userInteractionCallback = null
@@ -802,6 +1096,7 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
         contentEditText.kardLeafContentCallback = null
         contentEditText.kardLeafSelectionCallback = null
         contentEditText.kardLeafUndoRedoCallback = null
+        contentEditText.kardLeafInlineImageClickCallback = null
         markdownExecutor.shutdownNow()
     }
 
@@ -816,6 +1111,17 @@ class KardLeafNativeEditorView @JvmOverloads constructor(
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun dp(value: Float): Int = (value * resources.displayMetrics.density).roundToInt()
+
+    private fun editorTypeface(fontFamily: String): Typeface =
+        when (fontFamily.trim().lowercase(Locale.ROOT)) {
+            "system" -> Typeface.DEFAULT
+            "sans-serif" -> Typeface.SANS_SERIF
+            "serif" -> Typeface.SERIF
+            "monospace" -> Typeface.MONOSPACE
+            else -> Typeface.create(fontFamily.trim(), Typeface.NORMAL)
+        }
 }
 
 @Composable
@@ -829,6 +1135,7 @@ fun KardLeafNativeEditor(
     onUndoRedoChanged: () -> Unit,
     onUserInteraction: () -> Unit = {},
     onFastScrollSourceScrolled: () -> Unit = {},
+    onInlineImageClicked: (String) -> Unit = {},
     modifier: Modifier = Modifier,
     titleHint: String = "",
     contentHint: String = "",
@@ -836,17 +1143,26 @@ fun KardLeafNativeEditor(
     hintColor: Color,
     titleTextSize: TextUnit = 22.sp,
     contentTextSize: TextUnit = 16.sp,
+    contentLineHeightMultiplier: Float = 1.55f,
+    contentLetterSpacingSp: Float = 0f,
+    contentParagraphSpacingDp: Float = 8f,
+    contentFontFamily: String = "system",
     requestFocusToken: Int = 0,
+    initialSelection: TextRange? = null,
     showTitle: Boolean = true,
     currentFolder: String = "",
+    readOnly: Boolean = false,
+    userPerfOpenStartRealtimeMs: Long? = null,
+    userPerfSizeTier: String = "unknown",
 ) {
-    controller.acceptInitialSnapshot(documentKey, initialTitle, initialContent)
+    controller.acceptInitialSnapshot(documentKey, initialTitle, initialContent, initialSelection)
 
     val currentOnTitleChanged = rememberUpdatedState(onTitleChanged)
     val currentOnContentChanged = rememberUpdatedState(onContentChanged)
     val currentOnUndoRedoChanged = rememberUpdatedState(onUndoRedoChanged)
     val currentOnUserInteraction = rememberUpdatedState(onUserInteraction)
     val currentOnFastScrollSourceScrolled = rememberUpdatedState(onFastScrollSourceScrolled)
+    val currentOnInlineImageClicked = rememberUpdatedState(onInlineImageClicked)
     val handledFocusToken = remember { AtomicInteger(-1) }
     val lastAppliedUpdateSignature = remember { AtomicReference("") }
     val skippedUpdateCount = remember { AtomicInteger(0) }
@@ -862,7 +1178,8 @@ fun KardLeafNativeEditor(
         modifier = modifier,
         factory = { context ->
             KardLeafNativeEditorView(context).also { view ->
-                Log.d(EDITOR_TRACE_TAG, "native AndroidView factory key=$documentKey")
+                KardLeafLog.d(EDITOR_TRACE_TAG, "native AndroidView factory key=$documentKey")
+                KardLeafLog.d(OPEN_PATH_PROBE_TAG, "native AndroidView factory key=$documentKey thread=${Thread.currentThread().name}")
                 viewRef.set(view)
             }
         },
@@ -883,19 +1200,30 @@ fun KardLeafNativeEditor(
                 hintColor.toArgb(),
                 titleTextSizeSp,
                 contentTextSizeSp,
+                contentLineHeightMultiplier,
+                contentLetterSpacingSp,
+                contentParagraphSpacingDp,
+                contentFontFamily,
                 showTitle,
                 currentFolder,
+                readOnly,
             ).joinToString(separator = "|")
 
             if (lastAppliedUpdateSignature.get() != updateSignature) {
                 lastAppliedUpdateSignature.set(updateSignature)
                 skippedUpdateCount.set(0)
-                Log.d(
+                KardLeafLog.d(
                     EDITOR_TRACE_TAG,
                     "native AndroidView apply update key=$documentKey bound=${view.boundDocumentKey} initialTitleLen=${initialTitle.length} " +
                         "initialContentLen=${initialContent.length} showTitle=$showTitle focusToken=$requestFocusToken",
                 )
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "native AndroidView update key=$documentKey bound=${view.boundDocumentKey} initialTitleLen=${initialTitle.length} " +
+                        "initialContentLen=${initialContent.length} folder=$currentFolder readOnly=$readOnly showTitle=$showTitle",
+                )
                 val configureStartMs = SystemClock.elapsedRealtime()
+                view.configureUserPerf(userPerfOpenStartRealtimeMs, userPerfSizeTier)
                 view.configure(
                     titleHint = titleHint,
                     contentHint = contentHint,
@@ -903,16 +1231,22 @@ fun KardLeafNativeEditor(
                     hintColor = hintColor.toArgb(),
                     titleTextSizeSp = titleTextSizeSp,
                     contentTextSizeSp = contentTextSizeSp,
+                    contentLineHeightMultiplier = contentLineHeightMultiplier,
+                    contentLetterSpacingSp = contentLetterSpacingSp,
+                    contentParagraphSpacingDp = contentParagraphSpacingDp,
+                    contentFontFamily = contentFontFamily,
                     showTitle = showTitle,
                     currentFolder = currentFolder,
+                    readOnly = readOnly,
                     onTitleChanged = { currentOnTitleChanged.value() },
                     onContentChanged = { currentOnContentChanged.value() },
                     onSelectionChanged = { start, end -> controller.updateCachedSelection(start, end) },
                     onUndoRedoChanged = { currentOnUndoRedoChanged.value() },
                     onUserInteraction = { currentOnUserInteraction.value() },
                     onFastScrollSourceScrolled = { currentOnFastScrollSourceScrolled.value() },
+                    onInlineImageClicked = { reference -> currentOnInlineImageClicked.value(reference) },
                 )
-                Log.d(
+                KardLeafLog.d(
                     EDITOR_TRACE_TAG,
                     "native AndroidView configure done key=$documentKey elapsed=${SystemClock.elapsedRealtime() - configureStartMs}ms",
                 )
@@ -923,15 +1257,20 @@ fun KardLeafNativeEditor(
                     initialContent = initialContent,
                     preferredSnapshot = controller.getCachedSnapshot(),
                 )
-                Log.d(
+                KardLeafLog.d(
                     EDITOR_TRACE_TAG,
                     "native AndroidView bindDocument done key=$documentKey bindElapsed=${SystemClock.elapsedRealtime() - bindStartMs}ms",
+                )
+                KardLeafLog.d(
+                    OPEN_PATH_PROBE_TAG,
+                    "native AndroidView bindDocument done key=$documentKey bindElapsed=${SystemClock.elapsedRealtime() - bindStartMs}ms " +
+                        "initialContentLen=${initialContent.length}",
                 )
                 controller.attach(view, documentKey, initialTitle, initialContent)
             } else {
                 val skipCount = skippedUpdateCount.incrementAndGet()
                 if (skipCount == 1 || skipCount % 20 == 0) {
-                    Log.d(
+                    KardLeafLog.d(
                         EDITOR_TRACE_TAG,
                         "native AndroidView skip update key=$documentKey skipCount=$skipCount bound=${view.boundDocumentKey} " +
                             "focusToken=$requestFocusToken attached=${view.isAttachedToWindow} hasEditorFocus=${view.hasEditorFocus()}",
@@ -941,16 +1280,37 @@ fun KardLeafNativeEditor(
 
             if (handledFocusToken.get() != requestFocusToken) {
                 handledFocusToken.set(requestFocusToken)
-                Log.d(
+                KardLeafLog.d(
                     EDITOR_TRACE_TAG,
                     "native AndroidView focus token changed token=$requestFocusToken key=$documentKey " +
-                        "attached=${view.isAttachedToWindow} hasEditorFocus=${view.hasEditorFocus()}",
+                        "attached=${view.isAttachedToWindow} hasEditorFocus=${view.hasEditorFocus()} ${nativeEditorMemorySummary()}",
                 )
                 if (requestFocusToken > 0) {
+                    KardLeafLog.d(
+                        EDITOR_TRACE_TAG,
+                        "native focus token post scheduled token=$requestFocusToken key=$documentKey " +
+                            "attached=${view.isAttachedToWindow} bound=${view.boundDocumentKey}",
+                    )
                     view.post {
-                        if (view.isAttachedToWindow && handledFocusToken.get() == requestFocusToken) {
-                            Log.d(EDITOR_TRACE_TAG, "native focus token handled token=$requestFocusToken key=$documentKey")
+                        val currentHandledToken = handledFocusToken.get()
+                        KardLeafLog.d(
+                            EDITOR_TRACE_TAG,
+                            "native focus token post run token=$requestFocusToken handled=$currentHandledToken key=$documentKey " +
+                                "attached=${view.isAttachedToWindow} bound=${view.boundDocumentKey} hasEditorFocus=${view.hasEditorFocus()} " +
+                                "${nativeEditorMemorySummary()}",
+                        )
+                        if (view.isAttachedToWindow && currentHandledToken == requestFocusToken) {
+                            KardLeafLog.d(
+                                EDITOR_TRACE_TAG,
+                                "native focus token handled token=$requestFocusToken key=$documentKey ${nativeEditorMemorySummary()}",
+                            )
                             view.focusContent()
+                        } else {
+                            KardLeafLog.w(
+                                EDITOR_TRACE_TAG,
+                                "native focus token skipped token=$requestFocusToken handled=$currentHandledToken key=$documentKey " +
+                                    "attached=${view.isAttachedToWindow} bound=${view.boundDocumentKey}",
+                            )
                         }
                     }
                 }

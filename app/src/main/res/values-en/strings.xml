@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">KardLeaf</string>
+    <string name="app_name_cn">KardLeaf</string>
+    <string name="shortcut_settings_short">Settings</string>
+    <string name="shortcut_settings_long">Open settings</string>
+    <string name="shortcut_quick_note_short">New note</string>
+    <string name="shortcut_quick_note_long">Quick new note</string>
+    <string name="shortcut_search_short">Search</string>
+    <string name="shortcut_search_long">Search notes</string>
+    <string name="shortcut_draft_short">Draft</string>
+    <string name="shortcut_draft_long">New draft</string>
+    <string name="shortcut_disabled_message">Shortcut unavailable</string>
+</resources>

@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/note_widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_quick_note_widget"
+    android:minWidth="220dp"
+    android:minHeight="160dp"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="@string/widget_note_list_title"
+            android:textColor="#0F172A"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/note_widget_folder"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_quick_note_logo_chip"
+            android:clickable="true"
+            android:ellipsize="end"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:maxWidth="104dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="@string/all_notes"
+            android:textColor="#2563EB"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/note_widget_add"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_quick_note_plus"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:text="+"
+            android:textColor="#FFFFFF"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/note_widget_empty"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:text="@string/widget_note_empty"
+        android:textColor="#64748B"
+        android:textSize="14sp" />
+
+    <LinearLayout
+        android:id="@+id/note_widget_row_1"
+        style="@style/WidgetNoteRow">
+        <TextView android:id="@+id/note_widget_title_1" style="@style/WidgetNoteTitle" />
+        <TextView android:id="@+id/note_widget_body_1" style="@style/WidgetNoteBody" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/note_widget_row_2"
+        style="@style/WidgetNoteRow">
+        <TextView android:id="@+id/note_widget_title_2" style="@style/WidgetNoteTitle" />
+        <TextView android:id="@+id/note_widget_body_2" style="@style/WidgetNoteBody" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/note_widget_row_3"
+        style="@style/WidgetNoteRow">
+        <TextView android:id="@+id/note_widget_title_3" style="@style/WidgetNoteTitle" />
+        <TextView android:id="@+id/note_widget_body_3" style="@style/WidgetNoteBody" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/note_widget_row_4"
+        style="@style/WidgetNoteRow">
+        <TextView android:id="@+id/note_widget_title_4" style="@style/WidgetNoteTitle" />
+        <TextView android:id="@+id/note_widget_body_4" style="@style/WidgetNoteBody" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/note_widget_row_5"
+        style="@style/WidgetNoteRow">
+        <TextView android:id="@+id/note_widget_title_5" style="@style/WidgetNoteTitle" />
+        <TextView android:id="@+id/note_widget_body_5" style="@style/WidgetNoteBody" />
+    </LinearLayout>
+</LinearLayout>

@@ -9,12 +9,17 @@ import java.util.UUID
 object NoteFormatUtils {
     private const val DEFAULT_PREVIEW_MAX_CHARS = 200
     private const val DEFAULT_PREVIEW_MAX_LINES = 10
+    private val invalidFileNameChars = setOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
     const val KARDLEAF_ID_KEY = "kardleaf_id"
     const val TAGS_KEY = "tags"
     private val REMOVED_LEGACY_FRONT_MATTER_KEYS = setOf("color", "reminder")
 
-    private val obsidianImageRegex = Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
-    private val markdownImageRegex = Regex("""!\[[^]]*]\(([^)]+)\)""")
+    internal val obsidianImageReferenceRegex = Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
+    internal val markdownImageReferenceRegex = Regex("""!\[[^]]*]\(([^)]+)\)""")
+    internal val localMarkdownImageReferenceRegex =
+        Regex("""!\[[^]]*]\((?!https?://|data:|file:)([^)]+)\)""", RegexOption.IGNORE_CASE)
+    internal val localMarkdownImageReferenceWithAltRegex =
+        Regex("""!\[([^]]*)]\((?!https?://|data:|file:)([^)]+)\)""", RegexOption.IGNORE_CASE)
     private val headingPrefixRegex = Regex("""^#{1,6}\s+""")
     private val taskPrefixRegex = Regex("""^\s*[-*+]\s+\[[ xX]]\s+""")
     private val bulletPrefixRegex = Regex("""^\s*[-*+]\s+""")
@@ -36,24 +41,112 @@ object NoteFormatUtils {
         content: String,
         maxChars: Int = DEFAULT_PREVIEW_MAX_CHARS,
         maxLines: Int = DEFAULT_PREVIEW_MAX_LINES,
+        hideImagePlaceholders: Boolean = false,
     ): String =
         content
             .lineSequence()
-            .map { line ->
-                line
-                    .replace(obsidianImageRegex, "[图片: $1]")
-                    .replace(markdownImageRegex, "[图片]")
-                    .replace(headingPrefixRegex, "")
-                    .replace(taskPrefixRegex, "")
-                    .replace(bulletPrefixRegex, "")
-                    .replace(orderedListPrefixRegex, "")
-                    .replace(markdownTokenRegex, "")
-                    .trim()
-            }
+            .map { line -> cleanPlainTextPreviewLine(line, hideImagePlaceholders) }
             .filter { it.isNotBlank() }
             .take(maxLines)
             .joinToString("\n")
             .take(maxChars)
+
+    fun sanitizeMarkdownFileBaseName(title: String): String =
+        title
+            .trim()
+            .filterNot { it in invalidFileNameChars || it.code < 32 }
+            .trim()
+            .ifBlank { "Untitled" }
+
+    fun rewriteRelativeImageRefsForMove(markdown: String, fromFolder: String, toFolder: String): String {
+        if (fromFolder == toFolder) return markdown
+        val withObsidian = obsidianImageReferenceRegex.replace(markdown) { match ->
+            val ref = match.groupValues[1].trim()
+            if (!isLocalRelativeImageReference(ref)) {
+                match.value
+            } else {
+                val realPath = normalizePath(joinPath(fromFolder, ref))
+                "![[${relativePath(toFolder, realPath)}]]"
+            }
+        }
+        return localMarkdownImageReferenceWithAltRegex.replace(withObsidian) { match ->
+            val alt = match.groupValues[1]
+            val ref = match.groupValues[2].trim().trim('"', '\'')
+            if (!isLocalRelativeImageReference(ref)) {
+                match.value
+            } else {
+                val realPath = normalizePath(joinPath(fromFolder, ref))
+                "![${alt}](${relativePath(toFolder, realPath)})"
+            }
+        }
+    }
+
+    fun isLocalRelativeImageReference(reference: String): Boolean {
+        val value = reference.trim().trim('"', '\'')
+        if (value.isBlank()) return false
+        val lower = value.lowercase(Locale.ROOT)
+        if (lower.startsWith("http://") ||
+            lower.startsWith("https://") ||
+            lower.startsWith("data:") ||
+            lower.startsWith("file:") ||
+            lower.startsWith("content:")
+        ) {
+            return false
+        }
+        return !value.startsWith("/") &&
+            !value.startsWith("\\") &&
+            !Regex("""^[A-Za-z]:[\\/].*""").matches(value)
+    }
+
+    private fun normalizePath(path: String): String {
+        val parts = path.split("/").filter { it.isNotBlank() }
+        val stack = mutableListOf<String>()
+        for (part in parts) {
+            when {
+                part == "." -> {}
+                part == ".." -> if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) else stack.add("..")
+                else -> stack.add(part)
+            }
+        }
+        return stack.joinToString("/")
+    }
+
+    private fun relativePath(fromFolder: String, toPath: String): String {
+        val fromParts = normalizePath(fromFolder).split("/").filter { it.isNotBlank() }
+        val toParts = normalizePath(toPath).split("/").filter { it.isNotBlank() }
+        var common = 0
+        while (common < fromParts.size && common < toParts.size && fromParts[common] == toParts[common]) {
+            common++
+        }
+        val ups = List(fromParts.size - common) { ".." }
+        return (ups + toParts.drop(common)).joinToString("/").ifBlank { toParts.lastOrNull().orEmpty() }
+    }
+
+    private fun joinPath(folder: String, fileName: String): String =
+        folder.trim('/').takeIf { it.isNotBlank() }?.let { "$it/${fileName.trim('/')}" } ?: fileName.trim('/')
+
+    private fun cleanPlainTextPreviewLine(
+        line: String,
+        hideImagePlaceholders: Boolean,
+    ): String {
+        val withoutImages =
+            if (hideImagePlaceholders) {
+                line
+                    .replace(obsidianImageReferenceRegex, "")
+                    .replace(markdownImageReferenceRegex, "")
+            } else {
+                line
+                    .replace(obsidianImageReferenceRegex, "[图片: $1]")
+                    .replace(markdownImageReferenceRegex, "[图片]")
+            }
+        return withoutImages
+            .replace(headingPrefixRegex, "")
+            .replace(taskPrefixRegex, "")
+            .replace(bulletPrefixRegex, "")
+            .replace(orderedListPrefixRegex, "")
+            .replace(markdownTokenRegex, "")
+            .trim()
+    }
 
     /**
      * Universal Parser: Robustly handles quoted and unquoted values.
@@ -100,7 +193,10 @@ object NoteFormatUtils {
         parseFrontMatter(rawContent).properties
 
     fun extractKardLeafId(rawContent: String): String? =
-        parseFrontMatter(rawContent).properties
+        extractKardLeafId(parseFrontMatter(rawContent))
+
+    fun extractKardLeafId(frontMatter: FrontMatterData): String? =
+        frontMatter.properties
             .firstOrNull { it.key.equals(KARDLEAF_ID_KEY, ignoreCase = true) }
             ?.values
             ?.firstOrNull()
@@ -108,7 +204,10 @@ object NoteFormatUtils {
             ?.takeIf { it.isNotBlank() }
 
     fun extractTags(rawContent: String): List<String> =
-        parseFrontMatter(rawContent).properties
+        extractTags(parseFrontMatter(rawContent))
+
+    fun extractTags(frontMatter: FrontMatterData): List<String> =
+        frontMatter.properties
             .firstOrNull { it.key.equals(TAGS_KEY, ignoreCase = true) }
             ?.values
             ?.let(::normalizeTags)
@@ -247,7 +346,7 @@ object NoteFormatUtils {
             if (replaceTags || note.tags.isNotEmpty()) {
                 normalizeTags(note.tags)
             } else {
-                existingRawContent?.let(::extractTags).orEmpty()
+                existingRawContent?.let { extractTags(it) }.orEmpty()
             }
         replaceYamlList(frontMatterLines, TAGS_KEY, tagsForFile)
 

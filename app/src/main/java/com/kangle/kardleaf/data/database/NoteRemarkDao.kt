@@ -46,6 +46,13 @@ interface NoteRemarkDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(remarks: List<NoteRemarkEntity>)
 
+    @Query("UPDATE note_remarks SET content = :content, updatedAtMs = :updatedAtMs WHERE id = :id")
+    suspend fun updateContent(
+        id: Long,
+        content: String,
+        updatedAtMs: Long,
+    )
+
     @Query("DELETE FROM note_remarks WHERE id = :id")
     suspend fun deleteById(id: Long)
 

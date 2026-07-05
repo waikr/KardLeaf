@@ -28,9 +28,11 @@ import androidx.compose.ui.graphics.TransformOrigin
  */
 internal object KardLeafMotion {
     const val ScreenDurationMillis = 300
+    const val EditorExitDurationMillis = 180
     const val ContainerDurationMillis = 180
     const val MicroDurationMillis = 120
     const val SharedAxisOffsetFactor = 0.10f
+    const val EditorExitOffsetFactor = 0.08f
     const val ContentOffsetFactor = 0.33f
     private const val OutgoingFraction = 0.35f
 

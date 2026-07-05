@@ -1,5 +1,6 @@
 package com.kangle.kardleaf.ui
 
+import android.widget.Toast
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
@@ -26,6 +27,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -53,8 +55,11 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -1101,8 +1106,8 @@ private fun SelectedVersionPanel(selected: HistoryVersionItem) {
                 .verticalScroll(previewScrollState)
                 .padding(12.dp),
         ) {
-            Text(
-                text = selected.content.ifBlank { "空内容" },
+            HistoryCopyableTextBlock(
+                content = selected.content.ifBlank { "空内容" },
                 color = HistoryUiColors.TextTertiary,
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -1560,8 +1565,8 @@ private fun RewriteRow(
             fontWeight = FontWeight.Medium,
             modifier = Modifier.size(width = 38.dp, height = 18.dp),
         )
-        Text(
-            text = text.ifBlank { "空行" },
+        HistoryCopyableText(
+            text = text,
             color = if (old) HistoryUiColors.RedText else HistoryUiColors.GreenText,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Normal,
@@ -1615,8 +1620,8 @@ private fun DiffLineRow(
             textAlign = TextAlign.Center,
             modifier = Modifier.size(width = 18.dp, height = 20.dp),
         )
-        Text(
-            text = content.ifBlank { "空行" },
+        HistoryCopyableText(
+            text = content,
             color = colors.content,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.weight(1f),
@@ -1748,8 +1753,8 @@ private fun SplitTextCard(
         )
         Column(modifier = Modifier.padding(vertical = 8.dp)) {
             if (rows.isEmpty()) {
-                Text(
-                    text = fallbackText.ifBlank { "空内容" },
+                HistoryCopyableTextBlock(
+                    content = fallbackText.ifBlank { "空内容" },
                     color = HistoryUiColors.TextTertiary,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(10.dp),
@@ -1778,14 +1783,70 @@ private fun SplitLine(
     type: HistoryDiffType,
 ) {
     val colors = diffColors(type)
-    Text(
-        text = text.ifBlank { "空行" },
+    HistoryCopyableText(
+        text = text,
         color = colors.content,
         style = MaterialTheme.typography.labelSmall,
         modifier = Modifier
             .fillMaxWidth()
             .background(if (type == HistoryDiffType.SAME) Color.Transparent else colors.background)
             .padding(horizontal = 10.dp, vertical = 5.dp),
+    )
+}
+
+@Composable
+private fun HistoryCopyableTextBlock(
+    content: String,
+    color: Color,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+) {
+    val lines = remember(content) { content.lines().ifEmpty { listOf("") } }
+    Column(modifier = modifier.fillMaxWidth()) {
+        lines.forEach { line ->
+            HistoryCopyableText(
+                text = line,
+                color = color,
+                style = style,
+                modifier = Modifier.fillMaxWidth(),
+                blankLabel = "",
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun HistoryCopyableText(
+    text: String,
+    color: Color,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    fontWeight: FontWeight? = null,
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
+    blankLabel: String = "空行",
+) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    Text(
+        text = if (text.isBlank() && blankLabel.isNotEmpty()) blankLabel else text,
+        color = color,
+        style = style,
+        fontWeight = fontWeight,
+        maxLines = maxLines,
+        overflow = overflow,
+        modifier = modifier.combinedClickable(
+            onClick = {},
+            onLongClick = {
+                clipboard.setText(AnnotatedString(text))
+                Toast.makeText(
+                    context,
+                    if (text.isBlank()) "已复制空行" else "已复制",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            },
+        ),
     )
 }
 

@@ -1,7 +1,7 @@
 package com.kangle.kardleaf.data.repository
 
+import com.kangle.kardleaf.data.utils.KardLeafLog
 import android.content.Context
-import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.google.gson.Gson
 import com.kangle.kardleaf.data.model.AppConfig
@@ -28,7 +28,7 @@ class MetadataManager(private val context: Context) {
                         }.also {
                         } ?: AppConfig()
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error loading config", e)
+                        KardLeafLog.e(TAG, "Error loading config", e)
                         AppConfig()
                     }
                 } else {
@@ -55,7 +55,7 @@ class MetadataManager(private val context: Context) {
                     writer.flush()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error saving config", e)
+                KardLeafLog.e(TAG, "Error saving config", e)
             }
         }
     }

@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <link rel="stylesheet" href="katex.min.css">
     <style>
+        :root {
+            --kl-preview-fg: #172033;
+            --kl-preview-muted: #46627f;
+            --kl-preview-border: #d8e6fb;
+            --kl-preview-soft: rgba(228, 241, 255, 0.72);
+            --kl-preview-primary: #3b82f6;
+            --kl-preview-code-bg: rgba(228, 241, 255, 0.82);
+            --kl-preview-image-bg: rgba(228, 241, 255, 0.60);
+        }
+
         html {
             min-height: 100%;
             overflow-y: auto;
@@ -29,23 +39,111 @@
             word-break: break-word;
         }
 
+        #preview-status {
+            display: none;
+            margin: 0 0 10px;
+            padding: 9px 12px;
+            border-radius: 10px;
+            font-size: 13px;
+            line-height: 1.45;
+            background: rgba(25, 103, 210, 0.10);
+            color: #174ea6;
+        }
+
+        body.dark-mode #preview-status {
+            background: rgba(138, 180, 248, 0.16);
+            color: #c9ddff;
+        }
+
+        body.dark-mode {
+            --kl-preview-fg: #e5eef8;
+            --kl-preview-muted: #c8d8e8;
+            --kl-preview-border: #2b3b4d;
+            --kl-preview-soft: rgba(43, 59, 77, 0.72);
+            --kl-preview-primary: #93c5fd;
+            --kl-preview-code-bg: rgba(23, 33, 45, 0.92);
+            --kl-preview-image-bg: rgba(43, 59, 77, 0.72);
+        }
+
+        #preview-status.preview-warning {
+            background: rgba(251, 188, 5, 0.16);
+            color: #8a5a00;
+        }
+
+        body.dark-mode #preview-status.preview-warning {
+            background: rgba(251, 188, 5, 0.18);
+            color: #ffd666;
+        }
+
+        #preview-status.preview-error {
+            background: rgba(217, 48, 37, 0.12);
+            color: #b3261e;
+        }
+
+        body.dark-mode #preview-status.preview-error {
+            background: rgba(242, 139, 130, 0.18);
+            color: #f2b8b5;
+        }
+
         #content.large-plain-preview {
             white-space: pre-wrap;
             font-family: sans-serif;
         }
 
         h1 {
-            font-size: 1.45rem;
-            line-height: 1.25;
+            font-size: 1.68rem;
+            line-height: 1.24;
             margin: 0 0 10px;
         }
 
-        h2,
+        h2 {
+            font-size: 1.42rem;
+            line-height: 1.30;
+            margin: 14px 0 7px;
+        }
+
         h3,
         h4,
         h5,
         h6 {
             margin: 12px 0 6px;
+        }
+
+        h1, h2, h3, h4, h5, h6,
+        h1 *, h2 *, h3 *, h4 *, h5 *, h6 * {
+            color: var(--kl-preview-fg);
+            border: 0 !important;
+            border-bottom: 0 !important;
+            outline: 0 !important;
+            box-shadow: none !important;
+            text-decoration: none !important;
+            text-decoration-line: none !important;
+            background-image: none !important;
+        }
+
+        h1::before, h1::after,
+        h2::before, h2::after,
+        h3::before, h3::after,
+        h4::before, h4::after,
+        h5::before, h5::after,
+        h6::before, h6::after {
+            content: none !important;
+            display: none !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            background-image: none !important;
+        }
+
+        #content h1:empty,
+        #content h2:empty,
+        #content h3:empty,
+        #content h4:empty,
+        #content h5:empty,
+        #content h6:empty {
+            display: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: 0 !important;
         }
 
         p {
@@ -55,37 +153,46 @@
         /* Light Mode (Default) */
         body {
             background-color: transparent;
-            color: #202124;
+            color: var(--kl-preview-fg);
         }
 
         /* Dark Mode */
         body.dark-mode {
             background-color: transparent;
-            color: #e8eaed;
+            color: var(--kl-preview-fg);
+        }
+
+        body.dark-mode h1,
+        body.dark-mode h2,
+        body.dark-mode h3,
+        body.dark-mode h4,
+        body.dark-mode h5,
+        body.dark-mode h6 {
+            color: var(--kl-preview-fg);
         }
 
         a {
-            color: #1a73e8;
+            color: var(--kl-preview-primary);
         }
 
         body.dark-mode a {
-            color: #8ab4f8;
+            color: var(--kl-preview-primary);
         }
 
         blockquote {
-            border-left: 4px solid #ccc;
+            border-left: 4px solid var(--kl-preview-border);
             margin: 0;
             padding-left: 16px;
-            color: #666;
+            color: var(--kl-preview-muted);
         }
 
         body.dark-mode blockquote {
-            border-left-color: #555;
-            color: #aaa;
+            border-left-color: var(--kl-preview-border);
+            color: var(--kl-preview-muted);
         }
 
         pre {
-            background-color: #f5f5f5;
+            background-color: var(--kl-preview-code-bg);
             padding: 12px;
             border-radius: 4px;
             overflow-x: auto;
@@ -121,44 +228,93 @@
         }
 
         body.dark-mode pre {
-            background-color: #2d2d2d;
+            background-color: var(--kl-preview-code-bg);
         }
 
         code {
             font-family: monospace;
-            background-color: #f5f5f5;
+            background-color: var(--kl-preview-code-bg);
             padding: 2px 4px;
             border-radius: 2px;
         }
 
         body.dark-mode code {
-            background-color: #2d2d2d;
+            background-color: var(--kl-preview-code-bg);
         }
 
         /* Tables */
-        table {
-            border-collapse: collapse;
+        .table-scroll-wrapper {
             width: 100%;
-            margin-bottom: 16px;
+            max-width: 100%;
+            margin: 8px 0 16px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior-x: contain;
+        }
+
+        table {
+            display: table;
+            width: 100%;
+            min-width: 100%;
+            max-width: 100%;
+            table-layout: fixed;
+            box-sizing: border-box;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin: 8px 0 16px;
+            border: 1px solid var(--kl-preview-border);
+            border-radius: 8px;
+            background: var(--kl-preview-soft);
+        }
+
+        .table-scroll-wrapper table {
+            width: max-content;
+            min-width: 100%;
+            max-width: none;
+            table-layout: auto;
+            margin: 0;
         }
 
         th,
         td {
-            border: 1px solid #ddd;
+            border: 0;
+            border-right: 1px solid var(--kl-preview-border);
+            border-bottom: 1px solid var(--kl-preview-border);
             padding: 8px;
+            white-space: normal;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        th:last-child,
+        td:last-child {
+            border-right: 0;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: 0;
+        }
+
+        th {
+            color: var(--kl-preview-fg);
+            font-weight: 700;
+            background: var(--kl-preview-code-bg);
         }
 
         body.dark-mode th,
         body.dark-mode td {
-            border-color: #444;
+            border-color: var(--kl-preview-border);
         }
 
         tr:nth-child(even) {
-            background-color: #f9f9f9;
+            background-color: var(--kl-preview-soft);
         }
 
         body.dark-mode tr:nth-child(even) {
-            background-color: #1e1e1e;
+            background-color: var(--kl-preview-soft);
         }
 
         /* Checkboxes */
@@ -174,7 +330,7 @@
             height: auto;
             margin: 10px 3px 12px;
             border-radius: 6px;
-            background-color: rgba(255, 255, 255, 0.96);
+            background-color: var(--kl-preview-image-bg);
             box-shadow:
                 0 -1px 2px rgba(0, 0, 0, 0.06),
                 0 1px 3px rgba(0, 0, 0, 0.10),
@@ -182,7 +338,7 @@
         }
 
         body.dark-mode img {
-            background-color: rgba(255, 255, 255, 0.08);
+            background-color: var(--kl-preview-image-bg);
             box-shadow:
                 0 -1px 2px rgba(0, 0, 0, 0.26),
                 0 1px 3px rgba(0, 0, 0, 0.34),
@@ -209,6 +365,10 @@
         body.dark-mode .preview-search-highlight {
             background: rgba(255, 214, 10, 0.35);
         }
+
+        .preview-search-highlight-current {
+            outline: 2px solid rgba(255, 152, 0, 0.85);
+        }
     </style>
 </head>
 
@@ -218,6 +378,7 @@
             document.body.classList.add('dark-mode');
         }
     </script>
+    <div id="preview-status"></div>
     <div id="content"></div>
 
     <script src="markdown-it.min.js"></script>
@@ -233,6 +394,13 @@
             typographer: true,
             breaks: true
         });
+        try { md.enable(['table']); } catch (error) { console.warn('[KardLeafPreview] enable table failed: ' + error); }
+        const defaultValidateLink = md.validateLink.bind(md);
+        md.validateLink = function (url) {
+            const value = String(url || '').trim();
+            if (/^data:image\//i.test(value)) return true;
+            return defaultValidateLink(value);
+        };
 
         // Add support for <u> tag safely
         md.inline.ruler.before('emphasis', 'underline', (state, silent) => {
@@ -271,8 +439,156 @@
 
         // Store content
         const contentDiv = document.getElementById('content');
-        const LARGE_MARKDOWN_RENDER_LIMIT = 600000;
+        const statusDiv = document.getElementById('preview-status');
+        const LARGE_MARKDOWN_RENDER_LIMIT = 500000;
+        const LARGE_PREVIEW_IMMEDIATE_TEXT_LIMIT = 80000;
+        const SOURCE_OFFSET_MAX_CHARS = 80000;
+        const EMBEDDED_IMAGE_DATA_URI_REGEX = /data:image\/[^\s)]+;base64,[A-Za-z0-9+/=]+/g;
         let currentMarkdownSource = '';
+        let previewRenderToken = 0;
+        let androidPreviewToken = 0;
+        let pendingMarkdownRenderTimer = 0;
+
+        function tracePreviewShortText(value, limit) {
+            const text = String(value || '').replace(/\r/g, '').replace(/\n/g, '\\n');
+            return text.length > limit ? text.slice(0, limit) + '...' : text;
+        }
+
+        function tracePreviewInput(source) {
+            try {
+                const lines = String(source || '').split(/\r?\n/);
+                const rawTables = [];
+                const atxHeadings = [];
+                const setextHeadingMarkers = [];
+                for (let index = 0; index < lines.length; index++) {
+                    const line = lines[index] || '';
+                    const trimmed = line.trim();
+                    if (trimmed.indexOf('|') >= 0 && /^\s{0,3}\S.*\|.*\S\s*$/.test(line)) {
+                        rawTables.push({ line: index + 1, text: line });
+                    }
+                    if (/^\s{0,3}#{1,6}\s+\S/.test(line)) {
+                        atxHeadings.push({ line: index + 1, text: line });
+                    }
+                    if (/^\s{0,3}(=+|-{2,})\s*$/.test(line) && index > 0 && (lines[index - 1] || '').trim()) {
+                        setextHeadingMarkers.push({ line: index + 1, previous: lines[index - 1], marker: line });
+                    }
+                }
+                let tokenTableOpen = 0;
+                let tokenHeadingOpen = 0;
+                try {
+                    const tokens = md.parse(String(source || ''), {});
+                    tokenTableOpen = tokens.filter((token) => token.type === 'table_open').length;
+                    tokenHeadingOpen = tokens.filter((token) => token.type === 'heading_open').length;
+                } catch (tokenError) {
+                    console.log('[KardLeafPreviewTableTrace] token parse failed error=' + tokenError);
+                }
+                console.log(
+                    '[KardLeafPreviewTableTrace] input len=' + String(source || '').length +
+                    ' lines=' + lines.length +
+                    ' rawTableCandidates=' + rawTables.length +
+                    ' atxHeadings=' + atxHeadings.length +
+                    ' setextHeadingMarkers=' + setextHeadingMarkers.length +
+                    ' tokenTableOpen=' + tokenTableOpen +
+                    ' tokenHeadingOpen=' + tokenHeadingOpen
+                );
+                rawTables.slice(0, 6).forEach((item, offset) => {
+                    console.log('[KardLeafPreviewTableTrace] rawTable#' + offset + ' line=' + item.line + ' text=' + tracePreviewShortText(item.text, 220));
+                });
+                setextHeadingMarkers.slice(0, 4).forEach((item, offset) => {
+                    console.log('[KardLeafPreviewTableTrace] setextHeading#' + offset + ' line=' + item.line + ' previous=' + tracePreviewShortText(item.previous, 160) + ' marker=' + tracePreviewShortText(item.marker, 80));
+                });
+            } catch (error) {
+                console.log('[KardLeafPreviewTableTrace] input trace failed error=' + error);
+            }
+        }
+
+        function tracePreviewRendered(source) {
+            try {
+                const headings = Array.from(contentDiv.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+                const tables = Array.from(contentDiv.querySelectorAll('table'));
+                const underlineElements = Array.from(contentDiv.querySelectorAll('u, [style*="underline"], [style*="text-decoration"]'));
+                console.log(
+                    '[KardLeafPreviewTableTrace] rendered len=' + String(source || '').length +
+                    ' headings=' + headings.length +
+                    ' tables=' + tables.length +
+                    ' underlineElements=' + underlineElements.length +
+                    ' contentChildren=' + contentDiv.children.length
+                );
+                const heading = headings[0];
+                if (heading) {
+                    const style = window.getComputedStyle(heading);
+                    const afterStyle = window.getComputedStyle(heading, '::after');
+                    const rect = heading.getBoundingClientRect();
+                    console.log(
+                        '[KardLeafPreviewTableTrace] firstHeading tag=' + heading.tagName +
+                        ' class=' + tracePreviewShortText(heading.className, 120) +
+                        ' text=' + tracePreviewShortText(heading.textContent, 160) +
+                        ' rect=' + Math.round(rect.width) + 'x' + Math.round(rect.height) +
+                        ' borderBottom=' + style.borderBottom +
+                        ' textDecoration=' + style.textDecorationLine + '/' + style.textDecorationStyle + '/' + style.textDecorationThickness +
+                        ' backgroundImage=' + tracePreviewShortText(style.backgroundImage, 120) +
+                        ' boxShadow=' + tracePreviewShortText(style.boxShadow, 120) +
+                        ' afterContent=' + tracePreviewShortText(afterStyle.content, 80) +
+                        ' afterDisplay=' + afterStyle.display +
+                        ' afterBorderBottom=' + afterStyle.borderBottom
+                    );
+                }
+                const table = tables[0];
+                if (table) {
+                    const style = window.getComputedStyle(table);
+                    const parentStyle = table.parentElement ? window.getComputedStyle(table.parentElement) : null;
+                    const firstCell = table.querySelector('th,td');
+                    const cellStyle = firstCell ? window.getComputedStyle(firstCell) : null;
+                    console.log(
+                        '[KardLeafPreviewTableTrace] firstTable rows=' + table.rows.length +
+                        ' html=' + tracePreviewShortText(table.outerHTML, 500) +
+                        ' display=' + style.display +
+                        ' width=' + style.width +
+                        ' tableLayout=' + style.tableLayout +
+                        ' borderCollapse=' + style.borderCollapse +
+                        ' border=' + style.border +
+                        ' parentOverflowX=' + (parentStyle ? parentStyle.overflowX : '') +
+                        ' cellBorder=' + (cellStyle ? cellStyle.border : '') +
+                        ' cellPadding=' + (cellStyle ? cellStyle.padding : '') +
+                        ' cellWhiteSpace=' + (cellStyle ? cellStyle.whiteSpace : '')
+                    );
+                }
+                const underline = underlineElements[0];
+                if (underline) {
+                    const style = window.getComputedStyle(underline);
+                    console.log(
+                        '[KardLeafPreviewTableTrace] firstUnderline tag=' + underline.tagName +
+                        ' class=' + tracePreviewShortText(underline.className, 100) +
+                        ' style=' + tracePreviewShortText(underline.getAttribute('style'), 160) +
+                        ' text=' + tracePreviewShortText(underline.textContent, 160) +
+                        ' computedDecoration=' + style.textDecorationLine + '/' + style.textDecorationStyle + '/' + style.textDecorationThickness
+                    );
+                }
+            } catch (error) {
+                console.log('[KardLeafPreviewTableTrace] rendered trace failed error=' + error);
+            }
+        }
+
+        function previewRenderCost(source) {
+            return (source || '').replace(EMBEDDED_IMAGE_DATA_URI_REGEX, 'data:image;base64,...').length;
+        }
+
+        function setPreviewStatus(type, message) {
+            if (!statusDiv) return;
+            statusDiv.className = '';
+            if (type) statusDiv.classList.add(type);
+            statusDiv.textContent = message || '';
+            statusDiv.style.display = message ? 'block' : 'none';
+        }
+
+        function clearPreviewStatus() {
+            setPreviewStatus('', '');
+        }
+
+        function renderPlainPreview(source) {
+            contentDiv.classList.add('large-plain-preview');
+            contentDiv.textContent = source;
+        }
         let currentLineStartOffsets = [0];
 
         function rebuildLineStartOffsets(source) {
@@ -369,38 +685,157 @@
             return Math.round(sourceLength * ratio);
         };
 
+        function looksLikePreviewTableSeparator(text) {
+            return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(String(text || ''));
+        }
+
+        function looksLikePreviewTableRow(text) {
+            const raw = String(text || '');
+            const trimmed = raw.trim();
+            const count = (raw.match(/\|/g) || []).length;
+            return count >= 2 && !/^https?:\/\//i.test(trimmed);
+        }
+
+        function normalizeMarkdownTables(source) {
+            const lines = String(source || '').split('\n');
+            const out = [];
+            let changed = false;
+            let inFence = false;
+            let fenceChar = '';
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                const fence = /^\s*(```+|~~~+)/.exec(line);
+                if (fence) {
+                    const marker = fence[1].charAt(0);
+                    if (!inFence) { inFence = true; fenceChar = marker; }
+                    else if (marker === fenceChar) { inFence = false; fenceChar = ''; }
+                    out.push(line);
+                    continue;
+                }
+                if (!inFence && i + 1 < lines.length && looksLikePreviewTableRow(line) && looksLikePreviewTableSeparator(lines[i + 1])) {
+                    if (out.length && out[out.length - 1].trim() !== '') { out.push(''); changed = true; }
+                    out.push(line);
+                    i += 1;
+                    out.push(lines[i]);
+                    while (i + 1 < lines.length && looksLikePreviewTableRow(lines[i + 1]) && !looksLikePreviewTableSeparator(lines[i + 1])) {
+                        i += 1;
+                        out.push(lines[i]);
+                    }
+                    if (i + 1 < lines.length && lines[i + 1].trim() !== '') { out.push(''); changed = true; }
+                    continue;
+                }
+                out.push(line);
+            }
+            return changed ? out.join('\n') : source;
+        }
+
+        function wrapRenderedTables() {
+            contentDiv.querySelectorAll('table').forEach((table) => {
+                if (table.parentElement && table.parentElement.classList.contains('table-scroll-wrapper')) return;
+                const wrapper = document.createElement('div');
+                wrapper.className = 'table-scroll-wrapper';
+                table.parentNode.insertBefore(wrapper, table);
+                wrapper.appendChild(table);
+            });
+        }
+
+        function renderMarkdownPreview(source, token, androidToken) {
+            if (token !== previewRenderToken || androidToken !== androidPreviewToken) return 'stale';
+            const start = performance.now();
+            try {
+                const renderSource = normalizeMarkdownTables(source);
+                const html = md.render(renderSource);
+                if (token !== previewRenderToken || androidToken !== androidPreviewToken) return 'stale';
+                if (source.length > 0 && !html.trim()) {
+                    throw new Error('empty rendered html');
+                }
+                clearPreviewStatus();
+                contentDiv.classList.remove('large-plain-preview');
+                contentDiv.innerHTML = html;
+                wrapRenderedTables();
+                if (source.length <= SOURCE_OFFSET_MAX_CHARS) {
+                    assignSourceOffsets(source);
+                }
+                attachCheckboxListeners();
+                attachImageClickListeners();
+                attachCodeBlockCopyButtons();
+                tracePreviewRendered(source);
+                console.log('[KardLeafPreview] render markdown done len=' + source.length + ' elapsed=' + (performance.now() - start).toFixed(1) + 'ms');
+                return 'markdown';
+            } catch (error) {
+                console.error('[KardLeafPreview] render failed: ' + error);
+                setPreviewStatus('preview-error', 'Markdown 预览渲染失败，已显示纯文本，避免页面空白。');
+                renderPlainPreview(source);
+                return 'plain_error';
+            }
+        }
+
         // Main Update Function
-        window.updateContent = function (markdown, isDark) {
+        window.updateContent = function (markdown, isDark, androidToken) {
+            const incomingAndroidToken = Number(androidToken) || 0;
+            if (incomingAndroidToken < androidPreviewToken) {
+                console.log('[KardLeafPreview] render dropped old token=' + incomingAndroidToken + ' current=' + androidPreviewToken + ' len=' + ((markdown || '').length));
+                return 'stale_android';
+            }
+            androidPreviewToken = incomingAndroidToken;
+            if (pendingMarkdownRenderTimer) {
+                clearTimeout(pendingMarkdownRenderTimer);
+                pendingMarkdownRenderTimer = 0;
+            }
             if (isDark) document.body.classList.add('dark-mode');
             else document.body.classList.remove('dark-mode');
 
             const source = markdown || '';
+            const token = ++previewRenderToken;
+            const renderCost = previewRenderCost(source);
             currentMarkdownSource = source;
             rebuildLineStartOffsets(source);
-            if (source.length > LARGE_MARKDOWN_RENDER_LIMIT) {
-                contentDiv.classList.add('large-plain-preview');
-                contentDiv.textContent = source;
-                return;
+            console.log('[KardLeafPreview] render start len=' + source.length + ' cost=' + renderCost + ' dark=' + !!isDark);
+            tracePreviewInput(source);
+            if (renderCost > LARGE_MARKDOWN_RENDER_LIMIT) {
+                setPreviewStatus('preview-warning', '快速预览：当前笔记很大，已完整显示纯文本内容，暂不进行全文 Markdown 渲染以避免卡死。');
+                renderPlainPreview(source);
+                console.log('[KardLeafPreview] render plain large len=' + source.length + ' cost=' + renderCost + ' limit=' + LARGE_MARKDOWN_RENDER_LIMIT);
+                return 'plain_large';
             }
 
-            contentDiv.classList.remove('large-plain-preview');
-            try {
-                contentDiv.innerHTML = md.render(source);
-                assignSourceOffsets(source);
-                attachCheckboxListeners();
-                attachCodeBlockCopyButtons();
-            } catch (error) {
-                console.error('Preview render failed: ' + error);
-                contentDiv.classList.add('large-plain-preview');
-                contentDiv.textContent = source;
+            if (source.length > LARGE_PREVIEW_IMMEDIATE_TEXT_LIMIT) {
+                setPreviewStatus('preview-warning', '正在渲染 Markdown 预览，先显示纯文本以避免空白。');
+                renderPlainPreview(source);
+                pendingMarkdownRenderTimer = setTimeout(function () {
+                    pendingMarkdownRenderTimer = 0;
+                    renderMarkdownPreview(source, token, incomingAndroidToken);
+                }, 16);
+                console.log('[KardLeafPreview] render queued large len=' + source.length + ' limit=' + LARGE_MARKDOWN_RENDER_LIMIT);
+                return 'queued_large';
             }
+
+            return renderMarkdownPreview(source, token, incomingAndroidToken);
         };
 
-        window.updateContentFromAndroid = function (isDark) {
+        window.updateContentFromAndroid = function (isDark, androidToken) {
             const markdown = (window.Android && window.Android.getMarkdown)
                 ? window.Android.getMarkdown()
                 : '';
-            window.updateContent(markdown, isDark);
+            return window.updateContent(markdown, isDark, androidToken);
+        };
+
+        window.clearContentFromAndroid = function (androidToken) {
+            const incomingAndroidToken = Number(androidToken) || 0;
+            if (incomingAndroidToken < androidPreviewToken) return 'stale_android';
+            androidPreviewToken = incomingAndroidToken;
+            previewRenderToken++;
+            if (pendingMarkdownRenderTimer) {
+                clearTimeout(pendingMarkdownRenderTimer);
+                pendingMarkdownRenderTimer = 0;
+            }
+            currentMarkdownSource = '';
+            currentLineStartOffsets = [0];
+            clearPreviewStatus();
+            contentDiv.classList.remove('large-plain-preview');
+            contentDiv.innerHTML = '';
+            console.log('[KardLeafPreview] render cleared token=' + incomingAndroidToken);
+            return 'cleared';
         };
 
         function attachCheckboxListeners() {
@@ -416,6 +851,29 @@
                     }
                 };
                 cb.ontouchstart = function () {
+                    if (window.Android && window.Android.onPreviewControlTouched) {
+                        window.Android.onPreviewControlTouched();
+                    }
+                };
+            });
+        }
+
+        function attachImageClickListeners() {
+            const images = contentDiv.querySelectorAll('img');
+            images.forEach((img, index) => {
+                img.onclick = function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (window.Android && window.Android.onPreviewControlTouched) {
+                        window.Android.onPreviewControlTouched();
+                    }
+                    if (window.Android && window.Android.onImageClicked) {
+                        window.Android.onImageClicked(index);
+                    }
+                    return false;
+                };
+                img.ontouchstart = function (event) {
+                    event.stopPropagation();
                     if (window.Android && window.Android.onPreviewControlTouched) {
                         window.Android.onPreviewControlTouched();
                     }
@@ -462,6 +920,25 @@
             });
         }
 
+        function clearCurrentSearchHighlight() {
+            contentDiv.querySelectorAll('.preview-search-highlight-current').forEach((span) => {
+                span.classList.remove('preview-search-highlight-current');
+            });
+        }
+
+        function scrollToSearchHighlight(index) {
+            const highlights = Array.from(contentDiv.querySelectorAll('.preview-search-highlight'));
+            if (!highlights.length) return false;
+            const safeIndex = Math.max(0, Math.min(highlights.length - 1, Number(index) || 0));
+            clearCurrentSearchHighlight();
+            const target = highlights[safeIndex];
+            target.classList.add('preview-search-highlight-current');
+            target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            return true;
+        }
+
+        window.scrollToSearchHighlight = scrollToSearchHighlight;
+
         window.applySearchHighlight = function (query) {
             clearSearchHighlights();
             const q = (query || '').trim();
@@ -500,7 +977,7 @@
                 node.parentNode.replaceChild(fragment, node);
             });
             if (firstHighlight) {
-                firstHighlight.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                scrollToSearchHighlight(0);
             }
             return count;
         };

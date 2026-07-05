@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/quick_note_widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_quick_note_widget"
+    android:clickable="true"
+    android:focusable="true"
+    android:minWidth="180dp"
+    android:minHeight="96dp"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="vertical"
+            android:paddingEnd="8dp">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="26dp"
+                android:background="@drawable/bg_quick_note_logo_chip"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="8dp"
+                android:paddingEnd="10dp">
+
+                <ImageView
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:contentDescription="@string/widget_quick_note_desc"
+                    android:src="@drawable/ic_widget_quick_note" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="5dp"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:text="@string/app_name_cn"
+                    android:textColor="#2563EB"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="@string/widget_quick_note_title"
+                android:textColor="#0F172A"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="5dp"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="@string/widget_quick_note_subtitle"
+                android:textColor="#64748B"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <FrameLayout
+            android:layout_width="68dp"
+            android:layout_height="68dp">
+
+            <LinearLayout
+                android:layout_width="58dp"
+                android:layout_height="58dp"
+                android:layout_gravity="top|start"
+                android:background="@drawable/bg_quick_note_preview_card"
+                android:gravity="center_vertical"
+                android:orientation="vertical"
+                android:padding="9dp">
+
+                <TextView
+                    android:layout_width="26dp"
+                    android:layout_height="4dp"
+                    android:background="@drawable/bg_quick_note_line" />
+
+                <TextView
+                    android:layout_width="38dp"
+                    android:layout_height="4dp"
+                    android:layout_marginTop="7dp"
+                    android:background="@drawable/bg_quick_note_line" />
+
+                <TextView
+                    android:layout_width="31dp"
+                    android:layout_height="4dp"
+                    android:layout_marginTop="7dp"
+                    android:background="@drawable/bg_quick_note_line" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/quick_note_widget_add_button"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
+                android:layout_gravity="bottom|end"
+                android:background="@drawable/bg_quick_note_plus"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:text="+"
+                android:textColor="#FFFFFF"
+                android:textSize="28sp"
+                android:textStyle="bold" />
+        </FrameLayout>
+    </LinearLayout>
+
+</FrameLayout>

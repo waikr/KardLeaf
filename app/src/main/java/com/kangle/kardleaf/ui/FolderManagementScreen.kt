@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CreateNewFolder
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Sort
@@ -45,7 +47,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
@@ -92,6 +93,8 @@ fun FolderManagementScreen(
     var moveTarget by remember { mutableStateOf<FolderManageItem?>(null) }
     var deleteTarget by remember { mutableStateOf<FolderManageItem?>(null) }
     var sortTargets by remember { mutableStateOf<List<FolderManageItem>?>(null) }
+    var showSortMenu by remember { mutableStateOf(false) }
+    var expandedFolderPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     var toastMessage by remember { mutableStateOf<String?>(null) }
@@ -114,16 +117,30 @@ fun FolderManagementScreen(
         if (currentPath.isNotBlank() && currentPath !in labels) {
             currentPath = parentFolderPath(currentPath)
         }
+        expandedFolderPaths = expandedFolderPaths.filterTo(mutableSetOf()) { it in labels }
     }
 
-    val childFolders = remember(labels, notes, currentPath, orderVersion) {
+    val currentFolderSavedOrder = remember(currentPath, orderVersion) {
+        viewModel.getFolderDisplayOrder(currentPath)
+    }
+    val childFolders = remember(labels, notes, currentPath, currentFolderSavedOrder, orderVersion) {
         buildManageItems(
             labels = labels,
             notes = notes,
             parentPath = currentPath,
-            savedOrder = viewModel.getFolderDisplayOrder(currentPath),
+            savedOrder = currentFolderSavedOrder,
         )
     }
+    val visibleFolders = remember(labels, notes, currentPath, expandedFolderPaths, orderVersion) {
+        buildManageTreeItems(
+            labels = labels,
+            notes = notes,
+            parentPath = currentPath,
+            expandedPaths = expandedFolderPaths,
+            savedOrderFor = viewModel::getFolderDisplayOrder,
+        )
+    }
+    val isCustomFolderOrder = currentFolderSavedOrder.isNotEmpty()
 
     BackHandler(enabled = !isDrawerOpen) {
         if (currentPath.isNotBlank()) {
@@ -138,7 +155,7 @@ fun FolderManagementScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("文件夹管理")
+                        Text("分类管理")
                         Text(
                             text = currentPath.ifBlank { "根目录" },
                             style = MaterialTheme.typography.labelSmall,
@@ -162,6 +179,43 @@ fun FolderManagementScreen(
                             imageVector = if (currentPath.isBlank()) Icons.Default.Menu else Icons.AutoMirrored.Outlined.ArrowBack,
                             contentDescription = if (currentPath.isBlank()) "打开侧边栏" else "返回上级",
                         )
+                    }
+                },
+                actions = {
+                    Box {
+                        IconButton(onClick = { showSortMenu = true }) {
+                            Icon(Icons.Outlined.Sort, contentDescription = "排序")
+                        }
+                        KardLeafDropdownMenu(
+                            expanded = showSortMenu,
+                            onDismissRequest = { showSortMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("标题") },
+                                trailingIcon = {
+                                    if (!isCustomFolderOrder) {
+                                        Icon(Icons.Default.Check, contentDescription = null)
+                                    }
+                                },
+                                onClick = {
+                                    viewModel.saveFolderDisplayOrder(currentPath, emptyList())
+                                    showSortMenu = false
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("自定义") },
+                                enabled = childFolders.size > 1,
+                                trailingIcon = {
+                                    if (isCustomFolderOrder) {
+                                        Icon(Icons.Default.Check, contentDescription = null)
+                                    }
+                                },
+                                onClick = {
+                                    showSortMenu = false
+                                    sortTargets = childFolders
+                                },
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -194,40 +248,6 @@ fun FolderManagementScreen(
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp),
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "当前层级",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = currentPath.ifBlank { "根目录" },
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                OutlinedButton(
-                    onClick = { sortTargets = childFolders },
-                    enabled = childFolders.size > 1,
-                ) {
-                    Icon(
-                        Icons.Outlined.Sort,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .padding(end = 6.dp)
-                            .size(18.dp),
-                    )
-                    Text("调整顺序")
-                }
-            }
-
             if (childFolders.isEmpty()) {
                 EmptyFolderManagerContent(
                     modifier = Modifier.weight(1f),
@@ -239,10 +259,19 @@ fun FolderManagementScreen(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(childFolders, key = { it.path }) { folder ->
+                    items(visibleFolders, key = { it.path }) { folder ->
                         FolderManageRow(
                             folder = folder,
+                            isExpanded = folder.path in expandedFolderPaths,
                             onOpen = { currentPath = folder.path },
+                            onToggleExpandAll = {
+                                val descendants = descendantFolderPaths(labels, folder.path).toSet()
+                                expandedFolderPaths = if (folder.path in expandedFolderPaths) {
+                                    expandedFolderPaths - descendants - folder.path
+                                } else {
+                                    expandedFolderPaths + descendants + folder.path
+                                }
+                            },
                             onRename = { renameTarget = folder },
                             onMove = { moveTarget = folder },
                             onDelete = { deleteTarget = folder },
@@ -393,7 +422,9 @@ private fun EmptyFolderManagerContent(
 @Composable
 private fun FolderManageRow(
     folder: FolderManageItem,
+    isExpanded: Boolean,
     onOpen: () -> Unit,
+    onToggleExpandAll: () -> Unit,
     onRename: () -> Unit,
     onMove: () -> Unit,
     onDelete: () -> Unit,
@@ -409,7 +440,7 @@ private fun FolderManageRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onOpen)
-                .padding(start = 14.dp, top = 12.dp, end = 6.dp, bottom = 12.dp),
+                .padding(start = (14 + folder.depth * 20).dp, top = 12.dp, end = 2.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -434,16 +465,21 @@ private fun FolderManageRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Icon(
-                Icons.Outlined.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            IconButton(
+                onClick = onToggleExpandAll,
+                enabled = folder.childCount > 0,
+            ) {
+                Icon(
+                    imageVector = if (isExpanded) Icons.Outlined.KeyboardArrowDown else Icons.Outlined.KeyboardArrowRight,
+                    contentDescription = if (isExpanded) "收起子文件夹" else "展开子文件夹",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Box {
                 IconButton(onClick = { menuExpanded = true }) {
                     Icon(Icons.Outlined.MoreVert, contentDescription = "文件夹操作")
                 }
-                DropdownMenu(
+                KardLeafDropdownMenu(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false },
                 ) {
@@ -714,6 +750,7 @@ private data class FolderManageItem(
     val path: String,
     val noteCount: Int,
     val childCount: Int,
+    val depth: Int = 0,
 )
 
 private fun buildManageItems(
@@ -721,6 +758,7 @@ private fun buildManageItems(
     notes: List<Note>,
     parentPath: String,
     savedOrder: List<String>,
+    depth: Int = 0,
 ): List<FolderManageItem> {
     val children = directChildFolderPaths(labels, parentPath)
     val orderIndex = savedOrder.withIndex().associate { it.value to it.index }
@@ -735,8 +773,45 @@ private fun buildManageItems(
                 path = path,
                 noteCount = notes.count { it.folder == path },
                 childCount = directChildFolderPaths(labels, path).size,
+                depth = depth,
             )
         }
+}
+
+private fun buildManageTreeItems(
+    labels: List<String>,
+    notes: List<Note>,
+    parentPath: String,
+    expandedPaths: Set<String>,
+    savedOrderFor: (String) -> List<String>,
+): List<FolderManageItem> {
+    val result = mutableListOf<FolderManageItem>()
+
+    fun appendChildren(parent: String, depth: Int) {
+        buildManageItems(
+            labels = labels,
+            notes = notes,
+            parentPath = parent,
+            savedOrder = savedOrderFor(parent),
+            depth = depth,
+        ).forEach { folder ->
+            result += folder
+            if (folder.path in expandedPaths) {
+                appendChildren(folder.path, depth + 1)
+            }
+        }
+    }
+
+    appendChildren(parentPath, 0)
+    return result
+}
+
+private fun descendantFolderPaths(
+    labels: List<String>,
+    parentPath: String,
+): List<String> {
+    val prefix = "$parentPath/"
+    return labels.filter { it.startsWith(prefix) }
 }
 
 private fun directChildFolderPaths(

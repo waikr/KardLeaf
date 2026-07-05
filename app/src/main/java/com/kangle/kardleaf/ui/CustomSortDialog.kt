@@ -2,6 +2,7 @@ package com.kangle.kardleaf.ui
 
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -61,7 +63,7 @@ fun CustomSortDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("简洁自定义顺序") },
+        title = { Text("简洁调整") },
         text = {
             Column {
                 Text(
@@ -82,7 +84,7 @@ fun CustomSortDialog(
                     LazyColumn(
                         state = lazyListState,
                         modifier = Modifier.heightIn(max = 420.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         items(
                             items = orderedNotes,
@@ -106,22 +108,9 @@ fun CustomSortDialog(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .longPressDraggableHandle(
-                                                onDragStarted = {
-                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                },
-                                            )
-                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            .padding(horizontal = 12.dp, vertical = 7.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Menu,
-                                            contentDescription = "长按拖动",
-                                            modifier = Modifier
-                                                .padding(end = 10.dp)
-                                                .size(22.dp),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
                                                 text = noteDisplayTitle(note),
@@ -134,8 +123,27 @@ fun CustomSortDialog(
                                                 text = notePreviewText(note),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 2,
+                                                maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .padding(start = 10.dp)
+                                                .width(34.dp)
+                                                .height(36.dp)
+                                                .draggableHandle(
+                                                    onDragStarted = {
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    },
+                                                ),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Menu,
+                                                contentDescription = "拖动排序",
+                                                modifier = Modifier.size(22.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )
                                         }
                                     }

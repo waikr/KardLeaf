@@ -245,3 +245,37 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
         )
     }
 }
+
+/*
+ * version 14 → 15：新增独立任务表。
+ * 不修改 notes 表；Markdown 任务清单仍保留在原文件文本中。
+ */
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `tasks` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `notePath` TEXT,
+                `taskText` TEXT NOT NULL,
+                `done` INTEGER NOT NULL,
+                `reminderAt` INTEGER,
+                `createdAt` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE INDEX IF NOT EXISTS `index_tasks_notePath`
+            ON `tasks` (`notePath`)
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            CREATE INDEX IF NOT EXISTS `index_tasks_done_reminderAt`
+            ON `tasks` (`done`, `reminderAt`)
+            """.trimIndent(),
+        )
+    }
+}

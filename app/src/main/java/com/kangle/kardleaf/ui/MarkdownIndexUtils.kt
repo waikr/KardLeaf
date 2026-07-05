@@ -13,12 +13,18 @@ data class MarkdownHeading(
 data class SearchMatch(
     val scope: String,
     val snippet: String,
+    val startOffset: Int = -1,
 )
 
 private val headingRegex = Regex("""^(#{1,6})\s+(.+?)\s*#*\s*$""")
 private val wikiLinkRegex = Regex("""!?\[\[([^\]]+)]]""")
 private val markdownLinkRegex = Regex("""(?<!!)\[[^]]+]\(([^)]+)\)""")
 private val tagRegex = Regex("""(?<![\w/])#([A-Za-z0-9_\-/\u4e00-\u9fa5]+)""")
+private val snippetHeadingPrefixRegex = Regex("""^#{1,6}\s+""")
+private val snippetTaskPrefixRegex = Regex("""^\s*[-*+]\s+\[[ xX]]\s+""")
+private val snippetBulletPrefixRegex = Regex("""^\s*[-*+]\s+""")
+private val snippetOrderedListPrefixRegex = Regex("""^\s*\d+\.\s+""")
+private val snippetMarkdownTokenRegex = Regex("""[*_`~>]""")
 
 fun extractMarkdownHeadings(content: String): List<MarkdownHeading> {
     val headings = mutableListOf<MarkdownHeading>()
@@ -87,14 +93,18 @@ fun findSearchMatch(
 ): SearchMatch? {
     val q = query.trim()
     if (q.isBlank()) return null
+    val tags by lazy { extractObsidianTags(note.content) }
+    val matchedHistory by lazy {
+        histories.firstOrNull { it.noteId == note.id && (it.title.contains(q, true) || it.content.contains(q, true)) }
+    }
     return when {
         note.title.contains(q, ignoreCase = true) -> SearchMatch("标题", note.title)
         note.folder.replace("\\", "/").contains(q, ignoreCase = true) -> SearchMatch("文件夹", note.folder.replace("\\", "/"))
-        extractObsidianTags(note.content).any { it.contains(q.removePrefix("#"), ignoreCase = true) } ->
-            SearchMatch("标签", extractObsidianTags(note.content).joinToString(" ") { "#$it" })
-        note.content.contains(q, ignoreCase = true) -> SearchMatch("正文", buildSearchSnippet(note.content, q))
-        histories.any { it.noteId == note.id && (it.title.contains(q, true) || it.content.contains(q, true)) } -> {
-            val history = histories.first { it.noteId == note.id && (it.title.contains(q, true) || it.content.contains(q, true)) }
+        tags.any { it.contains(q.removePrefix("#"), ignoreCase = true) } ->
+            SearchMatch("标签", tags.joinToString(" ") { "#$it" })
+        note.content.contains(q, ignoreCase = true) -> SearchMatch("正文", buildSearchSnippet(note.content, q), note.content.indexOf(q, ignoreCase = true))
+        matchedHistory != null -> {
+            val history = matchedHistory!!
             SearchMatch("历史版本", buildSearchSnippet("${history.title}\n${history.content}", q))
         }
         else -> null
@@ -110,11 +120,11 @@ fun stripMarkdownForSnippet(content: String): String =
         .lineSequence()
         .map { line ->
             line
-                .replace(Regex("""^#{1,6}\s+"""), "")
-                .replace(Regex("""^\s*[-*+]\s+\[[ xX]]\s+"""), "")
-                .replace(Regex("""^\s*[-*+]\s+"""), "")
-                .replace(Regex("""^\s*\d+\.\s+"""), "")
-                .replace(Regex("""[*_`~>]"""), "")
+                .replace(snippetHeadingPrefixRegex, "")
+                .replace(snippetTaskPrefixRegex, "")
+                .replace(snippetBulletPrefixRegex, "")
+                .replace(snippetOrderedListPrefixRegex, "")
+                .replace(snippetMarkdownTokenRegex, "")
                 .trim()
         }
         .filter { it.isNotBlank() }

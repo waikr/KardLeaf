@@ -1,14 +1,16 @@
 package com.kangle.kardleaf.ui
 
+import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.KardLeafLogTags
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.SystemClock
-import android.util.Log
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.expandHorizontally
@@ -18,9 +20,11 @@ import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -28,6 +32,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -35,15 +40,15 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.items as lazyColumnItems
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.items as lazyRowItems
 import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
@@ -64,7 +69,9 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PushPin
@@ -108,11 +115,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -126,6 +135,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import androidx.core.content.FileProvider
@@ -133,17 +143,31 @@ import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.utils.NoteTextStats
+import com.kangle.kardleaf.ui.theme.LocalKardLeafGlobalCornerRadiusDp
+import com.kangle.kardleaf.ui.theme.LocalKardLeafHomeCornerRadiusDp
+import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 import java.io.File
 import java.util.Date
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 
-private const val STARTUP_PERF_TRACE_TAG = "KardLeafStartupPerf"
+private val STARTUP_PERF_TRACE_TAG = KardLeafLogTags.STARTUP_PERF
+private val USER_PERF_TRACE_TAG = KardLeafLogTags.USER_PERF
 private const val BACK_TRACE_TAG = "KardLeafBackTrace"
+private val DASHBOARD_SCROLL_TRACE_TAG = KardLeafLogTags.DASHBOARD_SCROLL
 private const val CUSTOM_SORT_FLASH_TAG = "KardLeafCustomSortFlash"
 private const val MENU_REOPEN_GUARD_MS = 250L
+private const val HOME_BOTTOM_TOOLBAR_REVEAL_DELAY_MS = 235L
+private const val HOME_BOTTOM_TOOLBAR_ENTER_DURATION_MS = 240
+private const val HOME_BOTTOM_TOOLBAR_EXIT_DURATION_MS = 180
+private inline fun logDashboardCustomSortFlash(message: () -> String) {
+    if (KardLeafLog.isEnabled(DASHBOARD_CUSTOM_SORT_TRACE_TAG)) {
+        KardLeafLog.d(CUSTOM_SORT_FLASH_TAG, message())
+    }
+}
 
 @Suppress("UNUSED_PARAMETER")
 private suspend fun pausedDashboardThumbnailLoader(note: Note): Bitmap? = null
@@ -197,13 +221,21 @@ fun DashboardScreen(
     viewModel: MainViewModel,
     isDrawerOpen: Boolean,
     onSelectFolder: () -> Unit,
+    onCreateSampleVault: () -> Unit,
     onNoteClick: (Note) -> Unit,
     onFabClick: () -> Unit,
     onOpenDrawer: () -> Unit,
+    onCreateDraftClick: () -> Unit = {},
     onCreateDrawingClick: () -> Unit = {},
+    onOpenPrivacy: () -> Unit = {},
     edgeDrawerWidthPx: Float = 0f,
     pauseBackgroundWork: Boolean = false,
+    sampleCleanupPromptRequestId: Long = 0L,
+    onSampleCleanupPromptConsumed: () -> Unit = {},
+    onClearSampleVaultSamples: suspend () -> Boolean = { false },
+    onRestoreSampleVaultSamples: suspend () -> Boolean = { false },
     onBackFromTemporaryFilter: (MainViewModel.NoteFilter) -> Boolean = { false },
+    appStartupStartRealtimeMs: Long = 0L,
 ) {
     val notes by viewModel.notes.collectAsState()
     val uiItems by viewModel.uiItems.collectAsState()
@@ -216,10 +248,12 @@ fun DashboardScreen(
     val sortDirection by viewModel.sortDirection.collectAsState()
     val currentFolderSortSettings by viewModel.currentFolderSortSettings.collectAsState()
     val folderSortVersion by viewModel.folderSortVersion.collectAsState()
+    val folderManagerOrderVersion by viewModel.folderManagerOrderVersion.collectAsState()
     val customSortDragModeEnabled by viewModel.customSortDragModeEnabled.collectAsState()
     val cardDensity by viewModel.cardDensity.collectAsState()
     val showYamlTagsOnLooseCards by viewModel.showYamlTagsOnLooseCards.collectAsState()
     val showModifiedDateOnCards by viewModel.showModifiedDateOnCards.collectAsState()
+    val cardModifiedDateFormat by viewModel.cardModifiedDateFormat.collectAsState()
     val showNoteTitleOnCards by viewModel.showNoteTitleOnCards.collectAsState()
     val showCurrentNoteTitleOnCards = showNoteTitleOnCards && currentFilter !is MainViewModel.NoteFilter.Drafts
     val showDateFilenameTitleOnCards by viewModel.showDateFilenameTitleOnCards.collectAsState()
@@ -227,9 +261,25 @@ fun DashboardScreen(
     val yamlTags by viewModel.yamlTags.collectAsState()
     val selectionToolbarItemOrder by viewModel.selectionToolbarItemOrder.collectAsState()
     val selectionToolbarMoreItems by viewModel.selectionToolbarMoreItems.collectAsState()
+    val selectionToolbarHiddenItems by viewModel.selectionToolbarHiddenItems.collectAsState()
+    val homeActionStyle by viewModel.homeActionStyle.collectAsState()
+    val homeBottomToolbarItemOrder by viewModel.homeBottomToolbarItemOrder.collectAsState()
+    val homeBottomToolbarHiddenItems by viewModel.homeBottomToolbarHiddenItems.collectAsState()
+    val homeBottomToolbarButtonSizeDp by viewModel.homeBottomToolbarButtonSizeDp.collectAsState()
+    val selectedNotes by viewModel.selectedNotes.collectAsState()
+    val isInSelectionMode = selectedNotes.isNotEmpty()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val openSearchRequest by viewModel.openSearchRequest.collectAsState()
+    val shouldShowHomeBottomToolbar =
+        !isPermissionNeeded &&
+            !isInSelectionMode &&
+            searchQuery.isBlank() &&
+            homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR
+    val homeBottomToolbarItems = homeBottomToolbarItemOrder
+        .filter { it !in homeBottomToolbarHiddenItems }
+        .filter { homeBottomToolbarItemAvailable(it, currentFilter) }
     val isLoading by viewModel.isLoading.collectAsState()
     val scrollToTopEvents by viewModel.homeScrollToTopEvents.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
     val context = LocalContext.current
     val unnamedNoteDateFormat = KardLeafCustomFeatures.getUnnamedNoteDateFormat(context)
     val density = LocalDensity.current
@@ -239,6 +289,7 @@ fun DashboardScreen(
         listStates.getOrPut(currentFilter) { LazyStaggeredGridState() }
     }
     val dashboardStartMs = remember { SystemClock.elapsedRealtime() }
+    var dashboardFilterSwitchStartMs by remember { mutableStateOf(dashboardStartMs) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val activeThumbnailLoader: suspend (Note) -> Bitmap? = remember(viewModel) {
@@ -276,16 +327,61 @@ fun DashboardScreen(
         }
     }
 
+
     LaunchedEffect(Unit) {
-        Log.d(STARTUP_PERF_TRACE_TAG, "dashboard compose enter filter=$currentFilter")
+        KardLeafLog.d(STARTUP_PERF_TRACE_TAG, "dashboard compose enter filter=$currentFilter")
+    }
+
+    var dashboardFirstReadyLogged by remember { mutableStateOf(false) }
+    LaunchedEffect(isPermissionNeeded, isLoading, notes.size, uiItems.size, allNotes.size) {
+        val hasDashboardContent = notes.isNotEmpty() || uiItems.isNotEmpty() || allNotes.isNotEmpty()
+        if (!dashboardFirstReadyLogged && !isPermissionNeeded && !isLoading && hasDashboardContent) {
+            withFrameNanos { }
+            dashboardFirstReadyLogged = true
+            val appElapsed = if (appStartupStartRealtimeMs > 0L) {
+                SystemClock.elapsedRealtime() - appStartupStartRealtimeMs
+            } else {
+                -1L
+            }
+            KardLeafLog.d(
+                STARTUP_PERF_TRACE_TAG,
+                "dashboard firstReady appElapsed=${appElapsed}ms dashboardElapsed=${SystemClock.elapsedRealtime() - dashboardStartMs}ms " +
+                    "filter=$currentFilter notes=${notes.size} uiItems=${uiItems.size} all=${allNotes.size}",
+            )
+        }
+    }
+
+    LaunchedEffect(currentFilter) {
+        dashboardFilterSwitchStartMs = SystemClock.elapsedRealtime()
+        KardLeafLog.d(
+            USER_PERF_TRACE_TAG,
+            "dashboardCategorySwitch start filter=$currentFilter " +
+                "notes=${notes.size} uiItems=${uiItems.size} all=${allNotes.size} labels=${labels.size} " +
+                dashboardFilterNoteCountSummary(currentFilter, allNotes),
+        )
+        withFrameNanos { }
+        KardLeafLog.d(
+            USER_PERF_TRACE_TAG,
+            "dashboardCategorySwitch firstFrame elapsed=${SystemClock.elapsedRealtime() - dashboardFilterSwitchStartMs}ms filter=$currentFilter " +
+                "notes=${notes.size} uiItems=${uiItems.size} all=${allNotes.size} " +
+                dashboardFilterNoteCountSummary(currentFilter, allNotes),
+        )
     }
 
     LaunchedEffect(currentFilter, notes.size, uiItems.size, allNotes.size, labels.size, isLoading, viewMode, cardDensity) {
-        Log.d(
+        val elapsedSinceSwitch = SystemClock.elapsedRealtime() - dashboardFilterSwitchStartMs
+        KardLeafLog.d(
             STARTUP_PERF_TRACE_TAG,
             "dashboard state elapsed=${SystemClock.elapsedRealtime() - dashboardStartMs}ms filter=$currentFilter " +
                 "notes=${notes.size} uiItems=${uiItems.size} all=${allNotes.size} labels=${labels.size} " +
                 "loading=$isLoading viewMode=$viewMode cardDensity=$cardDensity",
+        )
+        KardLeafLog.d(
+            USER_PERF_TRACE_TAG,
+            "dashboardCategoryState elapsedSinceSwitch=${elapsedSinceSwitch}ms filter=$currentFilter " +
+                "notes=${notes.size} uiItems=${uiItems.size} all=${allNotes.size} labels=${labels.size} " +
+                "loading=$isLoading viewMode=$viewMode cardDensity=$cardDensity " +
+                dashboardFilterNoteCountSummary(currentFilter, allNotes),
         )
     }
 
@@ -302,8 +398,177 @@ fun DashboardScreen(
     var manualRefreshLoadingSeen by remember { mutableStateOf(false) }
     var showFolderNavigationPanel by remember { mutableStateOf(false) }
     var folderNavigationPanelProgress by remember { mutableStateOf(0f) }
+    var folderNavigationPanelCloseJob by remember { mutableStateOf<Job?>(null) }
+    var showSampleCleanupPrompt by remember { mutableStateOf(false) }
+    var showSampleCleanupConfirmDialog by remember { mutableStateOf(false) }
+    var handledSampleCleanupPromptRequestId by remember { mutableStateOf(0L) }
     var previewDashboardTitlePath by remember { mutableStateOf<String?>(null) }
     var showQuickCreateActions by remember { mutableStateOf(false) }
+    var shareNotesPending by remember { mutableStateOf<List<Note>>(emptyList()) }
+    var imageShareWarningPending by remember { mutableStateOf<List<Note>>(emptyList()) }
+    var shareBlockedMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(openSearchRequest) {
+        if (openSearchRequest > 0L) {
+            showSearch = true
+        }
+    }
+
+    fun openFolderNavigationPanel() {
+        folderNavigationPanelCloseJob?.cancel()
+        showFolderNavigationPanel = true
+        folderNavigationPanelProgress = 0f
+        coroutineScope.launch {
+            withFrameNanos { }
+            folderNavigationPanelProgress = 1f
+        }
+    }
+
+    fun closeFolderNavigationPanel() {
+        folderNavigationPanelProgress = 0f
+        folderNavigationPanelCloseJob?.cancel()
+        folderNavigationPanelCloseJob = coroutineScope.launch {
+            delay(KardLeafMotion.ContainerDurationMillis.toLong())
+            showFolderNavigationPanel = false
+        }
+    }
+
+    fun showSampleCleanupUndoSnackbar(message: String) {
+        coroutineScope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result = snackbarHostState.showSnackbar(
+                message = message,
+                actionLabel = "撤回",
+                withDismissAction = false,
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed && onRestoreSampleVaultSamples()) {
+                viewModel.refreshNotes()
+            }
+        }
+    }
+
+    LaunchedEffect(sampleCleanupPromptRequestId) {
+        if (sampleCleanupPromptRequestId > 0L && sampleCleanupPromptRequestId != handledSampleCleanupPromptRequestId) {
+            handledSampleCleanupPromptRequestId = sampleCleanupPromptRequestId
+            showSampleCleanupPrompt = true
+        }
+    }
+
+
+    shareBlockedMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { shareBlockedMessage = null },
+            title = { Text("无法导出") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { shareBlockedMessage = null }) {
+                    Text("知道了")
+                }
+            },
+        )
+    }
+
+    if (imageShareWarningPending.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { imageShareWarningPending = emptyList() },
+            title = { Text("导出为图片") },
+            text = { Text("如果生成的图片太大，系统可能不支持导出；内容过长时会自动截断。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        shareSelectedNotes(context, imageShareWarningPending, ShareSelectedNotesMode.TEXT_IMAGE)
+                        imageShareWarningPending = emptyList()
+                    },
+                ) {
+                    Text("继续导出")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { imageShareWarningPending = emptyList() }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    if (shareNotesPending.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { shareNotesPending = emptyList() },
+            title = { Text("选择分享格式") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DashboardFolderLocationRow(
+                        icon = Icons.Outlined.Description,
+                        title = "文本文件",
+                        subtitle = "导出为 .txt 文件",
+                        onClick = {
+                            val notesToShare = shareNotesPending
+                            shareNotesPending = emptyList()
+                            coroutineScope.launch {
+                                val fullNotes = viewModel.getFullNotesForShare(notesToShare)
+                                if (fullNotes == null) {
+                                    shareBlockedMessage = "无法读取完整正文，已取消导出"
+                                    return@launch
+                                }
+                                shareSelectedNotes(context, fullNotes, ShareSelectedNotesMode.TEXT_FILE)
+                            }
+                        },
+                    )
+                    DashboardFolderLocationRow(
+                        icon = Icons.Outlined.Image,
+                        title = "文本图片",
+                        subtitle = "生成 PNG 图片分享",
+                        onClick = {
+                            val notesToShare = shareNotesPending
+                            shareNotesPending = emptyList()
+                            coroutineScope.launch {
+                                val fullNotes = viewModel.getFullNotesForShare(notesToShare)
+                                if (fullNotes == null) {
+                                    shareBlockedMessage = "无法读取完整正文，已取消导出"
+                                    return@launch
+                                }
+                                val blockMessage = imageExportBlockMessage(fullNotes)
+                                if (blockMessage != null) {
+                                    shareBlockedMessage = blockMessage
+                                } else {
+                                    imageShareWarningPending = fullNotes
+                                }
+                            }
+                        },
+                    )
+                    DashboardFolderLocationRow(
+                        icon = Icons.Outlined.Description,
+                        title = "Word",
+                        subtitle = "导出为 .docx 文档",
+                        onClick = {
+                            val notesToShare = shareNotesPending
+                            shareNotesPending = emptyList()
+                            coroutineScope.launch {
+                                val fullNotes = viewModel.getFullNotesForShare(notesToShare)
+                                if (fullNotes == null) {
+                                    shareBlockedMessage = "无法读取完整正文，已取消导出"
+                                    return@launch
+                                }
+                                val blockMessage = wordExportBlockMessage(fullNotes)
+                                if (blockMessage != null) {
+                                    shareBlockedMessage = blockMessage
+                                    return@launch
+                                }
+                                shareSelectedNotes(context, fullNotes, ShareSelectedNotesMode.WORD)
+                            }
+                        },
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { shareNotesPending = emptyList() }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
 
     if (showCreateLabelDialog) {
         CreateLabelDialog(
@@ -435,10 +700,9 @@ fun DashboardScreen(
     }
 
     // Selection State
-    val selectedNotes by viewModel.selectedNotes.collectAsState()
-    val isInSelectionMode = selectedNotes.isNotEmpty()
-
-    val selectedNotesList = notes.filter { selectedNotes.contains(it.file.path) }
+    val selectedNotesList = remember(notes, selectedNotes) {
+        notes.filter { selectedNotes.contains(it.file.path) }
+    }
     val allSelectedArchived = selectedNotesList.isNotEmpty() && selectedNotesList.all { it.isArchived }
     val allSelectedActive = selectedNotesList.isNotEmpty() && selectedNotesList.all { !it.isArchived && !it.isTrashed }
     val allSelectedFavorite = selectedNotesList.isNotEmpty() && selectedNotesList.all { it.isFavorite }
@@ -482,11 +746,46 @@ fun DashboardScreen(
         }
     }
 
+    var homeBottomToolbarVisible by remember { mutableStateOf(true) }
+    LaunchedEffect(homeActionStyle, currentFilter, isPermissionNeeded, isInSelectionMode, listState) {
+        homeBottomToolbarVisible = true
+        if (homeActionStyle != PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR ||
+            isPermissionNeeded ||
+            isInSelectionMode
+        ) {
+            return@LaunchedEffect
+        }
+
+        var lastIndex = listState.firstVisibleItemIndex
+        var lastOffset = listState.firstVisibleItemScrollOffset
+        snapshotFlow {
+            Triple(
+                listState.isScrollInProgress,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+            )
+        }
+            .distinctUntilChanged()
+            .collect { (isScrolling, index, offset) ->
+                val scrollingDown = index > lastIndex || (index == lastIndex && offset > lastOffset)
+                if (isScrolling && scrollingDown && (index > 0 || offset > 12)) {
+                    homeBottomToolbarVisible = false
+                } else if (!isScrolling) {
+                    delay(HOME_BOTTOM_TOOLBAR_REVEAL_DELAY_MS)
+                    if (!listState.isScrollInProgress) {
+                        homeBottomToolbarVisible = true
+                    }
+                }
+                lastIndex = index
+                lastOffset = offset
+            }
+    }
+
     // Double back to exit
     var lastBackPressTime by remember { mutableStateOf(0L) }
 
     BackHandler(enabled = !isDrawerOpen) {
-        Log.d(
+        KardLeafLog.d(
             BACK_TRACE_TAG,
             "Dashboard root BackHandler hit drawerOpen=$isDrawerOpen showSearch=$showSearch " +
                 "folderPanel=$showFolderNavigationPanel quickCreate=$showQuickCreateActions " +
@@ -504,10 +803,12 @@ fun DashboardScreen(
             propertyNote != null -> propertyNote = null
             customSortDragModeEnabled -> viewModel.setCustomSortDragModeEnabled(false)
             showFolderNavigationPanel -> {
-                folderNavigationPanelProgress = 0f
-                showFolderNavigationPanel = false
+                closeFolderNavigationPanel()
             }
             showQuickCreateActions -> showQuickCreateActions = false
+            shareBlockedMessage != null -> shareBlockedMessage = null
+            imageShareWarningPending.isNotEmpty() -> imageShareWarningPending = emptyList()
+            shareNotesPending.isNotEmpty() -> shareNotesPending = emptyList()
             showSearch -> {
                 showSearch = false
                 viewModel.onSearchQueryChanged("")
@@ -531,13 +832,59 @@ fun DashboardScreen(
         }
     }
 
+    fun openCreateFolderDialog() {
+        val currentFolder = (currentFilter as? MainViewModel.NoteFilter.Label)?.name.orEmpty().normalizeDashboardFolderPath()
+        if (currentFolder.isBlank()) {
+            createFolderParentPath = ""
+            showCreateSubfolderDialog = true
+        } else {
+            showCreateFolderLocationDialog = true
+        }
+    }
+
+    fun openHomeBottomToolbarItem(itemId: PrefsManager.HomeBottomToolbarItemId) {
+        when (itemId) {
+            PrefsManager.HomeBottomToolbarItemId.NEW_NOTE -> onFabClick()
+            PrefsManager.HomeBottomToolbarItemId.NEW_DRAFT -> onCreateDraftClick()
+            PrefsManager.HomeBottomToolbarItemId.NEW_DRAWING -> onCreateDrawingClick()
+            PrefsManager.HomeBottomToolbarItemId.NEW_FOLDER -> openCreateFolderDialog()
+            PrefsManager.HomeBottomToolbarItemId.TASKS -> viewModel.navigateTo(MainViewModel.Screen.Tasks)
+            PrefsManager.HomeBottomToolbarItemId.ALL_NOTES -> {
+                viewModel.navigateTo(MainViewModel.Screen.Dashboard)
+                viewModel.setFilter(MainViewModel.NoteFilter.All)
+            }
+            PrefsManager.HomeBottomToolbarItemId.RECENT -> {
+                viewModel.navigateTo(MainViewModel.Screen.Dashboard)
+                viewModel.setFilter(MainViewModel.NoteFilter.Recent)
+            }
+            PrefsManager.HomeBottomToolbarItemId.FAVORITES -> {
+                viewModel.navigateTo(MainViewModel.Screen.Dashboard)
+                viewModel.setFilter(MainViewModel.NoteFilter.Favorites)
+            }
+            PrefsManager.HomeBottomToolbarItemId.DRAFTS -> {
+                viewModel.navigateTo(MainViewModel.Screen.Dashboard)
+                viewModel.setFilter(MainViewModel.NoteFilter.Drafts)
+            }
+            PrefsManager.HomeBottomToolbarItemId.TAGS -> viewModel.navigateTo(MainViewModel.Screen.Tags)
+            PrefsManager.HomeBottomToolbarItemId.FILES -> viewModel.navigateTo(MainViewModel.Screen.Folders)
+            PrefsManager.HomeBottomToolbarItemId.DATES -> viewModel.navigateTo(MainViewModel.Screen.Dates)
+            PrefsManager.HomeBottomToolbarItemId.IMAGES -> viewModel.navigateTo(MainViewModel.Screen.Images)
+            PrefsManager.HomeBottomToolbarItemId.ARCHIVE -> {
+                viewModel.navigateTo(MainViewModel.Screen.Dashboard)
+                viewModel.setFilter(MainViewModel.NoteFilter.Archive)
+            }
+            PrefsManager.HomeBottomToolbarItemId.TRASH -> {
+                viewModel.navigateTo(MainViewModel.Screen.Dashboard)
+                viewModel.setFilter(MainViewModel.NoteFilter.Trash)
+            }
+            PrefsManager.HomeBottomToolbarItemId.PRIVACY -> onOpenPrivacy()
+            PrefsManager.HomeBottomToolbarItemId.SETTINGS -> viewModel.navigateTo(MainViewModel.Screen.Settings)
+        }
+    }
+
     Scaffold(
         topBar = {
-            AnimatedVisibility(
-                visible = isInSelectionMode,
-                enter = fadeIn() + slideInVertically { -it },
-                exit = fadeOut() + slideOutVertically { -it },
-            ) {
+            if (isInSelectionMode) {
                 SelectionTopAppBar(
                     selectionCount = selectedNotes.size,
                     currentFilter = currentFilter,
@@ -563,6 +910,7 @@ fun DashboardScreen(
                     availableLabels = labels,
                     selectionToolbarItemOrder = selectionToolbarItemOrder,
                     selectionToolbarMoreItems = selectionToolbarMoreItems,
+                    selectionToolbarHiddenItems = selectionToolbarHiddenItems,
                     selectedNoteForProperties = selectedNotesList.singleOrNull(),
                     selectedNotesForTags = selectedNotesList,
                     availableYamlTags = yamlTags,
@@ -583,7 +931,7 @@ fun DashboardScreen(
                         }
                     },
                     onShare = {
-                        shareSelectedNotes(context, selectedNotesList)
+                        shareNotesPending = selectedNotesList
                     },
                     onMoveToPrivacy = {
                         viewModel.moveSelectedNotesToPrivacy { count ->
@@ -591,33 +939,70 @@ fun DashboardScreen(
                         }
                     },
                 )
-            }
-            AnimatedVisibility(
-                visible = !isInSelectionMode,
-                enter = fadeIn(),
-                exit = fadeOut(),
-            ) {
+            } else {
                 TopAppBar(
                     title = {
-                        if (showSearch) {
-                            Surface(
-                                modifier =
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .height(50.dp),
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                tonalElevation = 2.dp,
+                        Box(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            AnimatedVisibility(
+                                visible = !showSearch,
+                                enter = fadeIn(),
+                                exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.Start),
                             ) {
-                                SearchBar(viewModel = viewModel)
+                                Row(
+                                    modifier =
+                                        Modifier.clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null,
+                                        ) {
+                                            if (showFolderNavigationPanel) {
+                                                closeFolderNavigationPanel()
+                                            } else {
+                                                openFolderNavigationPanel()
+                                            }
+                                        },
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = previewDashboardTitlePath?.let(::dashboardTitleForPath) ?: dashboardTitle(currentFilter),
+                                        style = MaterialTheme.typography.titleLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Outlined.KeyboardArrowDown,
+                                        contentDescription = if (showFolderNavigationPanel) "收起分类导航" else "展开分类导航",
+                                        modifier =
+                                            Modifier
+                                                .padding(start = 2.dp)
+                                                .size(22.dp)
+                                                .rotate(if (showFolderNavigationPanel) 180f else 0f),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
-                        } else {
-                            Text(
-                                text = previewDashboardTitlePath?.let(::dashboardTitleForPath) ?: dashboardTitle(currentFilter),
-                                style = MaterialTheme.typography.titleLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            AnimatedVisibility(
+                                visible = showSearch,
+                                enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
+                                exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End),
+                            ) {
+                                Surface(
+                                    modifier =
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .height(50.dp),
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    tonalElevation = 2.dp,
+                                ) {
+                                    SearchBar(viewModel = viewModel)
+                                }
+                            }
                         }
                     },
                     navigationIcon = {
@@ -641,24 +1026,24 @@ fun DashboardScreen(
                             var showMoreMenu by remember { mutableStateOf(false) }
                             var lastMoreMenuDismissAt by remember { mutableStateOf(0L) }
                             LaunchedEffect(showMoreMenu) {
-                                Log.d(BACK_TRACE_TAG, "Dashboard trash more state changed showMoreMenu=$showMoreMenu")
+                                KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more state changed showMoreMenu=$showMoreMenu")
                             }
                             Box {
                                 IconButton(onClick = {
                                     val now = SystemClock.uptimeMillis()
                                     val ignoreReopen = !showMoreMenu && now - lastMoreMenuDismissAt < MENU_REOPEN_GUARD_MS
-                                    Log.d(BACK_TRACE_TAG, "Dashboard trash more click toggle menu filter=$currentFilter showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
+                                    KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more click toggle menu filter=$currentFilter showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
                                     if (!ignoreReopen) {
                                         showMoreMenu = !showMoreMenu
                                     }
                                 }) {
                                     Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
                                 }
-                                DropdownMenu(
+                                KardLeafDropdownMenu(
                                     modifier =
                                         Modifier.onPreviewKeyEvent { event ->
                                             if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
-                                                Log.d(
+                                                KardLeafLog.d(
                                                     BACK_TRACE_TAG,
                                                     "Dashboard trash more popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showMoreMenu=$showMoreMenu",
                                                 )
@@ -667,7 +1052,7 @@ fun DashboardScreen(
                                         },
                                     expanded = showMoreMenu,
                                     onDismissRequest = {
-                                        Log.d(BACK_TRACE_TAG, "Dashboard trash more onDismissRequest showMoreMenu=$showMoreMenu")
+                                        KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more onDismissRequest showMoreMenu=$showMoreMenu")
                                         lastMoreMenuDismissAt = SystemClock.uptimeMillis()
                                         showMoreMenu = false
                                     },
@@ -687,7 +1072,7 @@ fun DashboardScreen(
                                     )
                                 }
                                 BackHandler(enabled = showMoreMenu) {
-                                    Log.d(BACK_TRACE_TAG, "Dashboard trash more BackHandler hit, closing menu")
+                                    KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more BackHandler hit, closing menu")
                                     showMoreMenu = false
                                 }
                             }
@@ -705,8 +1090,10 @@ fun DashboardScreen(
                 KardLeafUndoSnackbar(snackbarData = snackbarData)
             }
         },
+        bottomBar = {},
         floatingActionButton = {
             if (!isPermissionNeeded &&
+                homeActionStyle == PrefsManager.HomeActionStyle.SIMPLE_NEW_BUTTON &&
                 currentFilter !is MainViewModel.NoteFilter.Trash &&
                 currentFilter !is MainViewModel.NoteFilter.Archive
             ) {
@@ -747,13 +1134,7 @@ fun DashboardScreen(
                                 onSwipeDown = { showQuickCreateActions = false },
                                 onClick = {
                                     showQuickCreateActions = false
-                                    val currentFolder = (currentFilter as? MainViewModel.NoteFilter.Label)?.name.orEmpty().normalizeDashboardFolderPath()
-                                    if (currentFolder.isBlank()) {
-                                        createFolderParentPath = ""
-                                        showCreateSubfolderDialog = true
-                                    } else {
-                                        showCreateFolderLocationDialog = true
-                                    }
+                                    openCreateFolderDialog()
                                 },
                             )
                         }
@@ -848,7 +1229,6 @@ fun DashboardScreen(
                 (currentFilter is MainViewModel.NoteFilter.All ||
                     currentFilter is MainViewModel.NoteFilter.Label) &&
                     searchQuery.isBlank() &&
-                    !isInSelectionMode &&
                     folderPagerPages.isNotEmpty()
             val customSortDragRefreshBlocked =
                 customSortDragModeEnabled &&
@@ -863,15 +1243,20 @@ fun DashboardScreen(
                 isInSelectionMode,
                 folderSortVersion,
             ) {
-                Log.d(
-                    CUSTOM_SORT_FLASH_TAG,
+                logDashboardCustomSortFlash {
                     "Dashboard pagerInputs filter=$currentFilter labels=${labels.size} pages=${folderPagerPathSummary(folderPagerPages)} " +
-                        "usePager=$useFolderPager searchBlank=${searchQuery.isBlank()} selection=$isInSelectionMode sortVersion=$folderSortVersion uiItems=${dashboardUiItemsFlashSummary(uiItems)} notes=${notes.size}",
-                )
+                        "usePager=$useFolderPager searchBlank=${searchQuery.isBlank()} selection=$isInSelectionMode sortVersion=$folderSortVersion uiItems=${dashboardUiItemsFlashSummary(uiItems)} notes=${notes.size}"
+                }
             }
             var isFolderPagerVerticalGestureLocked by remember { mutableStateOf(false) }
-            LaunchedEffect(useFolderPager) {
-                if (!useFolderPager) {
+            LaunchedEffect(useFolderPager, folderPagerState.isScrollInProgress) {
+                if (!useFolderPager || !folderPagerState.isScrollInProgress) {
+                    if (isFolderPagerVerticalGestureLocked) {
+                        KardLeafLog.d(
+                            DASHBOARD_SCROLL_TRACE_TAG,
+                            "dashboardPager verticalLock release reason=${if (useFolderPager) "scrollIdle" else "pagerDisabled"}",
+                        )
+                    }
                     isFolderPagerVerticalGestureLocked = false
                 }
             }
@@ -897,11 +1282,10 @@ fun DashboardScreen(
                 folderPagerState.isScrollInProgress,
                 isProgrammaticPagerSync,
             ) {
-                Log.d(
-                    CUSTOM_SORT_FLASH_TAG,
+                logDashboardCustomSortFlash {
                     "Dashboard pagerState currentPath=$currentFolderPath preview=$previewFolderPath currentPage=${folderPagerState.currentPage} " +
-                        "settled=${folderPagerState.settledPage} scrolling=${folderPagerState.isScrollInProgress} programmatic=$isProgrammaticPagerSync",
-                )
+                        "settled=${folderPagerState.settledPage} scrolling=${folderPagerState.isScrollInProgress} programmatic=$isProgrammaticPagerSync"
+                }
             }
             LaunchedEffect(previewFolderPath, folderPagerState.isScrollInProgress, isProgrammaticPagerSync) {
                 previewDashboardTitlePath = if (folderPagerState.isScrollInProgress && !isProgrammaticPagerSync) {
@@ -974,6 +1358,7 @@ fun DashboardScreen(
                                             if (dy > startDistancePx && dy > dx * 1.2f) {
                                                 change.consume()
                                                 startedPanelDrag = true
+                                                folderNavigationPanelCloseJob?.cancel()
                                                 showFolderNavigationPanel = true
                                                 folderNavigationPanelProgress = (dy / triggerDistancePx).coerceIn(0f, 1f)
                                                 if (dy > triggerDistancePx && dy > dx * 1.4f) {
@@ -984,8 +1369,7 @@ fun DashboardScreen(
                                         }
                                     }
                                     if (startedPanelDrag && folderNavigationPanelProgress < 1f) {
-                                        folderNavigationPanelProgress = 0f
-                                        showFolderNavigationPanel = false
+                                        closeFolderNavigationPanel()
                                     }
                                 }
                             },
@@ -1015,6 +1399,7 @@ fun DashboardScreen(
             ) {
                 if (isPermissionNeeded) {
                     PermissionRequestState(
+                        onCreateSampleVault = onCreateSampleVault,
                         onSelectFolder = onSelectFolder,
                         modifier = Modifier.align(Alignment.Center),
                     )
@@ -1070,9 +1455,16 @@ fun DashboardScreen(
                                     val pullIndicatorDistancePx = with(density) { 28.dp.toPx() }
                                     awaitEachGesture {
                                         val down = awaitFirstDown(requireUnconsumed = false)
+                                        val downIndex = pullRefreshListState.firstVisibleItemIndex
+                                        val downOffset = pullRefreshListState.firstVisibleItemScrollOffset
                                         var pointerPressed = true
                                         showPullRefreshCircle = false
                                         var isVerticalPull = false
+                                        var consumedForHorizontalGuard = false
+                                        var maxDx = 0f
+                                        var maxDy = 0f
+                                        var moveEvents = 0
+                                        var scrollMoved = false
                                         while (pointerPressed) {
                                             val event = awaitPointerEvent()
                                             val change = event.changes.firstOrNull { it.id == down.id }
@@ -1080,6 +1472,12 @@ fun DashboardScreen(
                                             if (change != null && pointerPressed) {
                                                 val dx = kotlin.math.abs(change.position.x - down.position.x)
                                                 val dy = change.position.y - down.position.y
+                                                maxDx = maxOf(maxDx, dx)
+                                                maxDy = maxOf(maxDy, kotlin.math.abs(dy))
+                                                moveEvents++
+                                                scrollMoved = scrollMoved ||
+                                                    pullRefreshListState.firstVisibleItemIndex != downIndex ||
+                                                    pullRefreshListState.firstVisibleItemScrollOffset != downOffset
                                                 // 纯垂直下拉（dy>0 且 dy>dx）时不消费 move，
                                                 // 让 Material3 PullToRefresh 的 nestedScroll 正常累积下拉距离、
                                                 // 在合理距离（远小于半个屏幕）触发刷新。
@@ -1089,6 +1487,7 @@ fun DashboardScreen(
                                                     isVerticalPull = true
                                                 }
                                                 if (isVerticalPull && dx > dy * 0.6f) {
+                                                    consumedForHorizontalGuard = true
                                                     change.consume()
                                                 }
                                                 val isAtPullRefreshTop =
@@ -1106,6 +1505,17 @@ fun DashboardScreen(
                                                     showPullRefreshCircle = true
                                                 }
                                             }
+                                        }
+                                        val endIndex = pullRefreshListState.firstVisibleItemIndex
+                                        val endOffset = pullRefreshListState.firstVisibleItemScrollOffset
+                                        if (moveEvents > 0 && (consumedForHorizontalGuard || !scrollMoved || maxDy > 24f)) {
+                                            KardLeafLog.d(
+                                                DASHBOARD_SCROLL_TRACE_TAG,
+                                                "dashboardPointer end moves=$moveEvents consumedHorizontalGuard=$consumedForHorizontalGuard " +
+                                                    "scrollMoved=$scrollMoved maxDx=${maxDx.toInt()} maxDy=${maxDy.toInt()} " +
+                                                    "fromIndex=$downIndex toIndex=$endIndex fromOffset=$downOffset toOffset=$endOffset " +
+                                                    "pullRefreshing=${pullRefreshState.isRefreshing} loading=$isLoading customSortBlocked=$customSortDragRefreshBlocked",
+                                            )
                                         }
                                         showPullRefreshCircle = false
                                     }
@@ -1153,42 +1563,52 @@ fun DashboardScreen(
                                     }
                                     awaitEachGesture {
                                         isFolderPagerVerticalGestureLocked = false
-                                        val down = awaitFirstDown(
-                                            requireUnconsumed = false,
-                                            pass = PointerEventPass.Initial,
-                                        )
-                                        if (edgeDrawerWidthPx > 0f && down.position.x < edgeDrawerWidthPx) {
-                                            return@awaitEachGesture
-                                        }
+                                        try {
+                                            val down = awaitFirstDown(
+                                                requireUnconsumed = false,
+                                                pass = PointerEventPass.Initial,
+                                            )
+                                            if (edgeDrawerWidthPx > 0f && down.position.x < edgeDrawerWidthPx) {
+                                                return@awaitEachGesture
+                                            }
 
-                                        val touchSlop = viewConfiguration.touchSlop
-                                        var pointerPressed = true
-                                        var lockedVertical = false
-                                        var lockedHorizontal = false
-                                        while (pointerPressed) {
-                                            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
-                                            val change = event.changes.firstOrNull { it.id == down.id }
-                                            pointerPressed = change?.pressed == true
-                                            if (change != null && pointerPressed) {
-                                                val dx = kotlin.math.abs(change.position.x - down.position.x)
-                                                val dy = kotlin.math.abs(change.position.y - down.position.y)
-                                                if (!lockedVertical && !lockedHorizontal &&
-                                                    (dx > touchSlop || dy > touchSlop)
-                                                ) {
-                                                    when {
-                                                        dy >= dx * 1.2f -> {
-                                                            lockedVertical = true
-                                                            isFolderPagerVerticalGestureLocked = true
-                                                        }
-                                                        dx > dy * 1.35f -> {
-                                                            lockedHorizontal = true
-                                                            isFolderPagerVerticalGestureLocked = false
+                                            val touchSlop = viewConfiguration.touchSlop
+                                            var pointerPressed = true
+                                            var lockedVertical = false
+                                            var lockedHorizontal = false
+                                            while (pointerPressed) {
+                                                val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                                                val change = event.changes.firstOrNull { it.id == down.id }
+                                                pointerPressed = change?.pressed == true
+                                                if (change != null && pointerPressed) {
+                                                    val dx = kotlin.math.abs(change.position.x - down.position.x)
+                                                    val dy = kotlin.math.abs(change.position.y - down.position.y)
+                                                    if (!lockedVertical && !lockedHorizontal &&
+                                                        (dx > touchSlop || dy > touchSlop)
+                                                    ) {
+                                                        when {
+                                                            dy >= dx * 1.2f -> {
+                                                                lockedVertical = true
+                                                                isFolderPagerVerticalGestureLocked = true
+                                                                KardLeafLog.d(
+                                                                    DASHBOARD_SCROLL_TRACE_TAG,
+                                                                    "dashboardPager verticalLock acquire dx=${dx.toInt()} dy=${dy.toInt()}",
+                                                                )
+                                                            }
+                                                            dx > dy * 1.35f -> {
+                                                                lockedHorizontal = true
+                                                                isFolderPagerVerticalGestureLocked = false
+                                                            }
                                                         }
                                                     }
                                                 }
                                             }
+                                        } finally {
+                                            if (isFolderPagerVerticalGestureLocked) {
+                                                KardLeafLog.d(DASHBOARD_SCROLL_TRACE_TAG, "dashboardPager verticalLock release reason=gestureEnd")
+                                            }
+                                            isFolderPagerVerticalGestureLocked = false
                                         }
-                                        isFolderPagerVerticalGestureLocked = false
                                     }
                                 }
                                 .clipToBounds(),
@@ -1203,26 +1623,91 @@ fun DashboardScreen(
                         // 点击全部笔记/返回/点标签时 currentFilter 变化 → pages 重建 → folderPagerKey 变化
                         // → 此 effect 重启 → scrollToPage 瞬时跳到正确页，立即响应。
                         LaunchedEffect(currentPageIndex, folderPagerKey) {
-                            Log.d(
-                                CUSTOM_SORT_FLASH_TAG,
-                                "Dashboard syncEffect enter currentPage=${folderPagerState.currentPage} targetIndex=$currentPageIndex currentPath=$currentFolderPath pages=${folderPagerPathSummary(folderPagerPages)} keyHash=${folderPagerKey.hashCode()}",
-                            )
+                            logDashboardCustomSortFlash {
+                                "Dashboard syncEffect enter currentPage=${folderPagerState.currentPage} targetIndex=$currentPageIndex currentPath=$currentFolderPath pages=${folderPagerPathSummary(folderPagerPages)} keyHash=${folderPagerKey.hashCode()}"
+                            }
                             if (folderPagerPages.isNotEmpty() && folderPagerState.currentPage != currentPageIndex) {
                                 isProgrammaticPagerSync = true
-                                Log.d(
-                                    CUSTOM_SORT_FLASH_TAG,
-                                    "Dashboard syncEffect scrollToPage start from=${folderPagerState.currentPage} to=$currentPageIndex currentPath=$currentFolderPath",
-                                )
+                                logDashboardCustomSortFlash {
+                                    "Dashboard syncEffect scrollToPage start from=${folderPagerState.currentPage} to=$currentPageIndex currentPath=$currentFolderPath"
+                                }
                                 try {
                                     folderPagerState.scrollToPage(currentPageIndex)
                                 } finally {
-                                    Log.d(
-                                        CUSTOM_SORT_FLASH_TAG,
-                                        "Dashboard syncEffect scrollToPage end currentPage=${folderPagerState.currentPage} settled=${folderPagerState.settledPage} currentPath=$currentFolderPath",
-                                    )
+                                    logDashboardCustomSortFlash {
+                                        "Dashboard syncEffect scrollToPage end currentPage=${folderPagerState.currentPage} settled=${folderPagerState.settledPage} currentPath=$currentFolderPath"
+                                    }
                                     isProgrammaticPagerSync = false
                                 }
                             }
+                        }
+
+                        LaunchedEffect(folderPagerState, useFolderPager) {
+                            var swipeStartMs: Long? = null
+                            var swipeStartPage = runCatching { folderPagerState.currentPage }.getOrDefault(0)
+                            var frameJob: Job? = null
+                            var frameCount = 0
+                            var slowFrameCount = 0
+                            var maxFrameMs = 0L
+
+                            snapshotFlow {
+                                runCatching {
+                                    val maxPage = (folderPagerPagesUpdated.value.size - 1).coerceAtLeast(0)
+                                    Triple(
+                                        folderPagerState.isScrollInProgress,
+                                        folderPagerState.currentPage.coerceIn(0, maxPage),
+                                        isProgrammaticPagerSync,
+                                    )
+                                }.getOrDefault(Triple(false, 0, isProgrammaticPagerSync))
+                            }
+                                .distinctUntilChanged()
+                                .collect { (scrolling, page, programmatic) ->
+                                    if (useFolderPager && scrolling && !programmatic && swipeStartMs == null) {
+                                        swipeStartMs = SystemClock.elapsedRealtime()
+                                        swipeStartPage = page
+                                        frameCount = 0
+                                        slowFrameCount = 0
+                                        maxFrameMs = 0L
+                                        frameJob?.cancel()
+                                        frameJob = launch {
+                                            var previousFrameNanos = withFrameNanos { it }
+                                            while (true) {
+                                                val frameNanos = withFrameNanos { it }
+                                                val frameMs = (frameNanos - previousFrameNanos) / 1_000_000L
+                                                frameCount += 1
+                                                if (frameMs > 24L) slowFrameCount += 1
+                                                if (frameMs > maxFrameMs) maxFrameMs = frameMs
+                                                previousFrameNanos = frameNanos
+                                            }
+                                        }
+                                        KardLeafLog.d(
+                                            USER_PERF_TRACE_TAG,
+                                            "dashboardSwipe humanStart page=$swipeStartPage path=${folderPagerPagesUpdated.value.getOrNull(swipeStartPage)?.path.orEmpty()}",
+                                        )
+                                    } else if (!scrolling && swipeStartMs != null) {
+                                        val start = swipeStartMs ?: return@collect
+                                        frameJob?.cancel()
+                                        frameJob = null
+                                        withFrameNanos { _ -> }
+                                        val settledPage = folderPagerState.settledPage
+                                        val switchedPage = swipeStartPage != settledPage
+                                        val averageFrameMs = if (frameCount > 0) {
+                                            (SystemClock.elapsedRealtime() - start).toFloat() / frameCount
+                                        } else {
+                                            0f
+                                        }
+                                        KardLeafLog.d(
+                                            USER_PERF_TRACE_TAG,
+                                            "dashboardSwipe humanSettled elapsed=${SystemClock.elapsedRealtime() - start}ms " +
+                                                "switched=$switchedPage fromPage=$swipeStartPage toPage=$settledPage " +
+                                                "fromPath=${folderPagerPagesUpdated.value.getOrNull(swipeStartPage)?.path.orEmpty()} " +
+                                                "toPath=${folderPagerPagesUpdated.value.getOrNull(settledPage)?.path.orEmpty()} " +
+                                                "frames=$frameCount slowFrames=$slowFrameCount maxFrame=${maxFrameMs}ms " +
+                                                "avgFrame=${String.format(java.util.Locale.US, "%.1f", averageFrameMs)}ms",
+                                        )
+                                        swipeStartMs = null
+                                    }
+                                }
                         }
 
                         // 第二个 effect：pager 手势滑动 → 外部筛选（仅在页面完全吸附后回写）。
@@ -1237,15 +1722,19 @@ fun DashboardScreen(
                                     val pages = folderPagerPagesUpdated.value
                                     val target = pages.getOrNull(page) ?: return@collect
                                     val currentPath = currentFolderPathUpdated.value
-                                    Log.d(
-                                        CUSTOM_SORT_FLASH_TAG,
-                                        "Dashboard settledPage collect page=$page target=${target.path} currentPath=$currentPath pages=${folderPagerPathSummary(pages)} scrolling=${folderPagerState.isScrollInProgress} programmatic=$isProgrammaticPagerSync",
-                                    )
+                                    logDashboardCustomSortFlash {
+                                        "Dashboard settledPage collect page=$page target=${target.path} currentPath=$currentPath pages=${folderPagerPathSummary(pages)} scrolling=${folderPagerState.isScrollInProgress} programmatic=$isProgrammaticPagerSync"
+                                    }
+                                    if (isProgrammaticPagerSync) {
+                                        logDashboardCustomSortFlash {
+                                            "Dashboard settledPage skip programmatic target=${target.path} currentPath=$currentPath"
+                                        }
+                                        return@collect
+                                    }
                                     if (target.path != currentPath) {
-                                        Log.d(
-                                            CUSTOM_SORT_FLASH_TAG,
-                                            "Dashboard settledPage setFilter target=${target.path} currentPath=$currentPath",
-                                        )
+                                        logDashboardCustomSortFlash {
+                                            "Dashboard settledPage setFilter target=${target.path} currentPath=$currentPath"
+                                        }
                                         if (target.path.isEmpty()) {
                                             viewModel.setFilter(MainViewModel.NoteFilter.All)
                                         } else {
@@ -1256,24 +1745,32 @@ fun DashboardScreen(
                         }
 
                         if (useFolderPager) {
-                            HorizontalPager(
-                                state = folderPagerState,
-                                modifier = Modifier.fillMaxSize(),
-                                userScrollEnabled = !isFolderPagerVerticalGestureLocked && !customSortDragModeEnabled,
-                                key = { page -> folderPagerPages.getOrNull(page)?.path ?: "__stale_folder_page_$page" },
-                            ) { page ->
-                                val pagePath = folderPagerPages.getOrNull(page)?.path
-                                if (pagePath == null) {
-                                    Box(modifier = Modifier.fillMaxSize())
-                                    return@HorizontalPager
-                                }
+                            // Pager 页集合变短时，Compose 可能还会用旧的 currentPage/nearestRange
+                            // 去访问新的单页列表，导致 IndexOutOfBoundsException。
+                            // 这里不改筛选逻辑，只在页面集合变化时一起重建 Pager 内部 itemProvider。
+                            androidx.compose.runtime.key(folderPagerKey) {
+                                HorizontalPager(
+                                    state = folderPagerState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    userScrollEnabled =
+                                        !isInSelectionMode &&
+                                            !isFolderPagerVerticalGestureLocked &&
+                                            !customSortDragModeEnabled,
+                                    key = { page -> folderPagerPages.getOrNull(page)?.path ?: "__stale_folder_page_$page" },
+                                ) { page ->
+                                    val pagePath = folderPagerPages.getOrNull(page)?.path
+                                    if (pagePath == null) {
+                                        Box(modifier = Modifier.fillMaxSize())
+                                        return@HorizontalPager
+                                    }
                                 val isRootPage = pagePath.isEmpty()
                                 if (isRootPage) {
                                     // 渲染 "全部笔记" 根页面（复用 uiItems）
                                     val rootCustomSortDragAvailable =
                                         currentFilter is MainViewModel.NoteFilter.All &&
                                             currentFolderSortSettings?.order == PrefsManager.SortOrder.CUSTOM &&
-                                            searchQuery.isBlank()
+                                            searchQuery.isBlank() &&
+                                            !isInSelectionMode
                                     val rootCustomSortDragHandleEnabled =
                                         rootCustomSortDragAvailable &&
                                             page == folderPagerState.currentPage &&
@@ -1301,6 +1798,7 @@ fun DashboardScreen(
                                         showFolderTags = currentFilter is MainViewModel.NoteFilter.All || currentFilter is MainViewModel.NoteFilter.Favorites,
                                         showYamlTags = showYamlTagsOnLooseCards,
                                         showModifiedDate = showModifiedDateOnCards,
+                                        modifiedDateFormat = cardModifiedDateFormat,
                                         showDeletedDate = currentFilter is MainViewModel.NoteFilter.Trash,
                                         showNoteTitle = showCurrentNoteTitleOnCards,
                                         showDateFilenameTitle = showDateFilenameTitleOnCards,
@@ -1319,10 +1817,25 @@ fun DashboardScreen(
                                         onCustomSortOrderChanged = { paths ->
                                             viewModel.saveCurrentFolderCustomSortOrder(paths)
                                         },
+                                        scrollPerfPath = currentFolderPath,
+                                        scrollPerfEnabled = page == folderPagerState.currentPage &&
+                                            page == folderPagerState.settledPage &&
+                                            !folderPagerState.isScrollInProgress,
+                                        onSearchJump = { note ->
+                                            if (!isInSelectionMode) {
+                                                viewModel.openNoteAtSearchMatch(note, searchQuery)
+                                            }
+                                        },
                                         onNoteClick = { note ->
                                             if (isInSelectionMode) {
                                                 viewModel.toggleSelection(note)
                                             } else {
+                                                KardLeafLog.d(
+                                                    USER_PERF_TRACE_TAG,
+                                                    "dashboardNoteClick source=rootPager filter=$currentFilter notes=${notes.size} uiItems=${uiItems.size} all=${allNotes.size} " +
+                                                        "pagerScrolling=${folderPagerState.isScrollInProgress} listScrolling=${listState.isScrollInProgress} " +
+                                                        "pauseBackground=$pauseBackgroundWork noteContentLen=${note.content.length} notePreviewLen=${note.contentPreview.length}",
+                                                )
                                                 onNoteClick(note)
                                             }
                                         },
@@ -1335,39 +1848,24 @@ fun DashboardScreen(
                                     val isCurrentPage = pagePath == currentFolderPath
                                     val isRecursive =
                                         (currentFilter as? MainViewModel.NoteFilter.Label)?.recursive == true
-                                    val pageFolderSortSettings = remember(pagePath, folderSortVersion) {
-                                        viewModel.getFolderSortSettings(pagePath)
-                                    }
-                                    val pageSortOrder = pageFolderSortSettings?.order ?: sortOrder
-                                    val pageSortDirection = pageFolderSortSettings?.direction ?: sortDirection
-                                    val pageCustomOrder = remember(pagePath, folderSortVersion, pageSortOrder) {
-                                        if (pageSortOrder == PrefsManager.SortOrder.CUSTOM) {
-                                            viewModel.getFolderCustomSortOrder(pagePath)
-                                        } else {
-                                            emptyList()
-                                        }
-                                    }
-                                    val preciseItems =
-                                        remember(
-                                            allNotes,
-                                            pagePath,
-                                            pageSortOrder,
-                                            pageSortDirection,
-                                            pageCustomOrder,
-                                        ) {
-                                            buildGesturePreviewItems(
+                                    val pagePreview =
+                                        remember(allNotes, pagePath, sortOrder, sortDirection, folderSortVersion) {
+                                            buildFolderPagerPreviewItems(
                                                 notes = allNotes,
-                                                folder = pagePath,
-                                                sortOrder = pageSortOrder,
-                                                sortDirection = pageSortDirection,
-                                                customOrder = pageCustomOrder,
+                                                path = pagePath,
+                                                defaultSortOrder = sortOrder,
+                                                defaultSortDirection = sortDirection,
+                                                getFolderSortSettings = viewModel::getFolderSortSettings,
+                                                getFolderCustomSortOrder = viewModel::getFolderCustomSortOrder,
                                             )
                                         }
+                                    val pageSortOrder = pagePreview?.sortOrder ?: sortOrder
+                                    val pageSortDirection = pagePreview?.sortDirection ?: sortDirection
+                                    val preciseItems = pagePreview?.items.orEmpty()
                                     // recursive 模式下当前页显示该文件夹及全部子文件夹的笔记（复用 uiItems），
                                     // 其他页仍用精确匹配的预览项
                                     val pageItems =
                                         if (isCurrentPage && isRecursive) uiItems else preciseItems
-                                    val pageItemsLogSummary = remember(pageItems) { dashboardUiItemsFlashSummary(pageItems) }
                                     val pageFilter = remember(pagePath) { MainViewModel.NoteFilter.Label(pagePath) }
                                     val pageListState = remember(pageFilter) {
                                         listStates.getOrPut(pageFilter) { LazyStaggeredGridState() }
@@ -1375,7 +1873,8 @@ fun DashboardScreen(
                                     val pageCustomSortDragAvailable =
                                         !isRecursive &&
                                             pageSortOrder == PrefsManager.SortOrder.CUSTOM &&
-                                            searchQuery.isBlank()
+                                            searchQuery.isBlank() &&
+                                            !isInSelectionMode
                                     val pageCustomSortDragHandleEnabled =
                                         pageCustomSortDragAvailable &&
                                             isCurrentPage &&
@@ -1394,13 +1893,11 @@ fun DashboardScreen(
                                         folderPagerState.currentPage,
                                         folderPagerState.settledPage,
                                         folderPagerState.isScrollInProgress,
-                                        pageItemsLogSummary,
                                     ) {
-                                        Log.d(
-                                            CUSTOM_SORT_FLASH_TAG,
+                                        logDashboardCustomSortFlash {
                                             "Dashboard pageRender page=$page path=$pagePath isCurrent=$isCurrentPage recursive=$isRecursive sort=$pageSortOrder/$pageSortDirection " +
-                                                "dragAvailable=$pageCustomSortDragAvailable dragHandle=$pageCustomSortDragHandleEnabled currentPage=${folderPagerState.currentPage} settled=${folderPagerState.settledPage} scrolling=${folderPagerState.isScrollInProgress} items=$pageItemsLogSummary",
-                                        )
+                                                "dragAvailable=$pageCustomSortDragAvailable dragHandle=$pageCustomSortDragHandleEnabled currentPage=${folderPagerState.currentPage} settled=${folderPagerState.settledPage} scrolling=${folderPagerState.isScrollInProgress} items=${dashboardUiItemsFlashSummary(pageItems)}"
+                                        }
                                     }
 
                                     NoteGrid(
@@ -1418,6 +1915,7 @@ fun DashboardScreen(
                                         showFolderTags = isCurrentPage && isRecursive,
                                         showYamlTags = showYamlTagsOnLooseCards,
                                         showModifiedDate = showModifiedDateOnCards,
+                                        modifiedDateFormat = cardModifiedDateFormat,
                                         showDeletedDate = currentFilter is MainViewModel.NoteFilter.Trash,
                                         showNoteTitle = showCurrentNoteTitleOnCards,
                                         showDateFilenameTitle = showDateFilenameTitleOnCards,
@@ -1434,16 +1932,32 @@ fun DashboardScreen(
                                         customSortDragHandleEnabled = pageCustomSortDragHandleEnabled,
                                         showCustomSortDragHandleIcon = customSortDragModeEnabled && pageCustomSortDragHandleEnabled,
                                         onCustomSortOrderChanged = { paths ->
-                                            Log.d(
-                                                CUSTOM_SORT_FLASH_TAG,
-                                                "Dashboard page onCustomSortOrderChanged page=$page path=$pagePath paths=${pathListFlashSummary(paths)}",
-                                            )
+                                            logDashboardCustomSortFlash {
+                                                "Dashboard page onCustomSortOrderChanged page=$page path=$pagePath paths=${pathListFlashSummary(paths)}"
+                                            }
                                             viewModel.saveCurrentFolderCustomSortOrder(paths)
+                                        },
+                                        scrollPerfPath = pagePath,
+                                        scrollPerfEnabled = isCurrentPage &&
+                                            page == folderPagerState.currentPage &&
+                                            page == folderPagerState.settledPage &&
+                                            !folderPagerState.isScrollInProgress,
+                                        onSearchJump = { note ->
+                                            if (!isInSelectionMode) {
+                                                viewModel.openNoteAtSearchMatch(note, searchQuery)
+                                            }
                                         },
                                         onNoteClick = { note ->
                                             if (isInSelectionMode) {
                                                 viewModel.toggleSelection(note)
                                             } else {
+                                                KardLeafLog.d(
+                                                    USER_PERF_TRACE_TAG,
+                                                    "dashboardNoteClick source=folderPager page=$page current=$isCurrentPage recursive=$isRecursive filter=$currentFilter " +
+                                                        "notes=${notes.size} pageItems=${pageItems.size} all=${allNotes.size} " +
+                                                        "pagerScrolling=${folderPagerState.isScrollInProgress} listScrolling=${pageListState.isScrollInProgress} " +
+                                                        "pauseBackground=$pauseBackgroundWork noteContentLen=${note.content.length} notePreviewLen=${note.contentPreview.length}",
+                                                )
                                                 onNoteClick(note)
                                             }
                                         },
@@ -1452,6 +1966,7 @@ fun DashboardScreen(
                                         },
                                     )
                                 }
+                            }
                             }
                         } else {
                             val currentFolderCustomSortDragEnabled = remember(
@@ -1472,7 +1987,6 @@ fun DashboardScreen(
                                     !isInSelectionMode &&
                                     (currentFolderSortSettings?.order ?: sortOrder) == PrefsManager.SortOrder.CUSTOM
                             }
-                            val currentItemsLogSummary = remember(uiItems) { dashboardUiItemsFlashSummary(uiItems) }
                             LaunchedEffect(
                                 currentFilter,
                                 currentFolderPath,
@@ -1481,13 +1995,11 @@ fun DashboardScreen(
                                 searchQuery,
                                 isInSelectionMode,
                                 currentFolderCustomSortDragEnabled,
-                                currentItemsLogSummary,
                             ) {
-                                Log.d(
-                                    CUSTOM_SORT_FLASH_TAG,
+                                logDashboardCustomSortFlash {
                                     "Dashboard singlePageRender filter=$currentFilter path=$currentFolderPath sort=$sortOrder " +
-                                        "drag=$currentFolderCustomSortDragEnabled searchBlank=${searchQuery.isBlank()} selection=$isInSelectionMode items=$currentItemsLogSummary notes=${notes.size}",
-                                )
+                                        "drag=$currentFolderCustomSortDragEnabled searchBlank=${searchQuery.isBlank()} selection=$isInSelectionMode items=${dashboardUiItemsFlashSummary(uiItems)} notes=${notes.size}"
+                                }
                             }
 
                             NoteGrid(
@@ -1500,6 +2012,7 @@ fun DashboardScreen(
                                 showFolderTags = currentFilter is MainViewModel.NoteFilter.All || currentFilter is MainViewModel.NoteFilter.Favorites,
                                 showYamlTags = showYamlTagsOnLooseCards,
                                 showModifiedDate = showModifiedDateOnCards,
+                                modifiedDateFormat = cardModifiedDateFormat,
                                 showDeletedDate = currentFilter is MainViewModel.NoteFilter.Trash,
                                 showNoteTitle = showCurrentNoteTitleOnCards,
                                 showDateFilenameTitle = showDateFilenameTitleOnCards,
@@ -1512,16 +2025,28 @@ fun DashboardScreen(
                                 customSortDragHandleEnabled = currentFolderCustomSortDragEnabled,
                                 showCustomSortDragHandleIcon = customSortDragModeEnabled && currentFolderCustomSortDragEnabled,
                                 onCustomSortOrderChanged = { paths ->
-                                    Log.d(
-                                        CUSTOM_SORT_FLASH_TAG,
-                                        "Dashboard singlePage onCustomSortOrderChanged path=$currentFolderPath paths=${pathListFlashSummary(paths)}",
-                                    )
+                                    logDashboardCustomSortFlash {
+                                        "Dashboard singlePage onCustomSortOrderChanged path=$currentFolderPath paths=${pathListFlashSummary(paths)}"
+                                    }
                                     viewModel.saveCurrentFolderCustomSortOrder(paths)
+                                },
+                                scrollPerfPath = currentFolderPath,
+                                scrollPerfEnabled = true,
+                                onSearchJump = { note ->
+                                    if (!isInSelectionMode) {
+                                        viewModel.openNoteAtSearchMatch(note, searchQuery)
+                                    }
                                 },
                                 onNoteClick = { note ->
                                     if (isInSelectionMode) {
                                         viewModel.toggleSelection(note)
                                     } else {
+                                        KardLeafLog.d(
+                                            USER_PERF_TRACE_TAG,
+                                            "dashboardNoteClick source=singlePage filter=$currentFilter notes=${notes.size} uiItems=${uiItems.size} all=${allNotes.size} " +
+                                                "listScrolling=${listState.isScrollInProgress} pauseBackground=$pauseBackgroundWork " +
+                                                "noteContentLen=${note.content.length} notePreviewLen=${note.contentPreview.length}",
+                                        )
                                         onNoteClick(note)
                                     }
                                 },
@@ -1550,12 +2075,12 @@ fun DashboardScreen(
                                     modifier =
                                         Modifier
                                             .size(36.dp)
-                                            .background(Color.White, CircleShape),
+                                            .background(MaterialTheme.colorScheme.surface, CircleShape),
                                 )
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(26.dp),
                                     strokeWidth = 3.dp,
-                                    color = Color.Black,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                 )
                             }
                         }
@@ -1563,21 +2088,129 @@ fun DashboardScreen(
                 }
             }
         }
+        if (homeBottomToolbarItems.isNotEmpty() && homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) {
+            AnimatedVisibility(
+                visible = shouldShowHomeBottomToolbar && homeBottomToolbarVisible,
+                modifier = Modifier.align(Alignment.BottomCenter),
+                enter = fadeIn(animationSpec = tween(HOME_BOTTOM_TOOLBAR_ENTER_DURATION_MS)) +
+                    slideInVertically(animationSpec = tween(HOME_BOTTOM_TOOLBAR_ENTER_DURATION_MS)) { it },
+                exit = fadeOut(animationSpec = tween(HOME_BOTTOM_TOOLBAR_EXIT_DURATION_MS)) +
+                    slideOutVertically(animationSpec = tween(HOME_BOTTOM_TOOLBAR_EXIT_DURATION_MS)) { it },
+            ) {
+                HomeBottomToolbar(
+                    items = homeBottomToolbarItems,
+                    buttonSizeDp = homeBottomToolbarButtonSizeDp,
+                    onItemClick = ::openHomeBottomToolbarItem,
+                )
+            }
+        }
         if (showFolderNavigationPanel) {
             FolderNavigationPanel(
                 labels = labels,
+                notes = allNotes,
                 currentFilter = currentFilter,
                 dragProgress = folderNavigationPanelProgress,
+                folderOrderVersion = folderManagerOrderVersion,
+                getFolderDisplayOrder = viewModel::getFolderDisplayOrder,
+                onSaveFolderDisplayOrder = viewModel::saveFolderDisplayOrder,
+                onCreateFolder = viewModel::createLabel,
+                onRenameFolder = { oldPath, newPath, onError ->
+                    viewModel.renameLabel(
+                        oldPath = oldPath,
+                        newPath = newPath,
+                        onError = onError,
+                    )
+                },
+                onDeleteFolder = { path, onSuccess, onError ->
+                    viewModel.deleteLabelWithContents(
+                        name = path,
+                        onSuccess = onSuccess,
+                        onError = onError,
+                    )
+                },
                 onDismiss = {
-                    folderNavigationPanelProgress = 0f
-                    showFolderNavigationPanel = false
+                    closeFolderNavigationPanel()
                 },
                 onSelect = { filter ->
                     viewModel.setFilter(filter)
-                    folderNavigationPanelProgress = 0f
-                    showFolderNavigationPanel = false
+                    closeFolderNavigationPanel()
                 },
             )
+        }
+        if (showSampleCleanupConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showSampleCleanupConfirmDialog = false },
+                title = { Text("清空示例内容") },
+                text = { Text("确认删除示例文件夹里的示例笔记吗？删除后可以立即撤回。") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showSampleCleanupConfirmDialog = false
+                            showSampleCleanupPrompt = false
+                            onSampleCleanupPromptConsumed()
+                            coroutineScope.launch {
+                                if (onClearSampleVaultSamples()) {
+                                    viewModel.refreshNotes()
+                                    showSampleCleanupUndoSnackbar("已清空示例内容")
+                                } else {
+                                    showThemedSnackbar("清空示例内容失败")
+                                }
+                            }
+                        },
+                    ) {
+                        Text("确认删除")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showSampleCleanupConfirmDialog = false }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                },
+            )
+        }
+        if (showSampleCleanupPrompt) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                Surface(
+                    modifier =
+                        Modifier
+                            .padding(horizontal = 16.dp, vertical = 20.dp)
+                            .fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp,
+                    shadowElevation = 6.dp,
+                ) {
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "是否清空示例文件夹内容？",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = {
+                                showSampleCleanupPrompt = false
+                                onSampleCleanupPromptConsumed()
+                            },
+                        ) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                        TextButton(onClick = { showSampleCleanupConfirmDialog = true }) {
+                            Text("删除")
+                        }
+                    }
+                }
+            }
         }
         if (showQuickCreateActions) {
             Box(
@@ -1647,6 +2280,71 @@ private fun folderPagerPathSummary(pages: Collection<FolderChipData>, limit: Int
     return "size=${paths.size} currentHead=${paths.take(limit)}$suffix"
 }
 
+private data class FolderPagerPreviewItems(
+    val items: List<DashboardUiItem>,
+    val sortOrder: PrefsManager.SortOrder,
+    val sortDirection: PrefsManager.SortDirection,
+)
+
+private fun buildFolderPagerPreviewItems(
+    notes: List<Note>,
+    path: String,
+    defaultSortOrder: PrefsManager.SortOrder,
+    defaultSortDirection: PrefsManager.SortDirection,
+    getFolderSortSettings: (String) -> PrefsManager.FolderSortSettings?,
+    getFolderCustomSortOrder: (String) -> List<String>,
+): FolderPagerPreviewItems? {
+    if (path.isBlank()) return null
+    val settings = getFolderSortSettings(path)
+    val order = settings?.order ?: defaultSortOrder
+    val direction = settings?.direction ?: defaultSortDirection
+    val customOrder =
+        if (order == PrefsManager.SortOrder.CUSTOM) {
+            getFolderCustomSortOrder(path)
+        } else {
+            emptyList()
+        }
+    return FolderPagerPreviewItems(
+        items = buildGesturePreviewItemsForFolderNotes(
+            notes = notes.filter { !it.isTrashed && it.folder == path },
+            folder = path,
+            sortOrder = order,
+            sortDirection = direction,
+            customOrder = customOrder,
+        ),
+        sortOrder = order,
+        sortDirection = direction,
+    )
+}
+
+private fun dashboardFilterNoteCountSummary(
+    filter: MainViewModel.NoteFilter,
+    allNotes: Collection<Note>,
+): String {
+    val folderFilter = filter as? MainViewModel.NoteFilter.Label
+    if (folderFilter == null) {
+        val activeAll = allNotes.count { !it.isTrashed && !it.isArchived }
+        return "activeAll=$activeAll folderDirect=-1 folderRecursive=-1"
+    }
+    val normalizedFolder = folderFilter.name.normalizeDashboardFolderPath()
+    val recursivePrefix = if (normalizedFolder.isBlank()) "" else "$normalizedFolder/"
+    var directCount = 0
+    var recursiveCount = 0
+    var activeAll = 0
+    allNotes.forEach { note ->
+        if (note.isTrashed || note.isArchived) return@forEach
+        activeAll += 1
+        val folder = note.folder.normalizeDashboardFolderPath()
+        if (folder == normalizedFolder) {
+            directCount += 1
+            recursiveCount += 1
+        } else if (recursivePrefix.isNotEmpty() && folder.startsWith(recursivePrefix)) {
+            recursiveCount += 1
+        }
+    }
+    return "activeAll=$activeAll folderDirect=$directCount folderRecursive=$recursiveCount recursive=${folderFilter.recursive}"
+}
+
 private fun pathListFlashSummary(paths: Collection<String>, limit: Int = 6): String {
     val normalized = paths.map { it.normalizeDashboardFolderPath() }
     val suffix = if (normalized.size > limit) ", ..." else ""
@@ -1684,17 +2382,168 @@ private fun dashboardTitleForPath(path: String): String =
     path.substringAfterLast("/").ifBlank { "全部笔记" }
 
 @Composable
+private fun HomeBottomToolbar(
+    items: List<PrefsManager.HomeBottomToolbarItemId>,
+    buttonSizeDp: Int,
+    onItemClick: (PrefsManager.HomeBottomToolbarItemId) -> Unit,
+) {
+    val isDracula = LocalKardLeafThemeStyle.current == PrefsManager.AppThemeStyle.DRACULA
+    val homeCornerRadiusDp = LocalKardLeafHomeCornerRadiusDp.current.takeIf { it >= 0 }
+        ?: LocalKardLeafGlobalCornerRadiusDp.current.takeIf { it >= 0 }
+    val shape = RoundedCornerShape((homeCornerRadiusDp ?: 34).dp)
+    val containerColor = if (isDracula) {
+        MaterialTheme.colorScheme.surface
+    } else {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+    }
+    val preferredItemSize = buttonSizeDp
+        .coerceIn(
+            PrefsManager.MIN_HOME_BOTTOM_TOOLBAR_BUTTON_SIZE_DP,
+            PrefsManager.MAX_HOME_BOTTOM_TOOLBAR_BUTTON_SIZE_DP,
+        )
+        .dp
+    val visibleCount = items.size
+    val horizontalScrollState = rememberScrollState()
+
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        val enableHorizontalScroll = visibleCount >= 8
+        val outerHorizontalPadding = when {
+            visibleCount <= 5 -> 18.dp
+            visibleCount <= 7 -> 6.dp
+            else -> 8.dp
+        }
+        val contentHorizontalPadding = when {
+            visibleCount <= 5 -> 14.dp
+            visibleCount <= 7 -> 8.dp
+            else -> 10.dp
+        }
+        val itemSpacing = when {
+            visibleCount <= 5 -> 10.dp
+            visibleCount <= 7 -> 6.dp
+            else -> 8.dp
+        }
+        val maxToolbarWidth = maxWidth - outerHorizontalPadding * 2f
+        val fitItemSize = if (!enableHorizontalScroll && visibleCount > 0) {
+            calculateHomeBottomToolbarFitItemSize(
+                preferredItemSize = preferredItemSize,
+                minItemSize = PrefsManager.MIN_HOME_BOTTOM_TOOLBAR_BUTTON_SIZE_DP.dp,
+                maxWidth = maxToolbarWidth,
+                contentHorizontalPadding = contentHorizontalPadding,
+                itemSpacing = itemSpacing,
+                itemCount = visibleCount,
+            )
+        } else {
+            preferredItemSize
+        }
+        val toolbarHeight = (fitItemSize + 24.dp).coerceAtLeast(62.dp)
+        val iconSize = (fitItemSize * 0.48f).coerceAtMost(26.dp)
+
+        Surface(
+            modifier = Modifier
+                .padding(horizontal = outerHorizontalPadding, vertical = 10.dp)
+                .widthIn(max = maxToolbarWidth)
+                .shadow(14.dp, shape, clip = false)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDracula) 0.28f else 0.42f),
+                    shape = shape,
+                ),
+            shape = shape,
+            color = containerColor,
+            tonalElevation = if (isDracula) 0.dp else 8.dp,
+            shadowElevation = 0.dp,
+        ) {
+            Row(
+                modifier = Modifier
+                    .height(toolbarHeight)
+                    .then(if (enableHorizontalScroll) Modifier.horizontalScroll(horizontalScrollState) else Modifier)
+                    .padding(horizontal = contentHorizontalPadding),
+                horizontalArrangement = Arrangement.spacedBy(itemSpacing, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                items.forEach { itemId ->
+                    val itemColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                        alpha = if (isDracula) 0.26f else 0.72f,
+                    )
+                    val iconTint = MaterialTheme.colorScheme.onSurfaceVariant
+                    val itemShape = homeCornerRadiusDp?.let { RoundedCornerShape(it.dp) } ?: CircleShape
+
+                    Box(
+                        modifier = Modifier
+                            .size(fitItemSize)
+                            .clip(itemShape)
+                            .background(itemColor)
+                            .clickable { onItemClick(itemId) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = homeBottomToolbarItemIcon(itemId),
+                            contentDescription = homeBottomToolbarItemLabel(itemId),
+                            modifier = Modifier.size(iconSize),
+                            tint = iconTint,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun calculateHomeBottomToolbarFitItemSize(
+    preferredItemSize: Dp,
+    minItemSize: Dp,
+    maxWidth: Dp,
+    contentHorizontalPadding: Dp,
+    itemSpacing: Dp,
+    itemCount: Int,
+): Dp {
+    if (itemCount <= 0) return preferredItemSize
+    val availableWidth = maxWidth - contentHorizontalPadding * 2f - itemSpacing * (itemCount - 1).toFloat()
+    return (availableWidth / itemCount.toFloat()).coerceIn(minItemSize, preferredItemSize)
+}
+
+
+private fun homeBottomToolbarItemAvailable(
+    itemId: PrefsManager.HomeBottomToolbarItemId,
+    currentFilter: MainViewModel.NoteFilter,
+): Boolean {
+    val isReadonlyList = currentFilter is MainViewModel.NoteFilter.Archive || currentFilter is MainViewModel.NoteFilter.Trash
+    return when (itemId) {
+        PrefsManager.HomeBottomToolbarItemId.NEW_NOTE,
+        PrefsManager.HomeBottomToolbarItemId.NEW_DRAFT,
+        PrefsManager.HomeBottomToolbarItemId.NEW_DRAWING,
+        PrefsManager.HomeBottomToolbarItemId.NEW_FOLDER -> !isReadonlyList
+        else -> true
+    }
+}
+
+@Composable
 private fun HomeFabIconButton(
     icon: ImageVector,
     contentDescription: String,
     onSwipeDown: () -> Unit,
     onClick: () -> Unit,
 ) {
+    val isDracula = LocalKardLeafThemeStyle.current == PrefsManager.AppThemeStyle.DRACULA
+    val homeCornerRadiusDp = LocalKardLeafHomeCornerRadiusDp.current.takeIf { it >= 0 }
+        ?: LocalKardLeafGlobalCornerRadiusDp.current.takeIf { it >= 0 }
+    val shape = homeCornerRadiusDp?.let { RoundedCornerShape(it.dp) }
+        ?: if (isDracula) RoundedCornerShape(14.dp) else CircleShape
     Surface(
         modifier =
             Modifier
                 .size(56.dp)
-                .clip(CircleShape)
+                .clip(shape)
+                .then(
+                    if (isDracula) {
+                        Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.85f), shape)
+                    } else {
+                        Modifier
+                    },
+                )
                 .pointerInput(Unit) {
                     detectVerticalDragGestures { change, dragAmount ->
                         if (dragAmount > 0f) {
@@ -1704,16 +2553,16 @@ private fun HomeFabIconButton(
                     }
                 }
                 .clickable(onClick = onClick),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        tonalElevation = 4.dp,
-        shadowElevation = 4.dp,
+        shape = shape,
+        color = if (isDracula) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+        tonalElevation = if (isDracula) 0.dp else 4.dp,
+        shadowElevation = if (isDracula) 0.dp else 4.dp,
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
                 icon,
                 contentDescription = contentDescription,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                tint = if (isDracula) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer,
                 modifier = Modifier.size(24.dp),
             )
         }

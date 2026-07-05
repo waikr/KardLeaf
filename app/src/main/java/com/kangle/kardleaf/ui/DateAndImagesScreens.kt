@@ -2,10 +2,15 @@ package com.kangle.kardleaf.ui
 
 import androidx.compose.ui.tooling.preview.Preview
 import android.graphics.BitmapFactory
+import android.os.SystemClock
 import android.util.Base64
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -70,11 +76,14 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.async
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
+private const val DATE_SCOPE_MENU_REOPEN_GUARD_MS = 250L
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
 @Composable
 fun DateNotesScreen(
     viewModel: MainViewModel,
@@ -87,20 +96,55 @@ fun DateNotesScreen(
     var selectedDay by remember { mutableStateOf(startOfDay(System.currentTimeMillis())) }
     var showMonthPicker by remember { mutableStateOf(false) }
     var showDateScopeMenu by remember { mutableStateOf(false) }
+    var lastDateScopeMenuDismissAt by remember { mutableStateOf(0L) }
     var dateScopeMode by remember { mutableStateOf(DateScopeMode.TODAY) }
+    var calendarSlideDirection by remember { mutableStateOf(1) }
 
-    BackHandler(enabled = showDateScopeMenu) {
+    fun resetToTodayScope() {
+        val today = startOfDay(System.currentTimeMillis())
+        selectedDay = today
+        visibleMonth = firstDayOfMonth(today)
+        dateScopeMode = DateScopeMode.TODAY
         showDateScopeMenu = false
+    }
+
+    fun switchCalendarMonth(forward: Boolean) {
+        calendarSlideDirection = if (forward) 1 else -1
+        visibleMonth = addMonths(visibleMonth, if (forward) 1 else -1)
+        dateScopeMode = DateScopeMode.MONTH
+    }
+
+    BackHandler(enabled = showDateScopeMenu || dateScopeMode != DateScopeMode.TODAY) {
+        if (showDateScopeMenu) {
+            showDateScopeMenu = false
+        } else {
+            resetToTodayScope()
+        }
     }
     val monthTitleFormat = remember { SimpleDateFormat("yyyy 年 M 月", Locale.getDefault()) }
     val dayTitleFormat = remember { SimpleDateFormat("yyyy年M月d日", Locale.getDefault()) }
-    val days = remember(visibleMonth, selectedDay, dateScopeMode) {
-        if (dateScopeMode == DateScopeMode.WEEK) buildWeekDays(selectedDay) else buildCalendarDays(visibleMonth)
-    }
     val notesByDay = remember(activeNotes) {
         activeNotes.groupBy { startOfDay(it.lastModified.time) }
     }
-    val selectedNotes = notesByDay[selectedDay].orEmpty().sortedByDescending { it.lastModified }
+    val scopeStart = remember(selectedDay, visibleMonth, dateScopeMode) {
+        when (dateScopeMode) {
+            DateScopeMode.TODAY -> selectedDay
+            DateScopeMode.WEEK -> buildWeekDays(selectedDay).firstOrNull() ?: selectedDay
+            DateScopeMode.MONTH -> firstDayOfMonth(visibleMonth)
+        }
+    }
+    val scopeEnd = remember(scopeStart, dateScopeMode) {
+        when (dateScopeMode) {
+            DateScopeMode.TODAY -> addDays(scopeStart, 1)
+            DateScopeMode.WEEK -> addDays(scopeStart, 7)
+            DateScopeMode.MONTH -> addMonths(scopeStart, 1)
+        }
+    }
+    val selectedNotes = remember(activeNotes, scopeStart, scopeEnd) {
+        activeNotes
+            .filter { note -> note.lastModified.time >= scopeStart && note.lastModified.time < scopeEnd }
+            .sortedByDescending { it.lastModified }
+    }
 
     if (showMonthPicker) {
         MonthPickerDialog(
@@ -137,10 +181,7 @@ fun DateNotesScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = {
-                        visibleMonth = addMonths(visibleMonth, -1)
-                        dateScopeMode = DateScopeMode.MONTH
-                    }) {
+                    IconButton(onClick = { switchCalendarMonth(forward = false) }) {
                         Icon(Icons.Outlined.KeyboardArrowLeft, contentDescription = "上个月")
                     }
                     Text(
@@ -155,27 +196,57 @@ fun DateNotesScreen(
                         fontWeight = FontWeight.SemiBold,
                         textAlign = TextAlign.Center,
                     )
-                    IconButton(onClick = {
-                        visibleMonth = addMonths(visibleMonth, 1)
-                        dateScopeMode = DateScopeMode.MONTH
-                    }) {
+                    IconButton(onClick = { switchCalendarMonth(forward = true) }) {
                         Icon(Icons.Outlined.KeyboardArrowRight, contentDescription = "下个月")
                     }
                 }
             }
             item {
-                CalendarMonthGrid(
-                    days = days,
-                    visibleMonth = visibleMonth,
-                    selectedDay = selectedDay,
-                    notesByDay = notesByDay,
-                    onSelectDay = { day ->
-                        selectedDay = day
-                        if (dateScopeMode == DateScopeMode.TODAY && day != startOfDay(System.currentTimeMillis())) {
-                            dateScopeMode = DateScopeMode.MONTH
-                        }
+                var dragTotal by remember { mutableStateOf(0f) }
+                val swipeThreshold = with(LocalDensity.current) { 56.dp.toPx() }
+                AnimatedContent(
+                    targetState = visibleMonth,
+                    transitionSpec = {
+                        kardLeafHorizontalContentTransform(
+                            forward = calendarSlideDirection > 0,
+                            durationMillis = 220,
+                            distanceFactor = 0.18f,
+                        )
                     },
-                )
+                    label = "calendarMonthSwitch",
+                ) { month ->
+                    val panelDays = if (dateScopeMode == DateScopeMode.WEEK && month == visibleMonth) {
+                        buildWeekDays(selectedDay)
+                    } else {
+                        buildCalendarDays(month)
+                    }
+                    CalendarMonthGrid(
+                        days = panelDays,
+                        visibleMonth = month,
+                        selectedDay = selectedDay,
+                        notesByDay = notesByDay,
+                        modifier = Modifier.pointerInput(month, dateScopeMode) {
+                            detectHorizontalDragGestures(
+                                onDragStart = { dragTotal = 0f },
+                                onHorizontalDrag = { _, dragAmount -> dragTotal += dragAmount },
+                                onDragEnd = {
+                                    when {
+                                        dragTotal <= -swipeThreshold -> switchCalendarMonth(forward = true)
+                                        dragTotal >= swipeThreshold -> switchCalendarMonth(forward = false)
+                                    }
+                                    dragTotal = 0f
+                                },
+                                onDragCancel = { dragTotal = 0f },
+                            )
+                        },
+                        onSelectDay = { day ->
+                            selectedDay = day
+                            visibleMonth = firstDayOfMonth(day)
+                            dateScopeMode = DateScopeMode.TODAY
+                            showDateScopeMenu = false
+                        },
+                    )
+                }
             }
             item {
                 Row(
@@ -183,7 +254,13 @@ fun DateNotesScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "${dayTitleFormat.format(Date(selectedDay))} · ${selectedNotes.size} 篇",
+                        text = scopeTitleText(
+                            mode = dateScopeMode,
+                            selectedDay = selectedDay,
+                            visibleMonth = visibleMonth,
+                            count = selectedNotes.size,
+                            dayTitleFormat = dayTitleFormat,
+                        ),
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
@@ -192,13 +269,26 @@ fun DateNotesScreen(
                         DateScopeButton(
                             text = dateScopeMode.label,
                             selected = true,
-                            onClick = { showDateScopeMenu = !showDateScopeMenu },
+                            onClick = {
+                                val now = SystemClock.uptimeMillis()
+                                val ignoreReopen = !showDateScopeMenu &&
+                                    now - lastDateScopeMenuDismissAt < DATE_SCOPE_MENU_REOPEN_GUARD_MS
+                                if (showDateScopeMenu) {
+                                    lastDateScopeMenuDismissAt = now
+                                    showDateScopeMenu = false
+                                } else if (!ignoreReopen) {
+                                    showDateScopeMenu = true
+                                }
+                            },
                         )
                         if (showDateScopeMenu) {
                             Popup(
                                 alignment = Alignment.TopEnd,
                                 offset = IntOffset(0, with(LocalDensity.current) { 44.dp.roundToPx() }),
-                                onDismissRequest = { showDateScopeMenu = false },
+                                onDismissRequest = {
+                                    lastDateScopeMenuDismissAt = SystemClock.uptimeMillis()
+                                    showDateScopeMenu = false
+                                },
                                 properties = PopupProperties(focusable = false),
                             ) {
                                 Column(
@@ -206,7 +296,10 @@ fun DateNotesScreen(
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     DateScopeMode.values()
-                                        .filter { it != dateScopeMode }
+                                        .filter { mode ->
+                                            mode != dateScopeMode &&
+                                                (dateScopeMode == DateScopeMode.TODAY || mode != DateScopeMode.TODAY)
+                                        }
                                         .forEach { mode ->
                                             DateScopeButton(
                                                 text = mode.label,
@@ -242,7 +335,7 @@ fun DateNotesScreen(
                         modifier = Modifier.fillMaxWidth().height(140.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("这一天没有笔记", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(emptyScopeText(dateScopeMode), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             } else {
@@ -296,6 +389,26 @@ private enum class DateScopeMode(val label: String) {
     WEEK("本周"),
     MONTH("本月"),
 }
+
+private fun scopeTitleText(
+    mode: DateScopeMode,
+    selectedDay: Long,
+    visibleMonth: Long,
+    count: Int,
+    dayTitleFormat: SimpleDateFormat,
+): String =
+    when (mode) {
+        DateScopeMode.TODAY -> "${dayTitleFormat.format(Date(selectedDay))} · $count 篇"
+        DateScopeMode.WEEK -> "本周 · $count 篇"
+        DateScopeMode.MONTH -> SimpleDateFormat("yyyy年M月", Locale.getDefault()).format(Date(visibleMonth)) + " · $count 篇"
+    }
+
+private fun emptyScopeText(mode: DateScopeMode): String =
+    when (mode) {
+        DateScopeMode.TODAY -> "这一天没有笔记"
+        DateScopeMode.WEEK -> "本周没有笔记"
+        DateScopeMode.MONTH -> "本月没有笔记"
+    }
 
 @Composable
 private fun MonthPickerDialog(
@@ -370,10 +483,11 @@ private fun CalendarMonthGrid(
     visibleMonth: Long,
     selectedDay: Long,
     notesByDay: Map<Long, List<Note>>,
+    modifier: Modifier = Modifier,
     onSelectDay: (Long) -> Unit,
 ) {
     val weekLabels = listOf("日", "一", "二", "三", "四", "五", "六")
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(modifier = Modifier.fillMaxWidth()) {
             weekLabels.forEach { label ->
                 Text(
@@ -412,16 +526,16 @@ private fun CalendarDayCell(
 ) {
     val calendar = remember(day) { Calendar.getInstance().apply { timeInMillis = day } }
     val container =
-        when {
-            isSelected -> MaterialTheme.colorScheme.primaryContainer
-            count > 0 -> MaterialTheme.colorScheme.secondaryContainer
-            else -> MaterialTheme.colorScheme.surface
+        if (isSelected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surface
         }
     val content =
-        when {
-            isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
-            count > 0 -> MaterialTheme.colorScheme.onSecondaryContainer
-            else -> MaterialTheme.colorScheme.onSurface
+        if (isSelected) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurface
         }
     Column(
         modifier =
@@ -442,134 +556,7 @@ private fun CalendarDayCell(
         if (count > 0) {
             Spacer(modifier = Modifier.height(2.dp))
             Box(
-                modifier = Modifier.size(5.dp).clip(CircleShape).background(content),
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun NoteImagesScreen(
-    viewModel: MainViewModel,
-    onOpenDrawer: () -> Unit,
-    onNoteClick: (Note) -> Unit,
-) {
-    val notes by viewModel.allNotes.collectAsState(initial = emptyList())
-    var images by remember { mutableStateOf<List<GalleryImage>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
-
-    LaunchedEffect(notes) {
-        val activeNotes = notes.filter { !it.isTrashed }
-        if (activeNotes.isEmpty()) {
-            images = emptyList()
-            isLoading = false
-            return@LaunchedEffect
-        }
-        isLoading = true
-        try {
-            val result = mutableListOf<GalleryImage>()
-            for (note in activeNotes) {
-                ensureActive()
-                // 关键修复：用 async + await 让超时真正生效。resolveNoteImages
-                // 内部是 withContext(IO) 的阻塞 SAF 调用（findFile/openInputStream/
-                // readBytes 无挂起点）；直接用 withTimeoutOrNull 包裹时，若某篇
-                // 笔记的 SAF 操作挂起，IO 线程被阻塞，withContext 无法恢复，超时
-                // 永不触发，导致一直转圈。改为 async 启动任务后对 await()（真正
-                // 的挂起点）施加超时，超时即放弃该篇继续下一篇。
-                val deferred = async {
-                    runCatching { viewModel.resolveNoteImages(note) }.getOrDefault(emptyList())
-                }
-                val imagesForNote = withTimeoutOrNull(5000L) { deferred.await() } ?: emptyList()
-                result.addAll(imagesForNote.map { image ->
-                    GalleryImage(note = note, reference = image.reference, dataUri = image.dataUri)
-                })
-                images = result.toList()
-            }
-        } catch (_: Exception) {
-            // 即使出错也不卡在加载状态
-        } finally {
-            isLoading = false
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("图片") },
-                navigationIcon = {
-                    IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Default.Menu, contentDescription = stringResource(R.string.menu))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
-            )
-        },
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when {
-                isLoading && images.isEmpty() -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                images.isEmpty() -> Text(
-                    text = "当前笔记没有可显示的本地图片",
-                    modifier = Modifier.align(Alignment.Center),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                else -> LazyVerticalGrid(
-                    columns = GridCells.Adaptive(150.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    items(images, key = { "${it.note.file.path}:${it.reference}:${it.note.lastModified.time}" }) { image ->
-                        ImageGalleryCard(image = image, onClick = { onNoteClick(image.note) })
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ImageGalleryCard(
-    image: GalleryImage,
-    onClick: () -> Unit,
-) {
-    val bitmap = remember(image.dataUri) { decodeDataUriBitmap(image.dataUri) }
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-    ) {
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = image.reference,
-                modifier = Modifier.fillMaxWidth().aspectRatio(1f),
-                contentScale = ContentScale.Crop,
-            )
-        } else {
-            Box(
-                modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("无法显示", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        Column(modifier = Modifier.padding(10.dp)) {
-            Text(
-                text = image.note.title.ifBlank { image.note.file.nameWithoutExtension },
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = image.reference,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.size(5.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurface),
             )
         }
     }
@@ -580,13 +567,19 @@ private fun CompactNoteRow(
     note: Note,
     onClick: () -> Unit,
 ) {
+    val cardShape = RoundedCornerShape(16.dp)
+
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .clickable(onClick = onClick)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), cardShape),
+        shape = cardShape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Text(
                 text = note.title.ifBlank { note.file.nameWithoutExtension },
                 style = MaterialTheme.typography.titleMedium,
@@ -594,9 +587,9 @@ private fun CompactNoteRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (note.content.isNotBlank()) {
+            if (note.contentPreview.isNotBlank()) {
                 Text(
-                    text = note.content.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty(),
+                    text = note.contentPreview.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty(),
                     modifier = Modifier.padding(top = 4.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -607,20 +600,6 @@ private fun CompactNoteRow(
         }
     }
 }
-
-private data class GalleryImage(
-    val note: Note,
-    val reference: String,
-    val dataUri: String,
-)
-
-private fun decodeDataUriBitmap(dataUri: String): android.graphics.Bitmap? =
-    runCatching {
-        val base64 = dataUri.substringAfter("base64,", "")
-        if (base64.isBlank()) return@runCatching null
-        val bytes = Base64.decode(base64, Base64.DEFAULT)
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-    }.getOrNull()
 
 private fun firstDayOfMonth(timeMillis: Long): Long =
     Calendar.getInstance().apply {
@@ -659,6 +638,12 @@ private fun addMonths(monthStart: Long, months: Int): Long =
     Calendar.getInstance().apply {
         timeInMillis = monthStart
         add(Calendar.MONTH, months)
+    }.timeInMillis
+
+private fun addDays(dayStart: Long, days: Int): Long =
+    Calendar.getInstance().apply {
+        timeInMillis = dayStart
+        add(Calendar.DAY_OF_MONTH, days)
     }.timeInMillis
 
 private fun buildCalendarDays(monthStart: Long): List<Long> {

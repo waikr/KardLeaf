@@ -10,6 +10,7 @@ notes.jks
 .externalNativeBuild
 .cxx
 local.properties
+keystore.properties
 *.apk
 *.output
 app/build/
@@ -17,3 +18,6 @@ app/build/
 .github_creds/
 dev_docs/
 .gemini_tools/
+.workbuddy/
+node_modules/
+app/src/main/codemirror-editor/node_modules/

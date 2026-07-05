@@ -14,20 +14,56 @@ val localProperties = Properties().apply {
     }
 }
 
+fun readGitOutput(vararg args: String): String = runCatching {
+    val process = ProcessBuilder("git", *args)
+        .directory(rootProject.projectDir)
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().readText().trim()
+    if (process.waitFor() == 0 && output.isNotBlank()) output else "unknown"
+}.getOrDefault("unknown")
+
+fun buildConfigString(value: String): String =
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+val currentGitCommit = readGitOutput("rev-parse", "--short", "HEAD")
+val currentGitMessage = readGitOutput("log", "-1", "--pretty=%s")
+
 android {
     namespace = "com.kangle.kardleaf"
     compileSdk = 34
+    flavorDimensions += "distribution"
 
     defaultConfig {
         applicationId = "com.kardleaf"
         minSdk = 23
         targetSdk = 34
-        versionCode = 122
-        versionName = "1.2.2"
+        versionCode = 150
+        versionName = "1.5.0"
         manifestPlaceholders["appLabel"] = "KardLeaf"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
+        }
+    }
+
+    productFlavors {
+        create("stable") {
+            dimension = "distribution"
+            applicationId = "com.kardleaf"
+            manifestPlaceholders["appLabel"] = "KardLeaf"
+            buildConfigField("boolean", "KARDLEAF_DEV_VARIANT", "false")
+            buildConfigField("String", "KARDLEAF_GIT_COMMIT", buildConfigString(currentGitCommit))
+            buildConfigField("String", "KARDLEAF_GIT_MESSAGE", buildConfigString(currentGitMessage))
+        }
+        create("dev") {
+            dimension = "distribution"
+            applicationId = "com.kardleaf.dev"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appLabel"] = "KardLeaf Dev"
+            buildConfigField("boolean", "KARDLEAF_DEV_VARIANT", "true")
+            buildConfigField("String", "KARDLEAF_GIT_COMMIT", buildConfigString(currentGitCommit))
+            buildConfigField("String", "KARDLEAF_GIT_MESSAGE", buildConfigString(currentGitMessage))
         }
     }
 
@@ -56,7 +92,6 @@ android {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
-            manifestPlaceholders["appLabel"] = "KardLeaf"
         }
     }
     compileOptions {
@@ -67,6 +102,7 @@ android {
         jvmTarget = "17"
     }
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 
@@ -99,6 +135,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.google.code.gson:gson:2.10.1") // Correct group id just in case
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")

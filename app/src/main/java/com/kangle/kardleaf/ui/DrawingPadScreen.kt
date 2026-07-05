@@ -1,16 +1,17 @@
 package com.kangle.kardleaf.ui
 
+import com.kangle.kardleaf.data.utils.KardLeafLog
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.view.MotionEvent
-import android.util.Log
 import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -62,6 +63,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.tooling.preview.Preview
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.math.hypot
 
 private enum class DrawingTool(val label: String) {
@@ -83,18 +86,20 @@ private const val DrawingPadLogTag = "KardLeafDrawingPad"
 @Composable
 internal fun DrawingPadScreen(
     onDismiss: () -> Unit,
-    onSave: (Bitmap) -> Unit,
+    onSave: (Bitmap, String) -> Unit,
     modifier: Modifier = Modifier,
+    initialDrawingSource: String? = null,
 ) {
+    val restoredDrawingState = remember(initialDrawingSource) { parseDrawingPadSource(initialDrawingSource) }
     var drawingView by remember { mutableStateOf<KardLeafDrawingPadView?>(null) }
     var tool by remember { mutableStateOf(DrawingTool.Pen) }
-    var grid by remember { mutableStateOf(DrawingGrid.Square) }
-    var canvasColor by remember { mutableStateOf(Color.White) }
-    var penColor by remember { mutableStateOf(Color.Black) }
-    var highlighterColor by remember { mutableStateOf(Color(0xFFFFEB3B)) }
-    var penStrokeWidth by remember { mutableStateOf(7f) }
-    var highlighterStrokeWidth by remember { mutableStateOf(18f) }
-    var eraserStrokeWidth by remember { mutableStateOf(28f) }
+    var grid by remember { mutableStateOf(restoredDrawingState?.grid ?: DrawingGrid.Square) }
+    var canvasColor by remember { mutableStateOf(Color(restoredDrawingState?.canvasColor ?: AndroidColor.WHITE)) }
+    var penColor by remember { mutableStateOf(Color(restoredDrawingState?.penColor ?: AndroidColor.BLACK)) }
+    var highlighterColor by remember { mutableStateOf(Color(restoredDrawingState?.highlighterColor ?: AndroidColor.YELLOW)) }
+    var penStrokeWidth by remember { mutableStateOf(restoredDrawingState?.penStrokeWidth ?: 7f) }
+    var highlighterStrokeWidth by remember { mutableStateOf(restoredDrawingState?.highlighterStrokeWidth ?: 18f) }
+    var eraserStrokeWidth by remember { mutableStateOf(restoredDrawingState?.eraserStrokeWidth ?: 28f) }
 
     val saveButtonAccent = MaterialTheme.colorScheme.primary
 
@@ -114,21 +119,24 @@ internal fun DrawingPadScreen(
         }
     }
 
-    Log.d(
+    KardLeafLog.d(
         DrawingPadLogTag,
         "compose drawing screen tool=$tool grid=$grid canvasColor=${canvasColor.toArgb()} penColor=${penColor.toArgb()} activeWidth=$activeWidth drawingViewReady=${drawingView != null}",
     )
 
     fun saveDrawing(source: String) {
         val view = drawingView
-        Log.d(DrawingPadLogTag, "$source save clicked drawingViewReady=${view != null}")
+        KardLeafLog.d(DrawingPadLogTag, "$source save clicked drawingViewReady=${view != null}")
         val bitmap = view?.exportBitmap()
-        Log.d(DrawingPadLogTag, "$source export bitmap result=${bitmap?.width}x${bitmap?.height}")
-        bitmap?.let(onSave)
+        val drawingSource = view?.exportDrawingSource().orEmpty()
+        KardLeafLog.d(DrawingPadLogTag, "$source export bitmap result=${bitmap?.width}x${bitmap?.height} sourceLen=${drawingSource.length}")
+        if (bitmap != null && drawingSource.isNotBlank()) {
+            onSave(bitmap, drawingSource)
+        }
     }
 
     BackHandler {
-        Log.d(DrawingPadLogTag, "back pressed close drawing screen")
+        KardLeafLog.d(DrawingPadLogTag, "back pressed close drawing screen")
         onDismiss()
     }
 
@@ -148,7 +156,7 @@ internal fun DrawingPadScreen(
                     .height(56.dp)
                     .padding(horizontal = 8.dp)
                     .onGloballyPositioned { coordinates ->
-                        Log.d(
+                        KardLeafLog.d(
                             DrawingPadLogTag,
                             "top bar positioned size=${coordinates.size.width}x${coordinates.size.height} window=${coordinates.localToWindow(androidx.compose.ui.geometry.Offset.Zero)}",
                         )
@@ -157,7 +165,7 @@ internal fun DrawingPadScreen(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 IconButton(onClick = {
-                    Log.d(DrawingPadLogTag, "top back button clicked")
+                    KardLeafLog.d(DrawingPadLogTag, "top back button clicked")
                     onDismiss()
                 }) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "关闭画图")
@@ -171,7 +179,7 @@ internal fun DrawingPadScreen(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
                         .onGloballyPositioned { coordinates ->
-                            Log.d(
+                            KardLeafLog.d(
                                 DrawingPadLogTag,
                                 "save button positioned size=${coordinates.size.width}x${coordinates.size.height} window=${coordinates.localToWindow(androidx.compose.ui.geometry.Offset.Zero)}",
                             )
@@ -212,9 +220,10 @@ internal fun DrawingPadScreen(
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { context ->
-                        Log.d(DrawingPadLogTag, "AndroidView factory create drawing view")
+                        KardLeafLog.d(DrawingPadLogTag, "AndroidView factory create drawing view")
                         KardLeafDrawingPadView(context).also { view ->
                             drawingView = view
+                            view.restoreDrawingSourceState(restoredDrawingState)
                             view.applyState(
                                 tool = tool,
                                 grid = grid,
@@ -228,7 +237,7 @@ internal fun DrawingPadScreen(
                         }
                     },
                     update = { view ->
-                        Log.d(DrawingPadLogTag, "AndroidView update drawing view width=${view.width} height=${view.height}")
+                        KardLeafLog.d(DrawingPadLogTag, "AndroidView update drawing view width=${view.width} height=${view.height}")
                         drawingView = view
                         view.applyState(
                             tool = tool,
@@ -248,7 +257,7 @@ internal fun DrawingPadScreen(
                         .padding(12.dp)
                         .clip(RoundedCornerShape(999.dp))
                         .onGloballyPositioned { coordinates ->
-                            Log.d(
+                            KardLeafLog.d(
                                 DrawingPadLogTag,
                                 "floating save positioned size=${coordinates.size.width}x${coordinates.size.height} window=${coordinates.localToWindow(androidx.compose.ui.geometry.Offset.Zero)}",
                             )
@@ -493,14 +502,98 @@ private fun DrawingPadScreenPreview() {
     MaterialTheme {
         DrawingPadScreen(
             onDismiss = {},
-            onSave = {},
+            onSave = { _, _ -> },
         )
     }
 }
 
+private data class DrawingPadSourceState(
+    val canvasWidth: Int,
+    val canvasHeight: Int,
+    val grid: DrawingGrid,
+    val canvasColor: Int,
+    val penColor: Int,
+    val highlighterColor: Int,
+    val penStrokeWidth: Float,
+    val highlighterStrokeWidth: Float,
+    val eraserStrokeWidth: Float,
+    val strokes: List<DrawingPadSourceStroke>,
+)
+
+private data class DrawingPadSourceStroke(
+    val tool: DrawingTool,
+    val color: Int,
+    val width: Float,
+    val points: List<PointF>,
+)
+
+private fun parseDrawingPadSource(source: String?): DrawingPadSourceState? =
+    runCatching {
+        if (source.isNullOrBlank()) return@runCatching null
+        val json = JSONObject(source)
+        val strokesJson = json.optJSONArray("strokes") ?: JSONArray()
+        val strokes = buildList {
+            for (index in 0 until strokesJson.length()) {
+                val strokeJson = strokesJson.optJSONObject(index) ?: continue
+                val pointsJson = strokeJson.optJSONArray("points") ?: JSONArray()
+                val points = buildList {
+                    for (pointIndex in 0 until pointsJson.length()) {
+                        val pointJson = pointsJson.optJSONObject(pointIndex) ?: continue
+                        add(PointF(
+                            pointJson.optDouble("x").toFloat(),
+                            pointJson.optDouble("y").toFloat(),
+                        ))
+                    }
+                }
+                if (points.isNotEmpty()) {
+                    add(
+                        DrawingPadSourceStroke(
+                            tool = parseDrawingTool(strokeJson.optString("tool"), DrawingTool.Pen),
+                            color = strokeJson.optInt("color", AndroidColor.BLACK),
+                            width = strokeJson.optDouble("width", 7.0).toFloat().coerceIn(2f, 54f),
+                            points = points,
+                        ),
+                    )
+                }
+            }
+        }
+        DrawingPadSourceState(
+            canvasWidth = json.optInt("canvasWidth", 0),
+            canvasHeight = json.optInt("canvasHeight", 0),
+            grid = parseDrawingGrid(json.optString("grid"), DrawingGrid.Square),
+            canvasColor = json.optInt("canvasColor", AndroidColor.WHITE),
+            penColor = json.optInt("penColor", AndroidColor.BLACK),
+            highlighterColor = json.optInt("highlighterColor", AndroidColor.YELLOW),
+            penStrokeWidth = json.optDouble("penStrokeWidth", 7.0).toFloat().coerceIn(2f, 54f),
+            highlighterStrokeWidth = json.optDouble("highlighterStrokeWidth", 18.0).toFloat().coerceIn(2f, 54f),
+            eraserStrokeWidth = json.optDouble("eraserStrokeWidth", 28.0).toFloat().coerceIn(2f, 54f),
+            strokes = strokes,
+        )
+    }.getOrNull()
+
+private fun parseDrawingTool(value: String?, fallback: DrawingTool): DrawingTool =
+    runCatching { DrawingTool.valueOf(value.orEmpty()) }.getOrDefault(fallback)
+
+private fun parseDrawingGrid(value: String?, fallback: DrawingGrid): DrawingGrid =
+    runCatching { DrawingGrid.valueOf(value.orEmpty()) }.getOrDefault(fallback)
+
+private fun buildDrawingPath(points: List<PointF>): Path =
+    Path().apply {
+        val first = points.firstOrNull() ?: return@apply
+        moveTo(first.x, first.y)
+        var lastX = first.x
+        var lastY = first.y
+        points.drop(1).forEach { point ->
+            quadTo(lastX, lastY, (lastX + point.x) / 2f, (lastY + point.y) / 2f)
+            lastX = point.x
+            lastY = point.y
+        }
+        lineTo(lastX, lastY)
+    }
+
 private data class DrawingStroke(
     val path: Path,
-    val points: List<android.graphics.PointF>,
+    val points: List<PointF>,
     val tool: DrawingTool,
     val color: Int,
     val width: Float,
@@ -510,7 +603,7 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
     private val strokes = mutableListOf<DrawingStroke>()
     private val redoStrokes = mutableListOf<DrawingStroke>()
     private var currentPath: Path? = null
-    private val currentPoints = mutableListOf<android.graphics.PointF>()
+    private val currentPoints = mutableListOf<PointF>()
     private var tool: DrawingTool = DrawingTool.Pen
     private var grid: DrawingGrid = DrawingGrid.Square
     private var canvasColor: Int = AndroidColor.WHITE
@@ -521,6 +614,7 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
     private var eraserStrokeWidth: Float = 28f
     private var lastX = 0f
     private var lastY = 0f
+    private var pendingRestoreState: DrawingPadSourceState? = null
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -535,17 +629,50 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        Log.d(DrawingPadLogTag, "drawing view attached width=$width height=$height")
+        KardLeafLog.d(DrawingPadLogTag, "drawing view attached width=$width height=$height")
     }
 
     override fun onDetachedFromWindow() {
-        Log.d(DrawingPadLogTag, "drawing view detached width=$width height=$height strokes=${strokes.size}")
+        KardLeafLog.d(DrawingPadLogTag, "drawing view detached width=$width height=$height strokes=${strokes.size}")
         super.onDetachedFromWindow()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        Log.d(DrawingPadLogTag, "drawing view size changed ${oldw}x$oldh -> ${w}x$h")
+        KardLeafLog.d(DrawingPadLogTag, "drawing view size changed ${oldw}x$oldh -> ${w}x$h")
+        applyPendingRestoreStateIfNeeded()
+    }
+
+    fun restoreDrawingSourceState(state: DrawingPadSourceState?) {
+        strokes.clear()
+        redoStrokes.clear()
+        currentPath = null
+        currentPoints.clear()
+        pendingRestoreState = state
+        applyPendingRestoreStateIfNeeded()
+        invalidate()
+    }
+
+    private fun applyPendingRestoreStateIfNeeded() {
+        val state = pendingRestoreState ?: return
+        if (width <= 0 || height <= 0) return
+        val scaleX = if (state.canvasWidth > 0) width.toFloat() / state.canvasWidth.toFloat() else 1f
+        val scaleY = if (state.canvasHeight > 0) height.toFloat() / state.canvasHeight.toFloat() else 1f
+        strokes.clear()
+        strokes.addAll(
+            state.strokes.map { stroke ->
+                val scaledPoints = stroke.points.map { point -> PointF(point.x * scaleX, point.y * scaleY) }
+                DrawingStroke(
+                    path = buildDrawingPath(scaledPoints),
+                    points = scaledPoints,
+                    tool = stroke.tool,
+                    color = stroke.color,
+                    width = stroke.width * ((scaleX + scaleY) / 2f),
+                )
+            },
+        )
+        pendingRestoreState = null
+        invalidate()
     }
 
     fun applyState(
@@ -570,7 +697,7 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
     }
 
     fun undo() {
-        Log.d(DrawingPadLogTag, "undo clicked strokes=${strokes.size} redo=${redoStrokes.size}")
+        KardLeafLog.d(DrawingPadLogTag, "undo clicked strokes=${strokes.size} redo=${redoStrokes.size}")
         if (strokes.isNotEmpty()) {
             redoStrokes.add(strokes.removeAt(strokes.lastIndex))
             invalidate()
@@ -578,7 +705,7 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
     }
 
     fun redo() {
-        Log.d(DrawingPadLogTag, "redo clicked strokes=${strokes.size} redo=${redoStrokes.size}")
+        KardLeafLog.d(DrawingPadLogTag, "redo clicked strokes=${strokes.size} redo=${redoStrokes.size}")
         if (redoStrokes.isNotEmpty()) {
             strokes.add(redoStrokes.removeAt(redoStrokes.lastIndex))
             invalidate()
@@ -586,7 +713,7 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
     }
 
     fun clear() {
-        Log.d(DrawingPadLogTag, "clear clicked strokes=${strokes.size} redo=${redoStrokes.size}")
+        KardLeafLog.d(DrawingPadLogTag, "clear clicked strokes=${strokes.size} redo=${redoStrokes.size}")
         strokes.clear()
         redoStrokes.clear()
         currentPath = null
@@ -597,10 +724,40 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
     fun exportBitmap(): Bitmap {
         val safeWidth = width.coerceAtLeast(1)
         val safeHeight = height.coerceAtLeast(1)
-        Log.d(DrawingPadLogTag, "exportBitmap requested view=${width}x$height safe=${safeWidth}x$safeHeight strokes=${strokes.size} redo=${redoStrokes.size}")
+        KardLeafLog.d(DrawingPadLogTag, "exportBitmap requested view=${width}x$height safe=${safeWidth}x$safeHeight strokes=${strokes.size} redo=${redoStrokes.size}")
         return Bitmap.createBitmap(safeWidth, safeHeight, Bitmap.Config.ARGB_8888).also { bitmap ->
             drawDrawingContent(Canvas(bitmap))
         }
+    }
+
+    fun exportDrawingSource(): String {
+        val root = JSONObject()
+            .put("version", 1)
+            .put("canvasWidth", width.coerceAtLeast(1))
+            .put("canvasHeight", height.coerceAtLeast(1))
+            .put("grid", grid.name)
+            .put("canvasColor", canvasColor)
+            .put("penColor", penColor)
+            .put("highlighterColor", highlighterColor)
+            .put("penStrokeWidth", penStrokeWidth)
+            .put("highlighterStrokeWidth", highlighterStrokeWidth)
+            .put("eraserStrokeWidth", eraserStrokeWidth)
+        val strokesJson = JSONArray()
+        strokes.forEach { stroke ->
+            val pointsJson = JSONArray()
+            stroke.points.forEach { point ->
+                pointsJson.put(JSONObject().put("x", point.x).put("y", point.y))
+            }
+            strokesJson.put(
+                JSONObject()
+                    .put("tool", stroke.tool.name)
+                    .put("color", stroke.color)
+                    .put("width", stroke.width)
+                    .put("points", pointsJson),
+            )
+        }
+        root.put("strokes", strokesJson)
+        return root.toString(2)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -608,7 +765,7 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
         val y = event.y
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                Log.d(DrawingPadLogTag, "touch down tool=$tool x=$x y=$y")
+                KardLeafLog.d(DrawingPadLogTag, "touch down tool=$tool x=$x y=$y")
                 parent.requestDisallowInterceptTouchEvent(true)
                 if (tool == DrawingTool.StrokeEraser) {
                     removeStrokeNear(x, y)
@@ -616,7 +773,7 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
                 }
                 currentPath = Path().apply { moveTo(x, y) }
                 currentPoints.clear()
-                currentPoints.add(android.graphics.PointF(x, y))
+                currentPoints.add(PointF(x, y))
                 lastX = x
                 lastY = y
                 invalidate()
@@ -628,22 +785,22 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
                     return true
                 }
                 currentPath?.quadTo(lastX, lastY, (lastX + x) / 2f, (lastY + y) / 2f)
-                currentPoints.add(android.graphics.PointF(x, y))
+                currentPoints.add(PointF(x, y))
                 lastX = x
                 lastY = y
                 invalidate()
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                Log.d(DrawingPadLogTag, "touch end action=${event.actionMasked} tool=$tool x=$x y=$y")
+                KardLeafLog.d(DrawingPadLogTag, "touch end action=${event.actionMasked} tool=$tool x=$x y=$y")
                 if (tool != DrawingTool.StrokeEraser) {
                     currentPath?.let { path ->
                         path.lineTo(x, y)
-                        currentPoints.add(android.graphics.PointF(x, y))
+                        currentPoints.add(PointF(x, y))
                         strokes.add(
                             DrawingStroke(
                                 path = Path(path),
-                                points = currentPoints.map { android.graphics.PointF(it.x, it.y) },
+                                points = currentPoints.map { PointF(it.x, it.y) },
                                 tool = tool,
                                 color = currentStrokeColor(),
                                 width = currentStrokeWidth(),

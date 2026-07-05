@@ -46,7 +46,7 @@ import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Drafts
-import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Image
@@ -72,6 +72,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -79,7 +80,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.kangle.kardleaf.R
+import com.kangle.kardleaf.AppIconManager
 import kotlinx.coroutines.launch
 
 private const val ONBOARDING_PAGE_SCROLL_DURATION_MILLIS = 180
@@ -465,6 +466,7 @@ private fun PageIndicators(
 
 @Composable
 private fun AppIntroScene() {
+    val context = LocalContext.current
     val largeTextMode = LocalDensity.current.fontScale >= 1.3f
     val sceneHorizontalPadding = if (largeTextMode) 16.dp else 24.dp
     val sceneVerticalPadding = if (largeTextMode) 14.dp else 18.dp
@@ -489,7 +491,7 @@ private fun AppIntroScene() {
             verticalArrangement = Arrangement.Center,
         ) {
             Image(
-                painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                painter = painterResource(id = AppIconManager.current(context).iconResId),
                 contentDescription = "卡叶笔记图标",
                 modifier =
                     Modifier
@@ -2430,7 +2432,7 @@ private fun MiniDrawerContent() {
         Spacer(modifier = Modifier.height(18.dp))
         DrawerDemoItem(Icons.Outlined.Description, "全部笔记")
         DrawerDemoItem(Icons.Outlined.History, "最近修改")
-        DrawerDemoItem(Icons.Outlined.FavoriteBorder, "收藏")
+        DrawerDemoItem(Icons.Outlined.BookmarkBorder, "收藏")
         DrawerDemoItem(Icons.Outlined.Drafts, "草稿")
         DrawerDemoItem(Icons.Outlined.Folder, "文件")
         DrawerDemoItem(Icons.Outlined.CalendarToday, "日期")

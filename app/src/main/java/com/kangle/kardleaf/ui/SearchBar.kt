@@ -1,18 +1,20 @@
 package com.kangle.kardleaf.ui
 
+import com.kangle.kardleaf.data.utils.KardLeafLog
 import android.os.SystemClock
-import android.util.Log
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -21,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -101,6 +104,7 @@ fun SortButton(viewModel: MainViewModel) {
     val folderSortSettings by viewModel.currentFolderSortSettings.collectAsState()
     var showSortMenu by remember { mutableStateOf(false) }
     var showCustomSortDialog by remember { mutableStateOf(false) }
+    var showApplyGlobalCustomDialog by remember { mutableStateOf(false) }
     var lastSortMenuDismissAt by remember { mutableStateOf(0L) }
     val folderFilter = currentFilter as? MainViewModel.NoteFilter.Label
     val isAllNotesView = currentFilter is MainViewModel.NoteFilter.All
@@ -109,7 +113,7 @@ fun SortButton(viewModel: MainViewModel) {
     val savedEffectiveSortOrder = folderSortSettings?.order ?: sortOrder
     val effectiveSortOrder =
         if (!canCustomSort && savedEffectiveSortOrder == PrefsManager.SortOrder.CUSTOM) {
-            sortOrder
+            PrefsManager.SortOrder.DATE_MODIFIED
         } else {
             savedEffectiveSortOrder
         }
@@ -122,14 +126,14 @@ fun SortButton(viewModel: MainViewModel) {
         }
 
     LaunchedEffect(showSortMenu) {
-        Log.d(BACK_TRACE_TAG, "SortButton state changed showSortMenu=$showSortMenu")
+        KardLeafLog.d(BACK_TRACE_TAG, "SortButton state changed showSortMenu=$showSortMenu")
     }
 
     Box {
         IconButton(onClick = {
             val now = SystemClock.uptimeMillis()
             val ignoreReopen = !showSortMenu && now - lastSortMenuDismissAt < MENU_REOPEN_GUARD_MS
-            Log.d(BACK_TRACE_TAG, "SortButton click toggle menu isFolderView=$isFolderView filter=$currentFilter showSortMenu=$showSortMenu ignoreReopen=$ignoreReopen")
+            KardLeafLog.d(BACK_TRACE_TAG, "SortButton click toggle menu isFolderView=$isFolderView filter=$currentFilter showSortMenu=$showSortMenu ignoreReopen=$ignoreReopen")
             if (!ignoreReopen) {
                 showSortMenu = !showSortMenu
             }
@@ -141,20 +145,22 @@ fun SortButton(viewModel: MainViewModel) {
             )
         }
 
-        DropdownMenu(
+        KardLeafDropdownMenu(
             modifier =
-                Modifier.onPreviewKeyEvent { event ->
-                    if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
-                        Log.d(
-                            BACK_TRACE_TAG,
-                            "SortButton popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showSortMenu=$showSortMenu",
-                        )
-                    }
-                    false
-                },
+                Modifier
+                    .width(176.dp)
+                    .onPreviewKeyEvent { event ->
+                        if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
+                            KardLeafLog.d(
+                                BACK_TRACE_TAG,
+                                "SortButton popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showSortMenu=$showSortMenu",
+                            )
+                        }
+                        false
+                    },
             expanded = showSortMenu,
             onDismissRequest = {
-                Log.d(BACK_TRACE_TAG, "SortButton onDismissRequest showSortMenu=$showSortMenu")
+                KardLeafLog.d(BACK_TRACE_TAG, "SortButton onDismissRequest showSortMenu=$showSortMenu")
                 lastSortMenuDismissAt = SystemClock.uptimeMillis()
                 showSortMenu = false
             },
@@ -166,8 +172,8 @@ fun SortButton(viewModel: MainViewModel) {
         ) {
             if (isFolderView) {
                 DropdownMenuItem(
-                    text = { Text("仅此目录单独排序") },
-                    leadingIcon = {
+                    text = { Text("单独排序") },
+                    trailingIcon = {
                         Checkbox(
                             checked = folderSortSettings != null,
                             onCheckedChange = null,
@@ -206,7 +212,8 @@ fun SortButton(viewModel: MainViewModel) {
                 if (effectiveSortOrder == PrefsManager.SortOrder.CUSTOM) {
                     HorizontalDivider()
                     DropdownMenuItem(
-                        text = { Text("简洁自定义顺序") },
+                        text = { Text("简洁调整") },
+                        trailingIcon = { if (!customSortDragModeEnabled) Icon(Icons.Default.Check, null) },
                         onClick = {
                             viewModel.setCustomSortDragModeEnabled(false)
                             showSortMenu = false
@@ -214,12 +221,20 @@ fun SortButton(viewModel: MainViewModel) {
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text(if (customSortDragModeEnabled) "关闭拖动自定义顺序" else "拖动自定义顺序") },
+                        text = { Text("首页调整") },
                         trailingIcon = { if (customSortDragModeEnabled) Icon(Icons.Default.Check, null) },
                         onClick = {
                             viewModel.enableCurrentFolderCustomSort(customSortNotes.map { it.file.path })
                             viewModel.setCustomSortDragModeEnabled(!customSortDragModeEnabled)
                             showSortMenu = false
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("全局应用") },
+                        trailingIcon = { if (sortOrder == PrefsManager.SortOrder.CUSTOM) Icon(Icons.Default.Check, null) },
+                        onClick = {
+                            showSortMenu = false
+                            showApplyGlobalCustomDialog = true
                         },
                     )
                 }
@@ -257,8 +272,31 @@ fun SortButton(viewModel: MainViewModel) {
             )
         }
 
+        if (showApplyGlobalCustomDialog) {
+            AlertDialog(
+                onDismissRequest = { showApplyGlobalCustomDialog = false },
+                title = { Text("全局应用") },
+                text = { Text("确定要在全局都使用自定义排序吗？已开启“单独排序”的目录会保持自己的排序设置。") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.applyCustomSortGlobally()
+                            showApplyGlobalCustomDialog = false
+                        },
+                    ) {
+                        Text("确定")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showApplyGlobalCustomDialog = false }) {
+                        Text("取消")
+                    }
+                },
+            )
+        }
+
         BackHandler(enabled = showSortMenu) {
-            Log.d(BACK_TRACE_TAG, "SortButton BackHandler hit, closing sort menu")
+            KardLeafLog.d(BACK_TRACE_TAG, "SortButton BackHandler hit, closing sort menu")
             showSortMenu = false
         }
     }

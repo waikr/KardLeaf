@@ -1,5 +1,8 @@
 package com.kangle.kardleaf.ui
 
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.AlertDialog
@@ -12,7 +15,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
@@ -90,12 +99,26 @@ fun NotePropertiesDialog(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PropertyRow(
     label: String,
     value: String,
 ) {
-    Column {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+
+    Column(
+        modifier = Modifier.combinedClickable(
+            onClick = {},
+            onLongClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                clipboard.setText(AnnotatedString(value))
+                Toast.makeText(context, "已复制$value", Toast.LENGTH_SHORT).show()
+            },
+        ),
+    ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,

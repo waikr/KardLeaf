@@ -2,8 +2,8 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@android:color/white" />
     <item
-        android:width="240dp"
-        android:height="150dp"
+        android:width="128dp"
+        android:height="128dp"
         android:gravity="center"
-        android:drawable="@drawable/splash_brand" />
+        android:drawable="@mipmap/ic_app_icon_default" />
 </layer-list>

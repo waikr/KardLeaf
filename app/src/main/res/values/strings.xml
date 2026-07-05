@@ -76,4 +76,30 @@
     <string name="inline_math">Inline $...$</string>
     <string name="block_math">Block $$...$$</string>
 
+    <!-- Widgets -->
+    <string name="widget_quick_note_label">快速新建笔记</string>
+    <string name="widget_quick_note_text">新建</string>
+    <string name="widget_quick_note_title">快速添加笔记</string>
+    <string name="widget_quick_note_subtitle">点击记录灵感 · 保存到草稿</string>
+    <string name="widget_quick_note_desc">点击快速新建 KardLeaf 笔记</string>
+    <string name="widget_task_list_label">任务清单</string>
+    <string name="widget_task_list_title">任务清单</string>
+    <string name="widget_task_list_desc">查看和完成卡叶笔记任务</string>
+    <string name="widget_task_empty">暂无待办任务</string>
+    <string name="widget_note_list_label">笔记列表</string>
+    <string name="widget_note_list_title">笔记列表</string>
+    <string name="widget_note_list_desc">查看最近的卡叶笔记</string>
+    <string name="widget_note_empty">暂无笔记</string>
+
+    <!-- Launcher shortcuts -->
+    <string name="shortcut_quick_note_short">新建笔记</string>
+    <string name="shortcut_quick_note_long">快速新建笔记</string>
+    <string name="shortcut_search_short">搜索</string>
+    <string name="shortcut_search_long">搜索笔记</string>
+    <string name="shortcut_draft_short">草稿</string>
+    <string name="shortcut_draft_long">新建草稿</string>
+    <string name="shortcut_disabled_message">快捷功能暂不可用</string>
+    <string name="shortcut_settings_short">设置</string>
+    <string name="shortcut_settings_long">打开设置</string>
+
 </resources>

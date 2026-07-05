@@ -1,6 +1,9 @@
 package com.kangle.kardleaf.ui
 
 import android.graphics.Bitmap
+import android.os.SystemClock
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -16,13 +19,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,8 +41,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -47,18 +61,17 @@ import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.repository.PrefsManager
-import java.text.ParsePosition
+import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.NoteFormatUtils
+import com.kangle.kardleaf.ui.theme.LocalKardLeafGlobalCornerRadiusDp
+import com.kangle.kardleaf.ui.theme.LocalKardLeafHomeCornerRadiusDp
+import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlinx.coroutines.withTimeoutOrNull
 
-private val CardPreviewWikiImageRegex = Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
-private val CardPreviewMarkdownImageRegex = Regex("""!\[[^]]*]\(([^)]+)\)""")
-private val CardPreviewHeadingRegex = Regex("""^#{1,6}\s+""")
-private val CardPreviewTaskRegex = Regex("""^\s*[-*+]\s+\[[ xX]]\s+""")
-private val CardPreviewBulletRegex = Regex("""^\s*[-*+]\s+""")
-private val CardPreviewOrderedListRegex = Regex("""^\s*\d+\.\s+""")
-private val CardPreviewMarkdownMarksRegex = Regex("""[*_`~>#]""")
+private const val USER_PERF_TRACE_TAG = "KardLeafUserPerf"
+private const val OPEN_PATH_PROBE_TAG = "KardLeafOpenPathProbe"
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -69,6 +82,7 @@ fun NoteCard(
     showFolderTag: Boolean,
     showYamlTags: Boolean = false,
     showModifiedDate: Boolean = false,
+    modifiedDateFormat: String = PrefsManager.DEFAULT_CARD_MODIFIED_DATE_FORMAT,
     showDeletedDate: Boolean = false,
     showNoteTitle: Boolean = true,
     showDateFilenameTitle: Boolean = true,
@@ -78,14 +92,40 @@ fun NoteCard(
     searchMatch: SearchMatch? = null,
     showImagePreview: Boolean = false,
     loadImageThumbnail: suspend (Note) -> Bitmap? = { null },
+    onSearchJump: (() -> Unit)? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
-    val cardShape = RoundedCornerShape(16.dp)
-    val containerColor = MaterialTheme.colorScheme.surface
-    val contentColor = MaterialTheme.colorScheme.onSurface
+    val themeStyle = LocalKardLeafThemeStyle.current
+    val isModern = themeStyle != PrefsManager.AppThemeStyle.CLASSIC
+    val isDracula = themeStyle == PrefsManager.AppThemeStyle.DRACULA
+    val isCleanList = themeStyle == PrefsManager.AppThemeStyle.CLEAN_LIST
+    val isDarkCardTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val isCleanListLight = isCleanList && !isDarkCardTheme
+    val homeCornerRadiusDp = LocalKardLeafHomeCornerRadiusDp.current.takeIf { it >= 0 }
+        ?: LocalKardLeafGlobalCornerRadiusDp.current.takeIf { it >= 0 }
     val isCompact = cardDensity == PrefsManager.CardDensity.COMPACT
+    val cardShape = RoundedCornerShape(
+        (homeCornerRadiusDp ?: when {
+            isDracula -> if (isCompact) 10 else 14
+            isModern -> if (isCompact) 20 else 28
+            else -> 16
+        }).dp,
+    )
+    val interactionSource = remember { MutableInteractionSource() }
+    val containerColor by animateColorAsState(
+        targetValue =
+            when {
+                isDracula -> MaterialTheme.colorScheme.surfaceContainer
+                isCleanListLight -> Color.White
+                isCleanList -> MaterialTheme.colorScheme.surface
+                isModern -> MaterialTheme.colorScheme.surfaceContainerLow
+                else -> MaterialTheme.colorScheme.surface
+            },
+        label = "NoteCardContainerColor",
+    )
+    val contentColor = MaterialTheme.colorScheme.onSurface
     val cardPadding = if (isCompact) 10.dp else 16.dp
     val titleBottomPadding = if (isCompact) 4.dp else 8.dp
     val contentMaxLines = if (isCompact) 3 else 8
@@ -100,7 +140,7 @@ fun NoteCard(
             note.folder
                 .replace("\\", "/")
                 .trim()
-                .takeIf { it.isNotBlank() && it != "Unknown" }
+                .takeIf { it.isNotBlank() }
                 ?: "obsidian"
         } else {
             null
@@ -117,14 +157,29 @@ fun NoteCard(
                 )
             }
     }
-    val modifiedDateText = remember(note.lastModified.time) {
-        SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()).format(note.lastModified)
+    val safeModifiedDateFormat = remember(modifiedDateFormat) {
+        modifiedDateFormat.trim().takeIf { it.isNotBlank() } ?: PrefsManager.DEFAULT_CARD_MODIFIED_DATE_FORMAT
     }
-    val deletedDateText = remember(note.deletedAt?.time) {
-        note.deletedAt?.let { SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault()).format(it) }
+    val defaultModifiedDateFormatter = remember {
+        SimpleDateFormat(PrefsManager.DEFAULT_CARD_MODIFIED_DATE_FORMAT, Locale.getDefault())
+    }
+    val modifiedDateFormatter = remember(safeModifiedDateFormat) {
+        runCatching { SimpleDateFormat(safeModifiedDateFormat, Locale.getDefault()) }.getOrNull()
+    }
+    val modifiedDateText = remember(note.lastModified.time, modifiedDateFormatter, defaultModifiedDateFormatter) {
+        val formatter = modifiedDateFormatter ?: defaultModifiedDateFormatter
+        runCatching { formatter.format(note.lastModified) }
+            .getOrElse { defaultModifiedDateFormatter.format(note.lastModified) }
+    }
+    val deletedDateFormatter = remember {
+        SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.getDefault())
+    }
+    val deletedDateText = remember(note.deletedAt?.time, deletedDateFormatter) {
+        note.deletedAt?.let { deletedDateFormatter.format(it) }
     }
     val imageReference = note.firstImageReference?.takeIf { it.isNotBlank() }
     val shouldLoadThumbnail = showImagePreview && searchMatch == null && imageReference != null
+    val showSearchJump = searchQuery.isNotBlank() && searchMatch != null && searchMatch.startOffset >= 0 && onSearchJump != null
     var thumbnailBitmap by remember(note.id, imageReference, note.lastModified.time) { mutableStateOf<Bitmap?>(null) }
 
     LaunchedEffect(shouldLoadThumbnail, note.id, imageReference, note.lastModified.time, loadImageThumbnail) {
@@ -133,15 +188,56 @@ fun NoteCard(
             return@LaunchedEffect
         }
 
+        val thumbnailStartMs = SystemClock.elapsedRealtime()
         val loadedBitmap = withTimeoutOrNull(2000L) {
             runCatching { loadImageThumbnail(note) }.getOrNull()
+        }
+        val thumbnailElapsedMs = SystemClock.elapsedRealtime() - thumbnailStartMs
+        if (thumbnailElapsedMs >= 32L || loadedBitmap == null) {
+            KardLeafLog.d(
+                OPEN_PATH_PROBE_TAG,
+                "dashboard thumbnailLoad elapsed=${thumbnailElapsedMs}ms ok=${loadedBitmap != null} " +
+                    "folder=${note.folder} path=${note.file.path} imageRefLen=${imageReference?.length ?: 0}",
+            )
+            KardLeafLog.d(
+                USER_PERF_TRACE_TAG,
+                "dashboardThumbnailLoad elapsed=${thumbnailElapsedMs}ms ok=${loadedBitmap != null} " +
+                    "noteId=${note.id} folder=${note.folder} path=${note.file.path} imageRefLen=${imageReference?.length ?: 0} " +
+                    "modified=${note.lastModified.time}",
+            )
         }
         if (loadedBitmap != null || thumbnailBitmap == null) {
             thumbnailBitmap = loadedBitmap
         }
     }
 
-    val interactionSource = remember { MutableInteractionSource() }
+    val cardElevation by animateDpAsState(
+        targetValue = if (isModern) {
+            when {
+                isCleanListLight -> 0.dp
+                isDracula -> 1.dp
+                isSelected -> 0.dp
+                else -> 3.dp
+            }
+        } else {
+            1.dp
+        },
+        label = "NoteCardElevation",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = if (isModern) 0.82f else 1f)
+        } else if (isDracula) {
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
+        } else if (isCleanListLight) {
+            Color(0xFFE5E7EB)
+        } else {
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isModern) 0.48f else 0.5f)
+        },
+        label = "NoteCardBorderColor",
+    )
+    val borderWidth = if (isDracula) 1.5.dp else if (isSelected) if (isModern) 1.5.dp else 3.dp else 1.dp
+    val selectedRailColor = MaterialTheme.colorScheme.primary
     val onLongClickAction = {
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         onLongClick()
@@ -154,22 +250,42 @@ fun NoteCard(
                 .clip(cardShape)
                 .combinedClickable(
                     interactionSource = interactionSource,
-                    indication = androidx.compose.material.ripple.rememberRipple(),
+                    indication = null,
                     onClick = onClick,
                     onLongClick = onLongClickAction,
                 )
                 .then(
-                    if (isSelected) {
-                        Modifier.border(3.dp, MaterialTheme.colorScheme.primary, cardShape)
-                    } else {
-                        Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), cardShape)
-                    },
+                    Modifier.border(borderWidth, borderColor, cardShape),
                 ),
         shape = cardShape,
         colors = CardDefaults.cardColors(containerColor = containerColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = cardElevation),
     ) {
-        Column(modifier = Modifier.padding(cardPadding)) {
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .drawWithContent {
+                        drawContent()
+                        if (isModern && isSelected) {
+                            val railWidth = 5.dp.toPx()
+                            drawRoundRect(
+                                color = selectedRailColor,
+                                size = Size(railWidth, size.height),
+                                cornerRadius = CornerRadius(railWidth, railWidth),
+                            )
+                        }
+                    },
+        ) {
+            Column(
+                modifier =
+                    Modifier.padding(
+                        start = cardPadding + if (isModern && isSelected) 4.dp else 0.dp,
+                        top = cardPadding,
+                        end = cardPadding,
+                        bottom = cardPadding,
+                    ),
+            ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -211,10 +327,10 @@ fun NoteCard(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(bottom = 8.dp),
                         )
-                    } else if (note.content.isNotEmpty()) {
+                    } else if (note.contentPreview.isNotEmpty()) {
                         Box {
-                            val previewContent = remember(note.content, shouldLoadThumbnail) {
-                                plainCardPreview(note.content, hideImagePlaceholders = shouldLoadThumbnail)
+                            val previewContent = remember(note.contentPreview, shouldLoadThumbnail) {
+                                plainCardPreview(note.contentPreview, hideImagePlaceholders = shouldLoadThumbnail)
                             }
                             val previewMaxLines = if (shouldLoadThumbnail) 3 else contentMaxLines
 
@@ -242,7 +358,13 @@ fun NoteCard(
                 }
 
                 if (shouldLoadThumbnail) {
-                    val thumbnailShape = RoundedCornerShape(8.dp)
+                    val thumbnailShape = RoundedCornerShape(
+                        (homeCornerRadiusDp ?: when {
+                            isDracula -> 8
+                            isModern -> 16
+                            else -> 8
+                        }).dp,
+                    )
                     Box(
                         modifier =
                             Modifier
@@ -267,7 +389,7 @@ fun NoteCard(
             val visibleYamlTags = if (!isCompact && showYamlTags) note.tags.take(3) else emptyList()
             val showModifiedDateText = !isCompact && showModifiedDate
             val showDeletedDateText = showDeletedDate && deletedDateText != null
-            if (folderTag != null || visibleYamlTags.isNotEmpty() || showModifiedDateText || showDeletedDateText) {
+            if (folderTag != null || visibleYamlTags.isNotEmpty() || showModifiedDateText || showDeletedDateText || showSearchJump) {
                 Row(
                     modifier =
                         Modifier
@@ -299,23 +421,77 @@ fun NoteCard(
                             color = if (showDeletedDateText) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    if (showSearchJump) {
+                        TextButton(onClick = { onSearchJump?.invoke() }) {
+                            Text("跳转")
+                        }
+                    }
                 }
+            }
+            }
+
+            if (note.isFavorite) {
+                NoteCardBookmarkBadge(
+                    modifier =
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = if (isCompact) 8.dp else 10.dp, end = if (isCompact) 10.dp else 12.dp)
+                            .size(if (isCompact) 16.dp else 18.dp),
+                )
             }
         }
     }
 }
 
 @Composable
+private fun NoteCardBookmarkBadge(modifier: Modifier = Modifier) {
+    val isModern = LocalKardLeafThemeStyle.current != PrefsManager.AppThemeStyle.CLASSIC
+    Icon(
+        imageVector = Icons.Filled.Bookmark,
+        contentDescription = null,
+        tint = if (isModern) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.88f)
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+        },
+        modifier = modifier,
+    )
+}
+
+@Composable
 private fun NoteCardTagChip(text: String) {
+    val themeStyle = LocalKardLeafThemeStyle.current
+    val isModern = themeStyle != PrefsManager.AppThemeStyle.CLASSIC
+    val isDracula = themeStyle == PrefsManager.AppThemeStyle.DRACULA
+    val shape = RoundedCornerShape(if (isDracula) 7.dp else if (isModern) 999.dp else 4.dp)
     Text(
         text = text,
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = if (isDracula) MaterialTheme.colorScheme.onSurface else if (isModern) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier =
             Modifier
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                .padding(horizontal = 6.dp, vertical = 2.dp),
+                .background(
+                    if (isDracula) {
+                        MaterialTheme.colorScheme.surfaceContainerHighest
+                    } else if (isModern) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    } else {
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                    },
+                    shape,
+                )
+                .border(
+                    1.dp,
+                    if (isDracula) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.44f)
+                    } else if (isModern) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                    } else {
+                        MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                    },
+                    shape,
+                )
+                .padding(horizontal = if (isModern) 8.dp else 6.dp, vertical = if (isModern) 3.dp else 2.dp),
     )
 }
 
@@ -346,100 +522,21 @@ private fun highlightedText(
 }
 
 
-private fun shouldHideDateFilenameTitle(
-    title: String,
-    dateFormat: String,
-    hiddenFilenamePatterns: List<String>,
-): Boolean {
-    val patterns = hiddenFilenamePatterns.ifEmpty {
-        listOf(
-            PrefsManager.DEFAULT_HIDDEN_DATE_FILENAME_PATTERN,
-            PrefsManager.DEFAULT_HIDDEN_COPY_FILENAME_PATTERN,
-        )
-    }
-    return isPureDateTitle(title, dateFormat) || patterns.any { pattern ->
-        isHiddenFilenamePatternMatch(title, pattern)
-    }
-}
-
-private fun isHiddenFilenamePatternMatch(
-    title: String,
-    pattern: String,
-): Boolean {
-    val trimmedTitle = title.trim()
-    val trimmedPattern = pattern.trim()
-    if (trimmedTitle.isBlank() || trimmedPattern.isBlank()) return false
-    if (trimmedTitle == trimmedPattern) return true
-    if (isPureDateTitle(trimmedTitle, trimmedPattern)) return true
-
-    val copyMarkerIndex = trimmedPattern.indexOf("~副本")
-    if (copyMarkerIndex <= 0) return false
-
-    val datePattern = trimmedPattern.substring(0, copyMarkerIndex)
-    return runCatching {
-        val formatter = SimpleDateFormat(datePattern, Locale.getDefault()).apply { isLenient = false }
-        val position = ParsePosition(0)
-        val parsedDate = formatter.parse(trimmedTitle, position)
-        if (parsedDate == null || position.index <= 0) {
-            false
-        } else {
-            val suffix = trimmedTitle.substring(position.index)
-            val expectedSuffix = trimmedPattern.substring(copyMarkerIndex)
-            if (expectedSuffix.endsWith("*")) {
-                suffix.startsWith(expectedSuffix.removeSuffix("*"))
-            } else {
-                suffix == "~副本" || suffix.matches(Regex("""~副本(?:\d+)?(?:~\d+)*"""))
-            }
-        }
-    }.getOrDefault(false)
-}
-
-private fun isPureDateTitle(
-    title: String,
-    dateFormat: String,
-): Boolean {
-    val trimmed = title.trim()
-    if (trimmed.isBlank() || dateFormat.isBlank()) return false
-    return runCatching {
-        val formatter = SimpleDateFormat(dateFormat, Locale.getDefault()).apply { isLenient = false }
-        val position = ParsePosition(0)
-        formatter.parse(trimmed, position) != null && position.index == trimmed.length
-    }.getOrDefault(false)
-}
-
 private fun plainCardPreview(
     content: String,
     hideImagePlaceholders: Boolean = false,
 ): String =
-    content
-        .lineSequence()
-        .map { line ->
-            val withoutImages =
-                if (hideImagePlaceholders) {
-                    line
-                        .replace(CardPreviewWikiImageRegex, "")
-                        .replace(CardPreviewMarkdownImageRegex, "")
-                } else {
-                    line
-                        .replace(CardPreviewWikiImageRegex, "[图片: $1]")
-                        .replace(CardPreviewMarkdownImageRegex, "[图片]")
-                }
-            withoutImages
-                .replace(CardPreviewHeadingRegex, "")
-                .replace(CardPreviewTaskRegex, "")
-                .replace(CardPreviewBulletRegex, "")
-                .replace(CardPreviewOrderedListRegex, "")
-                .replace(CardPreviewMarkdownMarksRegex, "")
-                .trim()
-        }
-        .filter { it.isNotBlank() }
-        .take(10)
-        .joinToString("\n")
-        .take(500)
+    NoteFormatUtils.buildPlainTextPreview(
+        content = content,
+        maxChars = 500,
+        maxLines = 10,
+        hideImagePlaceholders = hideImagePlaceholders,
+    )
 
 
 @Composable
 fun PermissionRequestState(
+    onCreateSampleVault: () -> Unit,
     onSelectFolder: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -451,10 +548,22 @@ fun PermissionRequestState(
         Text(
             text = stringResource(R.string.welcome_title),
             style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(bottom = 16.dp),
+            modifier = Modifier.padding(bottom = 8.dp),
         )
-        Button(onClick = onSelectFolder) {
-            Text(stringResource(R.string.select_folder))
+        Text(
+            text = "请选择新建笔记库，或导入已有笔记库。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 20.dp),
+        )
+        Button(onClick = onCreateSampleVault) {
+            Text("新建笔记库")
+        }
+        OutlinedButton(
+            onClick = onSelectFolder,
+            modifier = Modifier.padding(top = 10.dp),
+        ) {
+            Text("导入笔记库")
         }
     }
 }

@@ -1,10 +1,12 @@
 package com.kangle.kardleaf.ui
 
-import android.util.Log
+import com.kangle.kardleaf.data.utils.KardLeafLog
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,18 +21,27 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 import kotlinx.coroutines.flow.first
 
 private const val CUSTOM_SORT_FLASH_TAG = "KardLeafCustomSortFlash"
+private inline fun logFolderStripTrace(message: () -> String) {
+    if (KardLeafLog.isEnabled(CUSTOM_SORT_FLASH_TAG)) {
+        KardLeafLog.d(CUSTOM_SORT_FLASH_TAG, message())
+    }
+}
 
 @Composable
 fun FolderPathStrip(
@@ -55,7 +66,7 @@ fun FolderPathStrip(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         rows.forEach { row ->
-            val rowKey = row.children.joinToString("|") { it.path }
+            val rowKey = remember(row.children) { row.children.joinToString("|") { it.path } }
             val rowState = rememberLazyListState()
             val selectedIndex = row.children.indexOfFirst { it.path == row.selectedPath }
             val itemSpacingPx = with(LocalDensity.current) { 8.dp.toPx() }
@@ -174,20 +185,27 @@ internal fun buildFolderPagerPages(
         } else {
             val parent = currentPath.substringBeforeLast("/", missingDelimiterValue = "")
             val siblings = directChildFolders(normalizedLabels, parent)
-            if (siblings.any { it.path == currentPath }) {
-                siblings
+            val siblingPages =
+                if (siblings.any { it.path == currentPath }) {
+                    siblings
+                } else {
+                    val currentName = currentPath.substringAfterLast("/")
+                    (siblings + FolderChipData(currentName, currentPath))
+                        .distinctBy { it.path }
+                        .sortedBy { it.name }
+                }
+            // 顶层目录和“全部笔记”共用同一组 Pager 页面，避免从全部笔记滑入目录后
+            // pages 立刻从 [全部, 顶层目录...] 变成 [顶层目录...]，导致连续滑动被重建吞掉。
+            if (parent.isBlank()) {
+                listOf(FolderChipData("全部笔记", "")) + siblingPages
             } else {
-                val currentName = currentPath.substringAfterLast("/")
-                (siblings + FolderChipData(currentName, currentPath))
-                    .distinctBy { it.path }
-                    .sortedBy { it.name }
+                siblingPages
             }
         }
     }
-    Log.d(
-        CUSTOM_SORT_FLASH_TAG,
-        "buildFolderPagerPages filter=$currentFilter labels=${normalizedLabels.size} result=${folderChipSummary(result)}",
-    )
+    logFolderStripTrace {
+        "buildFolderPagerPages filter=$currentFilter labels=${normalizedLabels.size} result=${folderChipSummary(result)}"
+    }
     return result
 }
 
@@ -252,7 +270,7 @@ internal fun normalizeFolderPathForUi(path: String): String =
         .replace("\\", "/")
         .split("/")
         .map { it.trim() }
-        .filter { it.isNotBlank() && it != "Unknown" && it != "." }
+        .filter { it.isNotBlank() && it != "." }
         .joinToString("/")
 
 @Composable
@@ -261,23 +279,45 @@ fun FolderChip(
     selected: Boolean = false,
     onClick: () -> Unit,
 ) {
+    val themeStyle = LocalKardLeafThemeStyle.current
+    val isModern = themeStyle != PrefsManager.AppThemeStyle.CLASSIC
+    val isDracula = themeStyle == PrefsManager.AppThemeStyle.DRACULA
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val shape = RoundedCornerShape(if (isDracula) 8.dp else if (isModern) 999.dp else 8.dp)
+    val scale by animateFloatAsState(
+        targetValue = if (isModern && isPressed) 0.96f else 1f,
+        label = "FolderChipPressedScale",
+    )
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = shape,
         color =
-            if (selected) {
+            if (isDracula && selected) {
                 MaterialTheme.colorScheme.primaryContainer
+            } else if (isDracula) {
+                MaterialTheme.colorScheme.surfaceContainerHigh
+            } else if (selected) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else if (isModern) {
+                MaterialTheme.colorScheme.surfaceContainerHigh
             } else {
                 MaterialTheme.colorScheme.secondaryContainer
             },
+        tonalElevation = if (isModern && selected && !isDracula) 3.dp else 0.dp,
+        shadowElevation = if (isModern && selected && !isDracula) 2.dp else 0.dp,
         modifier =
             Modifier
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
                 .border(
-                    width = if (selected) 1.dp else 0.dp,
-                    color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                    shape = RoundedCornerShape(8.dp),
+                    width = if (selected || isDracula) 1.dp else 0.dp,
+                    color = if (selected || isDracula) MaterialTheme.colorScheme.primary.copy(alpha = if (selected) 0.9f else 0.38f) else Color.Transparent,
+                    shape = shape,
                 )
                 .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
+                    interactionSource = interactionSource,
                     indication = null,
                     onClick = onClick,
                 ),
@@ -291,6 +331,8 @@ fun FolderChip(
             color =
                 if (selected) {
                     MaterialTheme.colorScheme.onPrimaryContainer
+                } else if (isModern) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
                     MaterialTheme.colorScheme.onSecondaryContainer
                 },

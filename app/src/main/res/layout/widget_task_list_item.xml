@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/task_widget_item"
+    style="@style/WidgetTaskRow">
+
+    <TextView
+        android:id="@+id/task_widget_item_check"
+        style="@style/WidgetTaskCheckbox" />
+
+    <TextView
+        android:id="@+id/task_widget_item_text"
+        style="@style/WidgetTaskText" />
+</LinearLayout>
