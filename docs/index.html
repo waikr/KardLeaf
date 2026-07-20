@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#4c7a62" />
+  <meta name="description" content="KardLeaf 卡叶笔记是一款本地优先、轻量简洁的 Android Markdown 笔记应用。" />
+  <meta property="og:title" content="KardLeaf / 卡叶笔记" />
+  <meta property="og:description" content="本地优先的 Android Markdown 笔记应用，让你的文字始终掌握在自己手中。" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://raw.githubusercontent.com/waikr/KardLeaf/main/docs/images/home-cards.jpg" />
+  <title>KardLeaf / 卡叶笔记</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="./script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <header class="site-header" id="top">
+    <div class="container nav-shell">
+      <a class="brand" href="#top" aria-label="KardLeaf 首页">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" role="img">
+            <path d="M11 8.5h18.5c4.7 0 8.5 3.8 8.5 8.5v22.5H19.5C14.8 39.5 11 35.7 11 31V8.5Z" />
+            <path d="M16.5 31.2c7.8-1.2 12.7-5.9 15.2-14.2-8.6.4-14 5.2-15.2 14.2Z" />
+            <path d="M17 32c3.6-4.3 7.3-7.7 12.9-11.4" />
+          </svg>
+        </span>
+        <span class="brand-copy">
+          <strong>KardLeaf</strong>
+          <small>卡叶笔记</small>
+        </span>
+      </a>
+
+      <nav class="desktop-nav" aria-label="主导航">
+        <a href="#features">功能</a>
+        <a href="#screenshots">截图</a>
+        <a href="#download">下载</a>
+        <a href="https://github.com/waikr/KardLeaf" target="_blank" rel="noreferrer">GitHub</a>
+      </nav>
+
+      <div class="nav-actions">
+        <button class="icon-button" id="themeToggle" type="button" aria-label="切换深色模式" title="切换深色模式">
+          <svg class="sun-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z" /></svg>
+          <svg class="moon-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.4 14.2A8.5 8.5 0 0 1 9.8 3.6 8.5 8.5 0 1 0 20.4 14.2Z" /></svg>
+        </button>
+        <a class="nav-download" href="https://github.com/waikr/KardLeaf/releases/latest" data-download-link>
+          下载 APK
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="hero-glow hero-glow-one"></div>
+      <div class="hero-glow hero-glow-two"></div>
+      <div class="container hero-grid">
+        <div class="hero-visual reveal">
+          <div class="visual-orbit orbit-one"></div>
+          <div class="visual-orbit orbit-two"></div>
+          <div class="phone phone-back" aria-hidden="true">
+            <div class="phone-screen">
+              <img src="./images/navigation-drawer.jpg" alt="" />
+            </div>
+          </div>
+          <div class="phone phone-front">
+            <div class="phone-camera" aria-hidden="true"></div>
+            <div class="phone-screen">
+              <img src="./images/home-cards.jpg" alt="KardLeaf 首页卡片界面" />
+            </div>
+          </div>
+          <div class="floating-card floating-card-top">
+            <span class="floating-icon">✓</span>
+            <span><strong>本地优先</strong><small>真实 Markdown 文件</small></span>
+          </div>
+          <div class="floating-card floating-card-bottom">
+            <span class="floating-icon">⌁</span>
+            <span><strong>轻量流畅</strong><small>专注移动端记录</small></span>
+          </div>
+        </div>
+
+        <div class="hero-copy reveal">
+          <div class="eyebrow"><span></span> 为 Android 打造的 Markdown 笔记</div>
+          <h1>把灵感写进<br /><span>真正属于你的文件</span></h1>
+          <p class="hero-description">
+            KardLeaf 是一款本地优先、轻量简洁的 Android Markdown 笔记应用。
+            不强制登录，不锁定格式，让记录、整理与迁移都保持自由。
+          </p>
+
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/waikr/KardLeaf/releases/latest" data-download-link>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14" /></svg>
+              <span><small>Android 安装包</small><strong data-download-text>下载最新版 APK</strong></span>
+            </a>
+            <a class="button button-secondary" href="https://github.com/waikr/KardLeaf" target="_blank" rel="noreferrer">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8a9.2 9.2 0 0 0-2.9 17.9c.5.1.6-.2.6-.5v-1.8c-2.8.6-3.4-1.2-3.4-1.2-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 0 1.6 1.1 1.6 1.1.9 1.6 2.4 1.1 2.9.9.1-.7.4-1.1.7-1.4-2.2-.3-4.6-1.1-4.6-4.9 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.5 9.5 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.8-2.3 4.6-4.6 4.9.4.3.7.9.7 1.7v2.6c0 .4.2.6.7.5A9.2 9.2 0 0 0 12 2.8Z" /></svg>
+              查看源代码
+            </a>
+          </div>
+
+          <div class="release-meta" aria-live="polite">
+            <span class="status-dot"></span>
+            <span id="releaseStatus">正在获取最新版本信息…</span>
+          </div>
+
+          <div class="hero-badges" aria-label="应用特性">
+            <span>Android 6.0+</span>
+            <span>Apache 2.0</span>
+            <span>Obsidian 兼容</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="trust-strip" aria-label="核心特点">
+      <div class="container trust-grid">
+        <div><strong>本地文件</strong><span>Markdown / TXT</span></div>
+        <div><strong>无需账号</strong><span>打开即可记录</span></div>
+        <div><strong>灵活同步</strong><span>WebDAV / Syncthing</span></div>
+        <div><strong>自由迁移</strong><span>不被应用锁定</span></div>
+      </div>
+    </section>
+
+    <section class="section" id="features">
+      <div class="container">
+        <div class="section-heading reveal">
+          <div>
+            <span class="section-kicker">为什么选择 KardLeaf</span>
+            <h2>轻量，但不简单</h2>
+          </div>
+          <p>保留 Markdown 的自由，同时补齐移动端记录、整理、预览与管理体验。</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card feature-card-wide reveal">
+            <span class="feature-number">01</span>
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H18a2 2 0 0 1 2 2v14H6.5A2.5 2.5 0 0 1 4 16.5v-11Z" /><path d="M4 16.5A2.5 2.5 0 0 1 6.5 14H20M8 7h8M8 10h5" /></svg>
+            </div>
+            <h3>本地文件优先</h3>
+            <p>正文保存为真实的 Markdown / TXT 文件。备份、迁移、同步和跨应用编辑都更直接。</p>
+            <div class="mini-code"><span>notes/</span><span>├─ 灵感.md</span><span>└─ 项目/计划.md</span></div>
+          </article>
+
+          <article class="feature-card reveal">
+            <span class="feature-number">02</span>
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7" /><path d="m16 15 2 2 4-5" /></svg>
+            </div>
+            <h3>实时编辑与预览</h3>
+            <p>常用 Markdown 格式、任务、图片、代码块和公式，写作与检查排版可以快速切换。</p>
+          </article>
+
+          <article class="feature-card reveal">
+            <span class="feature-number">03</span>
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" /></svg>
+            </div>
+            <h3>灵活分类整理</h3>
+            <p>支持多级目录、顶部分类、侧边栏、标签和属性，让小记录与大型笔记库都井然有序。</p>
+          </article>
+
+          <article class="feature-card reveal">
+            <span class="feature-number">04</span>
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z" /><path d="M4 12a8 8 0 0 1 8-8M20 12a8 8 0 0 1-8 8" /><path d="m9 2 3 2-2 3M15 22l-3-2 2-3" /></svg>
+            </div>
+            <h3>兼容现有工作流</h3>
+            <p>可以配合 Obsidian、VS Code、Typora、WebDAV 或 Syncthing 使用同一批文件。</p>
+          </article>
+
+          <article class="feature-card feature-card-accent reveal">
+            <span class="feature-number">05</span>
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.6 2.8 8.1 7 10 4.2-1.9 7-5.4 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-5" /></svg>
+            </div>
+            <h3>隐私由你掌控</h3>
+            <p>不强制注册账号，不强制上传云端。你可以自己决定笔记放在哪里、怎样同步。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-soft" id="screenshots">
+      <div class="container">
+        <div class="section-heading centered reveal">
+          <span class="section-kicker">界面预览</span>
+          <h2>熟悉、清晰、顺手</h2>
+          <p>从快速记录到长文整理，界面始终围绕内容本身展开。</p>
+        </div>
+
+        <div class="screenshot-tabs" role="tablist" aria-label="截图分类">
+          <button class="screenshot-tab active" type="button" data-filter="all">全部</button>
+          <button class="screenshot-tab" type="button" data-filter="write">编辑</button>
+          <button class="screenshot-tab" type="button" data-filter="manage">管理</button>
+          <button class="screenshot-tab" type="button" data-filter="tools">工具</button>
+        </div>
+
+        <div class="screenshot-grid">
+          <button class="screenshot-card tall reveal" type="button" data-category="manage" data-image="./images/home-cards.jpg" data-title="首页卡片与分类">
+            <img src="./images/home-cards.jpg" alt="首页卡片与分类" loading="lazy" />
+            <span>首页卡片与分类</span>
+          </button>
+          <button class="screenshot-card reveal" type="button" data-category="write" data-image="./images/editor-editing.jpg" data-title="Markdown 编辑器">
+            <img src="./images/editor-editing.jpg" alt="Markdown 编辑器" loading="lazy" />
+            <span>Markdown 编辑器</span>
+          </button>
+          <button class="screenshot-card reveal" type="button" data-category="manage" data-image="./images/navigation-drawer.jpg" data-title="侧边栏导航">
+            <img src="./images/navigation-drawer.jpg" alt="侧边栏导航" loading="lazy" />
+            <span>侧边栏导航</span>
+          </button>
+          <button class="screenshot-card reveal" type="button" data-category="write" data-image="./images/editor-outline-panel.jpg" data-title="文章目录">
+            <img src="./images/editor-outline-panel.jpg" alt="文章目录" loading="lazy" />
+            <span>文章目录</span>
+          </button>
+          <button class="screenshot-card reveal" type="button" data-category="tools" data-image="./images/history.jpg" data-title="历史版本">
+            <img src="./images/history.jpg" alt="历史版本" loading="lazy" />
+            <span>历史版本</span>
+          </button>
+          <button class="screenshot-card reveal" type="button" data-category="tools" data-image="./images/drawing.jpg" data-title="绘图工具">
+            <img src="./images/drawing.jpg" alt="绘图工具" loading="lazy" />
+            <span>绘图工具</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="section download-section" id="download">
+      <div class="container download-card reveal">
+        <div class="download-pattern" aria-hidden="true"></div>
+        <div class="download-copy">
+          <span class="section-kicker light">开始使用</span>
+          <h2>让下一条笔记，真正属于你</h2>
+          <p>从 GitHub Releases 获取最新版 APK。安装前请允许浏览器或文件管理器安装未知来源应用。</p>
+          <div class="download-info">
+            <span><strong id="releaseVersion">最新版本</strong><small>版本</small></span>
+            <span><strong id="releaseSize">APK</strong><small>安装包</small></span>
+            <span><strong>Android 6.0+</strong><small>系统要求</small></span>
+          </div>
+        </div>
+        <div class="download-actions">
+          <a class="button button-light" href="https://github.com/waikr/KardLeaf/releases/latest" data-download-link>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14" /></svg>
+            <span><small>GitHub Releases</small><strong>下载 APK</strong></span>
+          </a>
+          <a class="text-link light" href="https://github.com/waikr/KardLeaf/releases" target="_blank" rel="noreferrer">查看历史版本 →</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href="#top">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 48 48"><path d="M11 8.5h18.5c4.7 0 8.5 3.8 8.5 8.5v22.5H19.5C14.8 39.5 11 35.7 11 31V8.5Z" /><path d="M16.5 31.2c7.8-1.2 12.7-5.9 15.2-14.2-8.6.4-14 5.2-15.2 14.2Z" /><path d="M17 32c3.6-4.3 7.3-7.7 12.9-11.4" /></svg>
+          </span>
+          <span class="brand-copy"><strong>KardLeaf</strong><small>卡叶笔记</small></span>
+        </a>
+        <p>本地优先的 Android Markdown 笔记应用。</p>
+      </div>
+      <div class="footer-links">
+        <div><strong>项目</strong><a href="https://github.com/waikr/KardLeaf">GitHub</a><a href="https://github.com/waikr/KardLeaf/releases">版本发布</a><a href="https://github.com/waikr/KardLeaf/issues">问题反馈</a></div>
+        <div><strong>了解</strong><a href="#features">功能特性</a><a href="#screenshots">界面预览</a><a href="https://github.com/waikr/KardLeaf/blob/main/README.md">使用说明</a></div>
+      </div>
+    </div>
+    <div class="container footer-bottom">
+      <span>© <span id="year"></span> KardLeaf. 基于 Apache License 2.0 开源。</span>
+      <span>Made for writing, built for freedom.</span>
+    </div>
+  </footer>
+
+  <dialog class="lightbox" id="lightbox">
+    <button class="lightbox-close" type="button" aria-label="关闭预览">×</button>
+    <img src="" alt="" />
+    <p></p>
+  </dialog>
+</body>
+</html>
