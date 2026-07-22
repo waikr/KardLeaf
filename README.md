@@ -1,4 +1,8 @@
-# KardLeaf / 卡叶笔记
+<p align="center">
+  <img src="docs/images/kardleaf-icon.svg" width="132" alt="KardLeaf 卡叶笔记图标" />
+</p>
+
+<h1 align="center">KardLeaf / 卡叶笔记</h1>
 
 <p align="center">
   <strong>本地优先、实时编辑、实时预览的 Android Markdown 笔记应用</strong>
@@ -13,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/waikr/KardLeaf/releases">下载最新版</a>
+  <a href="https://github.com/waikr/KardLeaf/releases"><strong>下载最新版</strong></a>
   ·
   <a href="#界面预览">界面预览</a>
   ·
@@ -25,14 +29,22 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/home-cards.jpg" width="220" alt="KardLeaf 首页卡片与分类" />
-  <img src="docs/images/editor-editing.jpg" width="220" alt="KardLeaf 实时 Markdown 编辑" />
-  <img src="docs/images/navigation-drawer.jpg" width="220" alt="KardLeaf 侧边栏" />
+  <img src="docs/images/home-cards.jpg" width="210" alt="KardLeaf 首页卡片与分类" />
+  &nbsp;
+  <img src="docs/images/editor-editing.jpg" width="210" alt="KardLeaf 实时 Markdown 编辑" />
+  &nbsp;
+  <img src="docs/images/navigation-drawer.jpg" width="210" alt="KardLeaf 侧边栏" />
 </p>
 
-KardLeaf 是一款轻量、简洁、偏本地优先的 Android Markdown 笔记应用。它不会把正文锁进应用私有数据库，而是把笔记保存为真实的 `.md` / `.txt` 文件，方便备份、迁移、同步，也方便继续用 Obsidian、VS Code、Typora 等工具管理同一批文件。
-
-它支持 **实时编辑、实时预览**，并兼容 Obsidian 常见 Markdown 文件、文件夹结构、`#标签` 和 YAML 属性（front matter）工作流。
+<table align="center">
+  <tr>
+    <td align="left">
+      KardLeaf 是一款轻量、简洁、偏本地优先的 Android Markdown 笔记应用。<br />
+      正文保存为真实的 <code>.md</code> / <code>.txt</code> 文件，方便备份、迁移、同步，并可继续使用 Obsidian、VS Code、Typora 等工具管理。<br /><br />
+      支持 <strong>实时编辑、实时预览</strong>，并兼容 Obsidian 常见 Markdown 文件、文件夹结构、<code>#标签</code> 和 YAML 属性（front matter）工作流。
+    </td>
+  </tr>
+</table>
 
 ---
 
