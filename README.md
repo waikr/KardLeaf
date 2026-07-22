@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/kardleaf-icon.svg" width="132" alt="KardLeaf 卡叶笔记图标" />
+  <img src="docs/images/kardleaf.svg" width="132" alt="KardLeaf 卡叶笔记图标" />
 </p>
 
 <h1 align="center">KardLeaf / 卡叶笔记</h1>
