@@ -133,7 +133,7 @@ const markdownTheme = EditorView.theme({
   // Each bar is 2px wide, anchored at fixed x positions: 0, 14px, 28px, 42px.
   '.cm-blockQuote-d0': {
     backgroundImage:
-      'linear-gradient(rgba(180, 140, 55, 0.6), rgba(180, 140, 55, 0.6))',
+      'linear-gradient(rgba(127, 127, 127, 0.55), rgba(127, 127, 127, 0.55))',
     backgroundSize: '2px 100%',
     backgroundPosition: '0 0',
     backgroundRepeat: 'no-repeat',
@@ -141,8 +141,8 @@ const markdownTheme = EditorView.theme({
   },
   '.cm-blockQuote-d1': {
     backgroundImage:
-      'linear-gradient(rgba(180, 140, 55, 0.6), rgba(180, 140, 55, 0.6)), ' +
-      'linear-gradient(rgba(180, 140, 55, 0.6), rgba(180, 140, 55, 0.6))',
+      'linear-gradient(rgba(127, 127, 127, 0.55), rgba(127, 127, 127, 0.55)), ' +
+      'linear-gradient(rgba(127, 127, 127, 0.55), rgba(127, 127, 127, 0.55))',
     backgroundSize: '2px 100%, 2px 100%',
     backgroundPosition: '0 0, 14px 0',
     backgroundRepeat: 'no-repeat, no-repeat',
@@ -150,9 +150,9 @@ const markdownTheme = EditorView.theme({
   },
   '.cm-blockQuote-d2': {
     backgroundImage:
-      'linear-gradient(rgba(180, 140, 55, 0.6), rgba(180, 140, 55, 0.6)), ' +
-      'linear-gradient(rgba(180, 140, 55, 0.6), rgba(180, 140, 55, 0.6)), ' +
-      'linear-gradient(rgba(180, 140, 55, 0.6), rgba(180, 140, 55, 0.6))',
+      'linear-gradient(rgba(127, 127, 127, 0.55), rgba(127, 127, 127, 0.55)), ' +
+      'linear-gradient(rgba(127, 127, 127, 0.55), rgba(127, 127, 127, 0.55)), ' +
+      'linear-gradient(rgba(127, 127, 127, 0.55), rgba(127, 127, 127, 0.55))',
     backgroundSize: '2px 100%, 2px 100%, 2px 100%',
     backgroundPosition: '0 0, 14px 0, 28px 0',
     backgroundRepeat: 'no-repeat, no-repeat, no-repeat',
@@ -160,10 +160,10 @@ const markdownTheme = EditorView.theme({
   },
   '.cm-blockQuote-d3': {
     backgroundImage:
-      'linear-gradient(rgba(180, 140, 55, 0.6), rgba(180, 140, 55, 0.6)), ' +
-      'linear-gradient(rgba(180, 140, 55, 0.6), rgba(180, 140, 55, 0.6)), ' +
-      'linear-gradient(rgba(180, 140, 55, 0.6), rgba(180, 140, 55, 0.6)), ' +
-      'linear-gradient(rgba(180, 140, 55, 0.6), rgba(180, 140, 55, 0.6))',
+      'linear-gradient(rgba(127, 127, 127, 0.55), rgba(127, 127, 127, 0.55)), ' +
+      'linear-gradient(rgba(127, 127, 127, 0.55), rgba(127, 127, 127, 0.55)), ' +
+      'linear-gradient(rgba(127, 127, 127, 0.55), rgba(127, 127, 127, 0.55)), ' +
+      'linear-gradient(rgba(127, 127, 127, 0.55), rgba(127, 127, 127, 0.55))',
     backgroundSize: '2px 100%, 2px 100%, 2px 100%, 2px 100%',
     backgroundPosition: '0 0, 14px 0, 28px 0, 42px 0',
     backgroundRepeat: 'no-repeat, no-repeat, no-repeat, no-repeat',
@@ -173,11 +173,13 @@ const markdownTheme = EditorView.theme({
     textDecoration: 'underline',
   },
   '.cm-headerMark': {
-    opacity: '0.35',
+    color: '#ababab',
+    opacity: '1',
     marginRight: '0.25em',
   },
   '.cm-quoteMark': {
-    opacity: '0.45',
+    color: '#9a9a9a',
+    opacity: '1',
   },
   '.cm-taskCompleted, .cm-taskCompleted span': {
     textDecoration: 'line-through',

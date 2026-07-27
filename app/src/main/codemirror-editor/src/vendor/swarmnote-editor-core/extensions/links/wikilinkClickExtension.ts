@@ -14,6 +14,7 @@
  */
 import type { EditorState, Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
+import { syntaxTree } from '@codemirror/language';
 import type { OnLinkOpen } from './ctrlClickLinksExtension';
 
 /**
@@ -25,6 +26,11 @@ export function findWikilinkAtPosition(
   pos: number,
   state: EditorState,
 ): { target: string; from: number; to: number } | null {
+  let context = syntaxTree(state).resolveInner(pos, -1);
+  while (context) {
+    if (['FencedCode', 'CodeBlock', 'InlineCode', 'FrontMatter'].includes(context.type.name)) return null;
+    context = context.parent;
+  }
   const line = state.doc.lineAt(pos);
   const text = line.text;
   const offset = pos - line.from;
@@ -34,7 +40,9 @@ export function findWikilinkAtPosition(
   while ((m = regex.exec(text)) !== null) {
     const start = m.index;
     const end = m.index + m[0].length;
-    if (offset >= start && offset <= end) {
+    let escapedSlashes = 0;
+    for (let i = start - 1; i >= 0 && text[i] === '\\'; i--) escapedSlashes++;
+    if (offset >= start && offset <= end && !(start > 0 && text[start - 1] === '!') && escapedSlashes % 2 === 0) {
       return {
         target: m[1],
         from: line.from + start,
@@ -81,56 +89,32 @@ export function createWikilinkClickExtension(onLinkOpen: OnLinkOpen): Extension 
           return true;
         }
 
-        // 普通单击：reveal 状态下不跳转，让 CM6 设 cursor 编辑
-        const sel = view.state.selection.main;
-        const isRevealed = sel.from <= hit.to && sel.to >= hit.from;
-        if (isRevealed) return false;
-
-        // 普通单击 + 装饰状态 → 跳转
+        // 普通单击直接跳转，输入新 wikilink 仍通过 `[[` 候选菜单完成。
         event.preventDefault();
         onLinkOpen(hit.target);
         return true;
       },
     }),
 
-    // 移动：500ms 长按（仍保留 Cmd+Click fallback 给桌面）
+    // 移动端单击直接跳转，避免要求用户长按或触发二次导航。
     EditorView.domEventHandlers({
       touchstart(event, view) {
         if (event.touches.length !== 1) return false;
         const touch = event.touches[0];
         const startX = touch.clientX;
         const startY = touch.clientY;
-
-        const controller = new AbortController();
-        const { signal } = controller;
-        const timer = setTimeout(() => {
-          controller.abort();
-          const pos = view.posAtCoords({ x: startX, y: startY });
+        const onTouchEnd = (endEvent: TouchEvent) => {
+          const endTouch = endEvent.changedTouches[0];
+          if (!endTouch || Math.hypot(endTouch.clientX - startX, endTouch.clientY - startY) > 12) return;
+          const pos = view.posAtCoords({ x: endTouch.clientX, y: endTouch.clientY });
           if (pos === null) return;
           const hit = findWikilinkAtPosition(pos, view.state);
-          if (hit) {
-            event.preventDefault();
+          if (hit && pos > hit.from && pos < hit.to) {
+            endEvent.preventDefault();
             onLinkOpen(hit.target);
           }
-        }, 500);
-
-        view.dom.addEventListener(
-          'touchend',
-          () => {
-            clearTimeout(timer);
-            controller.abort();
-          },
-          { once: true, signal },
-        );
-        view.dom.addEventListener(
-          'touchmove',
-          () => {
-            clearTimeout(timer);
-            controller.abort();
-          },
-          { once: true, signal },
-        );
-
+        };
+        view.dom.addEventListener('touchend', onTouchEnd, { once: true });
         return false;
       },
     }),

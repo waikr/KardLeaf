@@ -12,6 +12,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -89,6 +90,11 @@ internal fun DrawingPadScreen(
     onSave: (Bitmap, String) -> Unit,
     modifier: Modifier = Modifier,
     initialDrawingSource: String? = null,
+    initialBackgroundBitmap: Bitmap? = null,
+    initialSourceWidth: Int = 0,
+    initialSourceHeight: Int = 0,
+    initialBackgroundMimeType: String? = null,
+    initialExifOrientation: Int = 1,
 ) {
     val restoredDrawingState = remember(initialDrawingSource) { parseDrawingPadSource(initialDrawingSource) }
     var drawingView by remember { mutableStateOf<KardLeafDrawingPadView?>(null) }
@@ -97,9 +103,10 @@ internal fun DrawingPadScreen(
     var canvasColor by remember { mutableStateOf(Color(restoredDrawingState?.canvasColor ?: AndroidColor.WHITE)) }
     var penColor by remember { mutableStateOf(Color(restoredDrawingState?.penColor ?: AndroidColor.BLACK)) }
     var highlighterColor by remember { mutableStateOf(Color(restoredDrawingState?.highlighterColor ?: AndroidColor.YELLOW)) }
-    var penStrokeWidth by remember { mutableStateOf(restoredDrawingState?.penStrokeWidth ?: 7f) }
-    var highlighterStrokeWidth by remember { mutableStateOf(restoredDrawingState?.highlighterStrokeWidth ?: 18f) }
-    var eraserStrokeWidth by remember { mutableStateOf(restoredDrawingState?.eraserStrokeWidth ?: 28f) }
+    val sourceWidthScale = (initialSourceWidth.takeIf { it > 0 }?.toFloat() ?: 1080f) / 1080f
+    var penStrokeWidth by remember { mutableStateOf(restoredDrawingState?.penStrokeWidth ?: (7f * sourceWidthScale)) }
+    var highlighterStrokeWidth by remember { mutableStateOf(restoredDrawingState?.highlighterStrokeWidth ?: (18f * sourceWidthScale)) }
+    var eraserStrokeWidth by remember { mutableStateOf(restoredDrawingState?.eraserStrokeWidth ?: (28f * sourceWidthScale)) }
 
     val saveButtonAccent = MaterialTheme.colorScheme.primary
 
@@ -171,7 +178,7 @@ internal fun DrawingPadScreen(
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "关闭画图")
                 }
                 Text(
-                    text = "绘图",
+                    text = if (initialBackgroundBitmap != null || restoredDrawingState?.documentType == "imageAnnotation") "图片标注" else "绘图",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
@@ -223,6 +230,13 @@ internal fun DrawingPadScreen(
                         KardLeafLog.d(DrawingPadLogTag, "AndroidView factory create drawing view")
                         KardLeafDrawingPadView(context).also { view ->
                             drawingView = view
+                            view.configureImageBackground(
+                                bitmap = initialBackgroundBitmap,
+                                sourceWidth = initialSourceWidth,
+                                sourceHeight = initialSourceHeight,
+                                mimeType = initialBackgroundMimeType,
+                                exifOrientation = initialExifOrientation,
+                            )
                             view.restoreDrawingSourceState(restoredDrawingState)
                             view.applyState(
                                 tool = tool,
@@ -239,6 +253,13 @@ internal fun DrawingPadScreen(
                     update = { view ->
                         KardLeafLog.d(DrawingPadLogTag, "AndroidView update drawing view width=${view.width} height=${view.height}")
                         drawingView = view
+                        view.configureImageBackground(
+                            bitmap = initialBackgroundBitmap,
+                            sourceWidth = initialSourceWidth,
+                            sourceHeight = initialSourceHeight,
+                            mimeType = initialBackgroundMimeType,
+                            exifOrientation = initialExifOrientation,
+                        )
                         view.applyState(
                             tool = tool,
                             grid = grid,
@@ -439,7 +460,7 @@ private fun DrawingPadControls(
             Slider(
                 value = activeWidth,
                 onValueChange = onActiveWidthChange,
-                valueRange = 2f..54f,
+                valueRange = 2f..180f,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -508,6 +529,9 @@ private fun DrawingPadScreenPreview() {
 }
 
 private data class DrawingPadSourceState(
+    val version: Int,
+    val documentType: String,
+    val coordinateSpace: String,
     val canvasWidth: Int,
     val canvasHeight: Int,
     val grid: DrawingGrid,
@@ -517,6 +541,9 @@ private data class DrawingPadSourceState(
     val penStrokeWidth: Float,
     val highlighterStrokeWidth: Float,
     val eraserStrokeWidth: Float,
+    val backgroundSourceReference: String?,
+    val backgroundMimeType: String?,
+    val exifOrientation: Int,
     val strokes: List<DrawingPadSourceStroke>,
 )
 
@@ -531,6 +558,11 @@ private fun parseDrawingPadSource(source: String?): DrawingPadSourceState? =
     runCatching {
         if (source.isNullOrBlank()) return@runCatching null
         val json = JSONObject(source)
+        val version = json.optInt("version", 1)
+        if (version !in 1..2) return@runCatching null
+        val canvas = json.optJSONObject("canvas")
+        val background = json.optJSONObject("background")
+        val toolState = json.optJSONObject("toolState")
         val strokesJson = json.optJSONArray("strokes") ?: JSONArray()
         val strokes = buildList {
             for (index in 0 until strokesJson.length()) {
@@ -550,7 +582,7 @@ private fun parseDrawingPadSource(source: String?): DrawingPadSourceState? =
                         DrawingPadSourceStroke(
                             tool = parseDrawingTool(strokeJson.optString("tool"), DrawingTool.Pen),
                             color = strokeJson.optInt("color", AndroidColor.BLACK),
-                            width = strokeJson.optDouble("width", 7.0).toFloat().coerceIn(2f, 54f),
+                            width = strokeJson.optDouble("width", 7.0).toFloat().coerceIn(2f, 180f),
                             points = points,
                         ),
                     )
@@ -558,15 +590,35 @@ private fun parseDrawingPadSource(source: String?): DrawingPadSourceState? =
             }
         }
         DrawingPadSourceState(
-            canvasWidth = json.optInt("canvasWidth", 0),
-            canvasHeight = json.optInt("canvasHeight", 0),
-            grid = parseDrawingGrid(json.optString("grid"), DrawingGrid.Square),
-            canvasColor = json.optInt("canvasColor", AndroidColor.WHITE),
-            penColor = json.optInt("penColor", AndroidColor.BLACK),
-            highlighterColor = json.optInt("highlighterColor", AndroidColor.YELLOW),
-            penStrokeWidth = json.optDouble("penStrokeWidth", 7.0).toFloat().coerceIn(2f, 54f),
-            highlighterStrokeWidth = json.optDouble("highlighterStrokeWidth", 18.0).toFloat().coerceIn(2f, 54f),
-            eraserStrokeWidth = json.optDouble("eraserStrokeWidth", 28.0).toFloat().coerceIn(2f, 54f),
+            version = version,
+            documentType = if (version == 1) "drawing" else json.optString("documentType", "drawing"),
+            coordinateSpace = if (version == 1) "canvas" else json.optString("coordinateSpace", "canvas"),
+            canvasWidth = canvas?.optInt("width", 0) ?: json.optInt("canvasWidth", 0),
+            canvasHeight = canvas?.optInt("height", 0) ?: json.optInt("canvasHeight", 0),
+            grid = parseDrawingGrid(background?.optString("grid") ?: json.optString("grid"), DrawingGrid.Square),
+            canvasColor = background?.optInt("color", AndroidColor.WHITE) ?: json.optInt("canvasColor", AndroidColor.WHITE),
+            penColor = toolState?.optInt("penColor", AndroidColor.BLACK) ?: json.optInt("penColor", AndroidColor.BLACK),
+            highlighterColor =
+                toolState?.optInt("highlighterColor", AndroidColor.YELLOW)
+                    ?: json.optInt("highlighterColor", AndroidColor.YELLOW),
+            penStrokeWidth =
+                (
+                    toolState?.optDouble("penStrokeWidth", 7.0)
+                        ?: json.optDouble("penStrokeWidth", 7.0)
+                ).toFloat().coerceIn(2f, 180f),
+            highlighterStrokeWidth =
+                (
+                    toolState?.optDouble("highlighterStrokeWidth", 18.0)
+                        ?: json.optDouble("highlighterStrokeWidth", 18.0)
+                ).toFloat().coerceIn(2f, 180f),
+            eraserStrokeWidth =
+                (
+                    toolState?.optDouble("eraserStrokeWidth", 28.0)
+                        ?: json.optDouble("eraserStrokeWidth", 28.0)
+                ).toFloat().coerceIn(2f, 180f),
+            backgroundSourceReference = background?.optString("sourceReference")?.takeIf { it.isNotBlank() },
+            backgroundMimeType = background?.optString("mimeType")?.takeIf { it.isNotBlank() },
+            exifOrientation = background?.optInt("exifOrientation", 1) ?: 1,
             strokes = strokes,
         )
     }.getOrNull()
@@ -601,7 +653,7 @@ private data class DrawingStroke(
 
 private class KardLeafDrawingPadView(context: Context) : View(context) {
     private val strokes = mutableListOf<DrawingStroke>()
-    private val redoStrokes = mutableListOf<DrawingStroke>()
+    private val history = DrawingSnapshotHistory<DrawingStroke>()
     private var currentPath: Path? = null
     private val currentPoints = mutableListOf<PointF>()
     private var tool: DrawingTool = DrawingTool.Pen
@@ -615,6 +667,60 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
     private var lastX = 0f
     private var lastY = 0f
     private var pendingRestoreState: DrawingPadSourceState? = null
+    private var documentType = "drawing"
+    private var coordinateSpace = "canvas"
+    private var backgroundBitmap: Bitmap? = null
+    private var sourceWidth = 0
+    private var sourceHeight = 0
+    private var backgroundMimeType: String? = null
+    private var backgroundSourceReference: String? = null
+    private var exifOrientation = 1
+    private var imageScale = 1f
+    private var imageOffsetX = 0f
+    private var imageOffsetY = 0f
+    private var lastScaleFocusX = 0f
+    private var lastScaleFocusY = 0f
+    private var eraserSessionBefore: List<DrawingStroke>? = null
+    private var eraserSessionChanged = false
+
+    private val scaleDetector =
+        ScaleGestureDetector(
+            context,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+                    cancelCurrentStroke()
+                    lastScaleFocusX = detector.focusX
+                    lastScaleFocusY = detector.focusY
+                    return isImageAnnotation()
+                }
+
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    if (!isImageAnnotation()) return false
+                    val sourceAtFocus = screenToSource(detector.focusX, detector.focusY)
+                    val nextScale = (imageScale * detector.scaleFactor).coerceIn(1f, 5f)
+                    imageScale = nextScale
+                    val baseScale = annotationBaseScale()
+                    val scaledWidth = sourceWidth * baseScale * imageScale
+                    val scaledHeight = sourceHeight * baseScale * imageScale
+                    imageOffsetX = detector.focusX - ((width - scaledWidth) / 2f + sourceAtFocus.x * baseScale * imageScale)
+                    imageOffsetY = detector.focusY - ((height - scaledHeight) / 2f + sourceAtFocus.y * baseScale * imageScale)
+                    imageOffsetX += detector.focusX - lastScaleFocusX
+                    imageOffsetY += detector.focusY - lastScaleFocusY
+                    lastScaleFocusX = detector.focusX
+                    lastScaleFocusY = detector.focusY
+                    clampImageOffset()
+                    invalidate()
+                    return true
+                }
+
+                override fun onScaleEnd(detector: ScaleGestureDetector) {
+                    KardLeafLog.d(
+                        DrawingPadLogTag,
+                        "annotation transform scale=$imageScale offset=$imageOffsetX,$imageOffsetY",
+                    )
+                }
+            },
+        )
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -641,11 +747,34 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
         super.onSizeChanged(w, h, oldw, oldh)
         KardLeafLog.d(DrawingPadLogTag, "drawing view size changed ${oldw}x$oldh -> ${w}x$h")
         applyPendingRestoreStateIfNeeded()
+        clampImageOffset()
+    }
+
+    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+    fun configureImageBackground(
+        bitmap: Bitmap?,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        mimeType: String?,
+        exifOrientation: Int,
+    ) {
+        if (bitmap === backgroundBitmap && this.sourceWidth == sourceWidth && this.sourceHeight == sourceHeight) return
+        backgroundBitmap = bitmap
+        if (bitmap != null && sourceWidth > 0 && sourceHeight > 0) {
+            documentType = "imageAnnotation"
+            coordinateSpace = "sourceImagePixels"
+            this.sourceWidth = sourceWidth
+            this.sourceHeight = sourceHeight
+            backgroundMimeType = mimeType
+            this.exifOrientation = exifOrientation
+        }
+        invalidate()
     }
 
     fun restoreDrawingSourceState(state: DrawingPadSourceState?) {
         strokes.clear()
-        redoStrokes.clear()
+        history.clear()
         currentPath = null
         currentPoints.clear()
         pendingRestoreState = state
@@ -656,8 +785,27 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
     private fun applyPendingRestoreStateIfNeeded() {
         val state = pendingRestoreState ?: return
         if (width <= 0 || height <= 0) return
-        val scaleX = if (state.canvasWidth > 0) width.toFloat() / state.canvasWidth.toFloat() else 1f
-        val scaleY = if (state.canvasHeight > 0) height.toFloat() / state.canvasHeight.toFloat() else 1f
+        documentType = state.documentType
+        coordinateSpace = state.coordinateSpace
+        if (state.documentType == "imageAnnotation") {
+            sourceWidth = state.canvasWidth.coerceAtLeast(sourceWidth)
+            sourceHeight = state.canvasHeight.coerceAtLeast(sourceHeight)
+            backgroundMimeType = state.backgroundMimeType ?: backgroundMimeType
+            backgroundSourceReference = state.backgroundSourceReference
+            exifOrientation = state.exifOrientation
+        }
+        val scaleX =
+            if (state.documentType != "imageAnnotation" && state.canvasWidth > 0) {
+                width.toFloat() / state.canvasWidth.toFloat()
+            } else {
+                1f
+            }
+        val scaleY =
+            if (state.documentType != "imageAnnotation" && state.canvasHeight > 0) {
+                height.toFloat() / state.canvasHeight.toFloat()
+            } else {
+                1f
+            }
         strokes.clear()
         strokes.addAll(
             state.strokes.map { stroke ->
@@ -671,7 +819,12 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
                 )
             },
         )
+        history.initializeRestored(strokes)
         pendingRestoreState = null
+        KardLeafLog.d(
+            DrawingPadLogTag,
+            "restore version=${state.version} type=${state.documentType} strokes=${strokes.size} undo=${history.undoCount}",
+        )
         invalidate()
     }
 
@@ -690,58 +843,85 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
         this.canvasColor = canvasColor
         this.penColor = penColor
         this.highlighterColor = highlighterColor
-        this.penStrokeWidth = penStrokeWidth.coerceIn(2f, 54f)
-        this.highlighterStrokeWidth = highlighterStrokeWidth.coerceIn(2f, 54f)
-        this.eraserStrokeWidth = eraserStrokeWidth.coerceIn(2f, 54f)
+        this.penStrokeWidth = penStrokeWidth.coerceIn(2f, 180f)
+        this.highlighterStrokeWidth = highlighterStrokeWidth.coerceIn(2f, 180f)
+        this.eraserStrokeWidth = eraserStrokeWidth.coerceIn(2f, 180f)
         invalidate()
     }
 
     fun undo() {
-        KardLeafLog.d(DrawingPadLogTag, "undo clicked strokes=${strokes.size} redo=${redoStrokes.size}")
-        if (strokes.isNotEmpty()) {
-            redoStrokes.add(strokes.removeAt(strokes.lastIndex))
-            invalidate()
-        }
+        logHistory("undo-before")
+        restoreSnapshot(history.undo(snapshotStrokes()) ?: return)
+        logHistory("undo-after")
     }
 
     fun redo() {
-        KardLeafLog.d(DrawingPadLogTag, "redo clicked strokes=${strokes.size} redo=${redoStrokes.size}")
-        if (redoStrokes.isNotEmpty()) {
-            strokes.add(redoStrokes.removeAt(redoStrokes.lastIndex))
-            invalidate()
-        }
+        logHistory("redo-before")
+        restoreSnapshot(history.redo(snapshotStrokes()) ?: return)
+        logHistory("redo-after")
     }
 
     fun clear() {
-        KardLeafLog.d(DrawingPadLogTag, "clear clicked strokes=${strokes.size} redo=${redoStrokes.size}")
+        logHistory("clear-before")
+        if (strokes.isEmpty()) return
+        recordBeforeMutation()
         strokes.clear()
-        redoStrokes.clear()
         currentPath = null
         currentPoints.clear()
         invalidate()
+        logHistory("clear-after")
     }
 
     fun exportBitmap(): Bitmap {
-        val safeWidth = width.coerceAtLeast(1)
-        val safeHeight = height.coerceAtLeast(1)
-        KardLeafLog.d(DrawingPadLogTag, "exportBitmap requested view=${width}x$height safe=${safeWidth}x$safeHeight strokes=${strokes.size} redo=${redoStrokes.size}")
+        if (isImageAnnotation()) {
+            // Repository re-decodes immutable source and renders the final export on Dispatchers.IO.
+            return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        }
+        val (safeWidth, safeHeight) =
+            width.coerceAtLeast(1) to height.coerceAtLeast(1)
+        KardLeafLog.d(
+            DrawingPadLogTag,
+            "exportBitmap requested view=${width}x$height export=${safeWidth}x$safeHeight strokes=${strokes.size}",
+        )
         return Bitmap.createBitmap(safeWidth, safeHeight, Bitmap.Config.ARGB_8888).also { bitmap ->
-            drawDrawingContent(Canvas(bitmap))
+            if (isImageAnnotation()) drawAnnotationExport(Canvas(bitmap), safeWidth, safeHeight) else drawDrawingContent(Canvas(bitmap))
         }
     }
 
     fun exportDrawingSource(): String {
+        val canvasWidth = if (isImageAnnotation()) sourceWidth.coerceAtLeast(1) else width.coerceAtLeast(1)
+        val canvasHeight = if (isImageAnnotation()) sourceHeight.coerceAtLeast(1) else height.coerceAtLeast(1)
         val root = JSONObject()
-            .put("version", 1)
-            .put("canvasWidth", width.coerceAtLeast(1))
-            .put("canvasHeight", height.coerceAtLeast(1))
-            .put("grid", grid.name)
-            .put("canvasColor", canvasColor)
-            .put("penColor", penColor)
-            .put("highlighterColor", highlighterColor)
-            .put("penStrokeWidth", penStrokeWidth)
-            .put("highlighterStrokeWidth", highlighterStrokeWidth)
-            .put("eraserStrokeWidth", eraserStrokeWidth)
+            .put("version", 2)
+            .put("documentType", if (isImageAnnotation()) "imageAnnotation" else "drawing")
+            .put("coordinateSpace", if (isImageAnnotation()) "sourceImagePixels" else "canvas")
+            .put("canvas", JSONObject().put("width", canvasWidth).put("height", canvasHeight))
+            .put(
+                "background",
+                if (isImageAnnotation()) {
+                    JSONObject()
+                        .put("type", "image")
+                        .put("sourceReference", backgroundSourceReference.orEmpty())
+                        .put("mimeType", backgroundMimeType.orEmpty())
+                        .put("sourceWidth", sourceWidth)
+                        .put("sourceHeight", sourceHeight)
+                        .put("exifOrientation", exifOrientation)
+                } else {
+                    JSONObject()
+                        .put("type", "grid")
+                        .put("color", canvasColor)
+                        .put("grid", grid.name)
+                },
+            )
+            .put(
+                "toolState",
+                JSONObject()
+                    .put("penColor", penColor)
+                    .put("highlighterColor", highlighterColor)
+                    .put("penStrokeWidth", penStrokeWidth)
+                    .put("highlighterStrokeWidth", highlighterStrokeWidth)
+                    .put("eraserStrokeWidth", eraserStrokeWidth),
+            )
         val strokesJson = JSONArray()
         strokes.forEach { stroke ->
             val pointsJson = JSONArray()
@@ -761,13 +941,31 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        val x = event.x
-        val y = event.y
+        if (isImageAnnotation()) {
+            scaleDetector.onTouchEvent(event)
+            if (event.pointerCount > 1 || scaleDetector.isInProgress || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+                cancelCurrentStroke()
+                parent.requestDisallowInterceptTouchEvent(true)
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                    parent.requestDisallowInterceptTouchEvent(false)
+                }
+                return true
+            }
+        }
+        val point = if (isImageAnnotation()) screenToSource(event.x, event.y) else PointF(event.x, event.y)
+        val x = point.x
+        val y = point.y
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                KardLeafLog.d(DrawingPadLogTag, "touch down tool=$tool x=$x y=$y")
+                if (isImageAnnotation() && !isSourcePointInside(x, y)) return true
+                KardLeafLog.d(
+                    DrawingPadLogTag,
+                    "touch down tool=$tool screen=${event.x},${event.y} source=$x,$y scale=$imageScale offset=$imageOffsetX,$imageOffsetY",
+                )
                 parent.requestDisallowInterceptTouchEvent(true)
                 if (tool == DrawingTool.StrokeEraser) {
+                    eraserSessionBefore = snapshotStrokes()
+                    eraserSessionChanged = false
                     removeStrokeNear(x, y)
                     return true
                 }
@@ -780,6 +978,7 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                if (isImageAnnotation() && !isSourcePointInside(x, y)) return true
                 if (tool == DrawingTool.StrokeEraser) {
                     removeStrokeNear(x, y)
                     return true
@@ -792,9 +991,25 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
                 return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                KardLeafLog.d(DrawingPadLogTag, "touch end action=${event.actionMasked} tool=$tool x=$x y=$y")
+                KardLeafLog.d(
+                    DrawingPadLogTag,
+                    "touch end action=${event.actionMasked} tool=$tool screen=${event.x},${event.y} source=$x,$y " +
+                        "scale=$imageScale offset=$imageOffsetX,$imageOffsetY",
+                )
+                if (tool == DrawingTool.StrokeEraser) {
+                    if (eraserSessionChanged) {
+                        eraserSessionBefore?.let { history.recordBefore(it) }
+                        logHistory("stroke-erase")
+                    }
+                    eraserSessionBefore = null
+                    eraserSessionChanged = false
+                    parent.requestDisallowInterceptTouchEvent(false)
+                    invalidate()
+                    return true
+                }
                 if (tool != DrawingTool.StrokeEraser) {
                     currentPath?.let { path ->
+                        recordBeforeMutation()
                         path.lineTo(x, y)
                         currentPoints.add(PointF(x, y))
                         strokes.add(
@@ -806,7 +1021,6 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
                                 width = currentStrokeWidth(),
                             ),
                         )
-                        redoStrokes.clear()
                     }
                 }
                 currentPath = null
@@ -825,6 +1039,10 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
     }
 
     private fun drawDrawingContent(canvas: Canvas) {
+        if (isImageAnnotation()) {
+            drawAnnotationContent(canvas)
+            return
+        }
         drawCanvasBackground(canvas)
 
         // Draw strokes on a transparent layer so the area eraser only clears ink.
@@ -850,6 +1068,58 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
             )
         }
         canvas.restoreToCount(layer)
+    }
+
+    private fun drawAnnotationContent(canvas: Canvas) {
+        canvas.drawColor(AndroidColor.BLACK)
+        backgroundBitmap?.let { bitmap ->
+            canvas.drawBitmap(bitmap, null, annotationDestinationRect(), bitmapPaint)
+        }
+        val layer = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)
+        strokes.forEach { stroke -> drawAnnotationStroke(canvas, stroke, annotationDisplayScale(), annotationDestinationRect().left, annotationDestinationRect().top) }
+        currentPath?.let {
+            drawAnnotationStroke(
+                canvas,
+                DrawingStroke(Path(it), currentPoints.map { point -> PointF(point.x, point.y) }, tool, currentStrokeColor(), currentStrokeWidth()),
+                annotationDisplayScale(),
+                annotationDestinationRect().left,
+                annotationDestinationRect().top,
+            )
+        }
+        canvas.restoreToCount(layer)
+    }
+
+    private fun drawAnnotationExport(
+        canvas: Canvas,
+        exportWidth: Int,
+        exportHeight: Int,
+    ) {
+        canvas.drawColor(AndroidColor.BLACK)
+        backgroundBitmap?.let { bitmap ->
+            canvas.drawBitmap(bitmap, null, RectF(0f, 0f, exportWidth.toFloat(), exportHeight.toFloat()), bitmapPaint)
+        }
+        val layer = canvas.saveLayer(0f, 0f, exportWidth.toFloat(), exportHeight.toFloat(), null)
+        val exportScale = exportWidth.toFloat() / sourceWidth.coerceAtLeast(1)
+        strokes.forEach { stroke -> drawAnnotationStroke(canvas, stroke, exportScale, 0f, 0f) }
+        canvas.restoreToCount(layer)
+    }
+
+    private fun drawAnnotationStroke(
+        canvas: Canvas,
+        stroke: DrawingStroke,
+        scale: Float,
+        offsetX: Float,
+        offsetY: Float,
+    ) {
+        val mappedPoints = stroke.points.map { point -> PointF(offsetX + point.x * scale, offsetY + point.y * scale) }
+        drawStroke(
+            canvas,
+            stroke.copy(
+                path = buildDrawingPath(mappedPoints),
+                points = mappedPoints,
+                width = stroke.width * scale,
+            ),
+        )
     }
 
     private fun drawCanvasBackground(canvas: Canvas) {
@@ -921,12 +1191,107 @@ private class KardLeafDrawingPadView(context: Context) : View(context) {
         val index = strokes.indexOfLast { stroke -> stroke.isNear(x, y, eraserStrokeWidth) }
         if (index >= 0) {
             strokes.removeAt(index)
-            redoStrokes.clear()
+            eraserSessionChanged = true
             invalidate()
         }
     }
 
-    private fun DrawingStroke.isNear(x: Float, y: Float, threshold: Float): Boolean {
+    private fun isImageAnnotation(): Boolean =
+        documentType == "imageAnnotation" && backgroundBitmap != null && sourceWidth > 0 && sourceHeight > 0
+
+    private fun annotationBaseScale(): Float =
+        calculateFitCenterTransform(
+            sourceWidth = sourceWidth,
+            sourceHeight = sourceHeight,
+            viewWidth = width,
+            viewHeight = height,
+        ).scale
+
+    private fun annotationDisplayScale(): Float = annotationBaseScale() * imageScale
+
+    private fun annotationDestinationRect(): RectF {
+        val transform =
+            calculateFitCenterTransform(
+                sourceWidth = sourceWidth,
+                sourceHeight = sourceHeight,
+                viewWidth = width,
+                viewHeight = height,
+                zoom = imageScale,
+                panX = imageOffsetX,
+                panY = imageOffsetY,
+            )
+        val displayScale = transform.scale
+        val displayWidth = sourceWidth * displayScale
+        val displayHeight = sourceHeight * displayScale
+        val left = transform.offsetX
+        val top = transform.offsetY
+        return RectF(left, top, left + displayWidth, top + displayHeight)
+    }
+
+    private fun screenToSource(
+        screenX: Float,
+        screenY: Float,
+    ): PointF {
+        val transform =
+            calculateFitCenterTransform(
+                sourceWidth = sourceWidth,
+                sourceHeight = sourceHeight,
+                viewWidth = width,
+                viewHeight = height,
+                zoom = imageScale,
+                panX = imageOffsetX,
+                panY = imageOffsetY,
+            )
+        val (x, y) = transform.screenToSource(screenX, screenY)
+        return PointF(x, y)
+    }
+
+    private fun isSourcePointInside(
+        x: Float,
+        y: Float,
+    ): Boolean =
+        x in 0f..sourceWidth.toFloat() && y in 0f..sourceHeight.toFloat()
+
+    private fun clampImageOffset() {
+        if (!isImageAnnotation() || width <= 0 || height <= 0) return
+        val displayScale = annotationDisplayScale()
+        val maxX = ((sourceWidth * displayScale - width) / 2f).coerceAtLeast(0f)
+        val maxY = ((sourceHeight * displayScale - height) / 2f).coerceAtLeast(0f)
+        imageOffsetX = imageOffsetX.coerceIn(-maxX, maxX)
+        imageOffsetY = imageOffsetY.coerceIn(-maxY, maxY)
+    }
+
+    private fun cancelCurrentStroke() {
+        currentPath = null
+        currentPoints.clear()
+        invalidate()
+    }
+
+    private fun snapshotStrokes(): List<DrawingStroke> = strokes.toList()
+
+    private fun restoreSnapshot(snapshot: List<DrawingStroke>) {
+        strokes.clear()
+        strokes.addAll(snapshot)
+        cancelCurrentStroke()
+        invalidate()
+    }
+
+    private fun recordBeforeMutation() {
+        history.recordBefore(snapshotStrokes())
+    }
+
+    private fun logHistory(operation: String) {
+        KardLeafLog.d(
+            DrawingPadLogTag,
+            "history operation=$operation strokes=${strokes.size} undo=${history.undoCount} redo=${history.redoCount}",
+        )
+    }
+
+    private fun DrawingStroke.isNear(
+        x: Float,
+        y: Float,
+        threshold: Float,
+    ): Boolean {
         val bounds = RectF()
         path.computeBounds(bounds, true)
         val expanded = threshold + width

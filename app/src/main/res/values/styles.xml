@@ -13,21 +13,51 @@
         <item name="android:windowNoTitle">true</item>
     </style>
 
+    <style name="Theme.KardLeaf.WidgetOverlay" parent="Theme.KardLeaf.TaskReminderAlert">
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+
+    <style name="Theme.KardLeaf.Quillpad" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
+        <item name="colorPrimary">#2563EB</item>
+        <item name="colorPrimaryVariant">#1D4ED8</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSurface">#F8FAFC</item>
+        <item name="colorOnSurface">#0F172A</item>
+        <item name="android:windowBackground">#F8FAFC</item>
+    </style>
+
+    <style name="TextAppearance.KardLeaf.QuillpadTitle" parent="TextAppearance.AppCompat.Title">
+        <item name="android:textColor">?attr/colorOnSurface</item>
+        <item name="android:textSize">20sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="TextAppearance.KardLeaf.QuillpadBody" parent="TextAppearance.MaterialComponents.Body1">
+        <item name="android:textColor">?attr/colorOnSurface</item>
+        <item name="android:textSize">16sp</item>
+    </style>
+
     <style name="WidgetTaskRow">
         <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">40dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">36dp</item>
         <item name="android:background">@drawable/bg_widget_row</item>
         <item name="android:clickable">true</item>
         <item name="android:focusable">true</item>
         <item name="android:gravity">center_vertical</item>
         <item name="android:orientation">horizontal</item>
-        <item name="android:paddingStart">12dp</item>
-        <item name="android:paddingEnd">12dp</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingTop">5dp</item>
+        <item name="android:paddingEnd">10dp</item>
+        <item name="android:paddingBottom">5dp</item>
     </style>
 
     <style name="WidgetTaskCheckbox">
-        <item name="android:layout_width">20dp</item>
-        <item name="android:layout_height">20dp</item>
+        <item name="android:layout_width">18dp</item>
+        <item name="android:layout_height">18dp</item>
         <item name="android:background">@drawable/bg_widget_checkbox</item>
         <item name="android:clickable">true</item>
         <item name="android:focusable">true</item>
@@ -36,28 +66,27 @@
     <style name="WidgetTaskText">
         <item name="android:layout_width">0dp</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginStart">11dp</item>
+        <item name="android:layout_marginStart">10dp</item>
         <item name="android:layout_weight">1</item>
         <item name="android:ellipsize">end</item>
         <item name="android:includeFontPadding">false</item>
-        <item name="android:maxLines">1</item>
+        <item name="android:maxLines">2</item>
         <item name="android:textColor">#0F172A</item>
         <item name="android:textSize">13sp</item>
     </style>
 
     <style name="WidgetNoteRow">
         <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">0dp</item>
-        <item name="android:layout_marginTop">6dp</item>
-        <item name="android:layout_weight">1</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">40dp</item>
         <item name="android:background">@drawable/bg_widget_row</item>
         <item name="android:clickable">true</item>
         <item name="android:focusable">true</item>
         <item name="android:orientation">vertical</item>
-        <item name="android:paddingStart">12dp</item>
-        <item name="android:paddingTop">8dp</item>
-        <item name="android:paddingEnd">12dp</item>
-        <item name="android:paddingBottom">8dp</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingTop">4dp</item>
+        <item name="android:paddingEnd">10dp</item>
+        <item name="android:paddingBottom">4dp</item>
     </style>
 
     <style name="WidgetNoteTitle">
@@ -74,7 +103,7 @@
     <style name="WidgetNoteBody">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">3dp</item>
+        <item name="android:layout_marginTop">2dp</item>
         <item name="android:ellipsize">end</item>
         <item name="android:includeFontPadding">false</item>
         <item name="android:maxLines">1</item>

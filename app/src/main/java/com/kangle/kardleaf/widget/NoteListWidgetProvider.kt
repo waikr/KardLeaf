@@ -24,91 +24,140 @@ class NoteListWidgetProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray,
     ) {
-        appWidgetIds.forEach { appWidgetId -> updateWidgetAsync(context, appWidgetManager, appWidgetId) }
-    }
-
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        if (intent.action == ACTION_NEXT_FOLDER) {
-            val appWidgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
-            if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
-            widgetScope.launch {
+        val pendingResult = goAsync()
+        widgetScope.launch {
+            try {
                 val appContext = context.applicationContext
-                val noteDao = AppDatabase.getDatabase(appContext).noteDao()
-                val folders = noteDao.getActiveFoldersSync().distinct().sorted()
-                val choices = listOf<String?>(null) + folders
-                val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                val current = prefs.getString(folderPrefKey(appWidgetId), null)
-                val currentIndex = choices.indexOf(current).takeIf { it >= 0 } ?: 0
-                val next = choices[(currentIndex + 1) % choices.size]
-                prefs.edit().putString(folderPrefKey(appWidgetId), next).apply()
-                updateWidgetAsync(appContext, AppWidgetManager.getInstance(appContext), appWidgetId)
+                appWidgetIds.forEach { appWidgetId -> updateWidget(appContext, appWidgetManager, appWidgetId) }
+            } finally {
+                pendingResult.finish()
             }
         }
     }
 
-    private fun updateWidgetAsync(
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        appWidgetIds.forEach { appWidgetId ->
+            editor.remove(folderPrefKey(appWidgetId))
+            editor.remove(hideTitlePrefKey(appWidgetId))
+            editor.remove(previewLinesPrefKey(appWidgetId))
+        }
+        editor.apply()
+        super.onDeleted(context, appWidgetIds)
+    }
+
+    private suspend fun updateWidget(
         context: Context,
         appWidgetManager: AppWidgetManager,
         appWidgetId: Int,
     ) {
-        widgetScope.launch {
-            val appContext = context.applicationContext
-            val noteDao = AppDatabase.getDatabase(appContext).noteDao()
-            val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val folder = prefs.getString(folderPrefKey(appWidgetId), null)
-            val notes = if (folder == null) {
-                noteDao.getWidgetRecentNoteShells(MAX_NOTES)
-            } else {
-                noteDao.getWidgetNoteShellsByFolder(folder, folderPrefix(folder), MAX_NOTES)
-            }
-            val views = createRemoteViews(appContext, appWidgetId, folder, notes)
-            appWidgetManager.updateAppWidget(appWidgetId, views)
+        val noteDao = AppDatabase.getDatabase(context).noteDao()
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val folder = prefs.getString(folderPrefKey(appWidgetId), null)
+        val hasNotes = if (folder == null) {
+            noteDao.getWidgetRecentNoteShells(1).isNotEmpty()
+        } else {
+            noteDao.getWidgetNoteShellsByFolder(folder, folderPrefix(folder), 1).isNotEmpty()
         }
+        val views = createRemoteViews(context, appWidgetId, folder, hasNotes)
+        appWidgetManager.updateAppWidget(appWidgetId, views)
+        appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.note_widget_list)
     }
 
     private fun createRemoteViews(
         context: Context,
         appWidgetId: Int,
         folder: String?,
-        notes: List<NoteEntity>,
+        hasNotes: Boolean,
     ): RemoteViews = RemoteViews(context.packageName, R.layout.widget_note_list).apply {
         setTextViewText(R.id.note_widget_folder, folderTitle(context, folder))
-        setOnClickPendingIntent(R.id.note_widget_folder, nextFolderPendingIntent(context, appWidgetId))
-        setOnClickPendingIntent(R.id.note_widget_add, newNotePendingIntent(context, appWidgetId))
-        setViewVisibility(R.id.note_widget_empty, if (notes.isEmpty()) View.VISIBLE else View.GONE)
-
-        noteRows.forEachIndexed { index, row ->
-            val note = notes.getOrNull(index)
-            setViewVisibility(row.rowId, if (note == null) View.GONE else View.VISIBLE)
-            if (note != null) {
-                setTextViewText(row.titleId, compactTitle(note))
-                setTextViewText(row.bodyId, compactBody(note))
-                setOnClickPendingIntent(row.rowId, openNotePendingIntent(context, appWidgetId, index, note.filePath))
-            }
-        }
+        setOnClickPendingIntent(R.id.note_widget_folder_control, folderPickerPendingIntent(context, appWidgetId))
+        setOnClickPendingIntent(R.id.note_widget_open_folder, openFolderPendingIntent(context, appWidgetId, folder))
+        setOnClickPendingIntent(R.id.note_widget_add, newNotePendingIntent(context, appWidgetId, folder))
+        setOnClickPendingIntent(R.id.note_widget_more, settingsPendingIntent(context, appWidgetId))
+        setRemoteAdapter(
+            R.id.note_widget_list,
+            Intent(context, NoteListWidgetService::class.java).apply {
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                data = Uri.parse("kardleaf://note-widget/list/$appWidgetId")
+            },
+        )
+        setEmptyView(R.id.note_widget_list, R.id.note_widget_empty)
+        setViewVisibility(R.id.note_widget_empty, if (hasNotes) View.GONE else View.VISIBLE)
+        setPendingIntentTemplate(
+            R.id.note_widget_list,
+            PendingIntent.getActivity(
+                context,
+                REQUEST_OPEN_NOTE + appWidgetId,
+                Intent(context, NoteWidgetQuickAddActivity::class.java).apply {
+                    action = Intent.ACTION_VIEW
+                    data = Uri.parse("kardleaf://note-widget/edit/$appWidgetId")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+            ),
+        )
     }
 
-    private fun nextFolderPendingIntent(context: Context, appWidgetId: Int): PendingIntent {
-        val intent = Intent(context, NoteListWidgetProvider::class.java).apply {
-            action = ACTION_NEXT_FOLDER
+    private fun folderPickerPendingIntent(context: Context, appWidgetId: Int): PendingIntent {
+        val intent = Intent(context, NoteWidgetFolderPickerActivity::class.java).apply {
+            data = Uri.parse("kardleaf://note-widget/folder/$appWidgetId")
             putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION
         }
-        return PendingIntent.getBroadcast(
+        return PendingIntent.getActivity(
             context,
-            REQUEST_NEXT_FOLDER + appWidgetId,
+            REQUEST_PICK_FOLDER + appWidgetId,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
     }
 
-    private fun newNotePendingIntent(context: Context, appWidgetId: Int): PendingIntent {
+    private fun openFolderPendingIntent(
+        context: Context,
+        appWidgetId: Int,
+        folder: String?,
+    ): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
-            data = Uri.parse("kardleaf://new?root=1")
+            putExtra(EXTRA_OPEN_FOLDER, folder.orEmpty())
+            putExtra(EXTRA_OPEN_ALL_NOTES, folder == null)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
                 Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        return PendingIntent.getActivity(
+            context,
+            REQUEST_OPEN_FOLDER + appWidgetId,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    private fun settingsPendingIntent(context: Context, appWidgetId: Int): PendingIntent {
+        val intent = Intent(context, NoteWidgetFolderPickerActivity::class.java).apply {
+            data = Uri.parse("kardleaf://note-widget/settings/$appWidgetId")
+            putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+            putExtra(NoteWidgetFolderPickerActivity.EXTRA_OPEN_SETTINGS, true)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION
+        }
+        return PendingIntent.getActivity(
+            context,
+            REQUEST_SETTINGS + appWidgetId,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    private fun newNotePendingIntent(
+        context: Context,
+        appWidgetId: Int,
+        folder: String?,
+    ): PendingIntent {
+        val intent = Intent(context, NoteWidgetQuickAddActivity::class.java).apply {
+            data = Uri.parse("kardleaf://note-widget/quick-add/$appWidgetId")
+            putExtra(NoteWidgetQuickAddActivity.EXTRA_TARGET_FOLDER, folder.orEmpty())
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION
         }
         return PendingIntent.getActivity(
             context,
@@ -118,68 +167,97 @@ class NoteListWidgetProvider : AppWidgetProvider() {
         )
     }
 
-    private fun openNotePendingIntent(
-        context: Context,
-        appWidgetId: Int,
-        index: Int,
-        notePath: String,
-    ): PendingIntent {
-        val intent = Intent(context, MainActivity::class.java).apply {
-            action = Intent.ACTION_VIEW
-            data = Uri.parse("kardleaf://widget-note/${Uri.encode(notePath)}")
-            putExtra("note_id", notePath)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        return PendingIntent.getActivity(
-            context,
-            REQUEST_OPEN_NOTE + appWidgetId * 10 + index,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-    }
-
     companion object {
-        private const val ACTION_NEXT_FOLDER = "com.kangle.kardleaf.action.NEXT_NOTE_WIDGET_FOLDER"
         private const val PREFS_NAME = "note_list_widget"
-        private const val MAX_NOTES = 5
-        private const val REQUEST_NEXT_FOLDER = 30_000
+        internal const val MAX_NOTES = 100
+        private const val REQUEST_PICK_FOLDER = 30_000
         private const val REQUEST_NEW_NOTE = 31_000
         private const val REQUEST_OPEN_NOTE = 32_000
+        private const val REQUEST_OPEN_FOLDER = 33_000
+        private const val REQUEST_SETTINGS = 34_000
+        private const val MIN_PREVIEW_LINES = 1
+        private const val MAX_PREVIEW_LINES = 3
+        private const val DEFAULT_PREVIEW_LINES = 1
+        internal const val EXTRA_OPEN_FOLDER = "kardleaf_widget_open_folder"
+        internal const val EXTRA_OPEN_ALL_NOTES = "kardleaf_widget_open_all_notes"
         private val widgetScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-        private data class NoteRow(
-            val rowId: Int,
-            val titleId: Int,
-            val bodyId: Int,
-        )
-
-        private val noteRows = listOf(
-            NoteRow(R.id.note_widget_row_1, R.id.note_widget_title_1, R.id.note_widget_body_1),
-            NoteRow(R.id.note_widget_row_2, R.id.note_widget_title_2, R.id.note_widget_body_2),
-            NoteRow(R.id.note_widget_row_3, R.id.note_widget_title_3, R.id.note_widget_body_3),
-            NoteRow(R.id.note_widget_row_4, R.id.note_widget_title_4, R.id.note_widget_body_4),
-            NoteRow(R.id.note_widget_row_5, R.id.note_widget_title_5, R.id.note_widget_body_5),
-        )
 
         private fun folderPrefKey(appWidgetId: Int): String = "folder_$appWidgetId"
 
-        private fun folderPrefix(folder: String): String = if (folder.isBlank()) "/" else "$folder/%"
+        private fun hideTitlePrefKey(appWidgetId: Int): String = "hide_title_$appWidgetId"
 
-        private fun folderTitle(context: Context, folder: String?): String = when {
-            folder == null -> context.getString(R.string.all_notes) + " ▾"
-            folder.isBlank() -> context.getString(R.string.root_folder_no_label) + " ▾"
-            else -> "$folder ▾"
+        private fun previewLinesPrefKey(appWidgetId: Int): String = "preview_lines_$appWidgetId"
+
+        internal fun selectedFolder(context: Context, appWidgetId: Int): String? =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(folderPrefKey(appWidgetId), null)
+
+        internal fun isTitleHidden(context: Context, appWidgetId: Int): Boolean =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(hideTitlePrefKey(appWidgetId), false)
+
+        internal fun previewLineCount(context: Context, appWidgetId: Int): Int =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getInt(previewLinesPrefKey(appWidgetId), DEFAULT_PREVIEW_LINES)
+                .coerceIn(MIN_PREVIEW_LINES, MAX_PREVIEW_LINES)
+
+        internal fun selectFolder(context: Context, appWidgetId: Int, folder: String?) {
+            val appContext = context.applicationContext
+            val editor = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            if (folder == null) {
+                editor.remove(folderPrefKey(appWidgetId))
+            } else {
+                editor.putString(folderPrefKey(appWidgetId), folder)
+            }
+            editor.apply()
+            widgetScope.launch {
+                NoteListWidgetProvider().updateWidget(
+                    appContext,
+                    AppWidgetManager.getInstance(appContext),
+                    appWidgetId,
+                )
+            }
         }
 
-        private fun compactTitle(note: NoteEntity): String = note.title
+        internal fun setDisplayOptions(
+            context: Context,
+            appWidgetId: Int,
+            hideTitle: Boolean,
+            previewLines: Int,
+        ) {
+            val appContext = context.applicationContext
+            appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(hideTitlePrefKey(appWidgetId), hideTitle)
+                .putInt(
+                    previewLinesPrefKey(appWidgetId),
+                    previewLines.coerceIn(MIN_PREVIEW_LINES, MAX_PREVIEW_LINES),
+                )
+                .apply()
+            widgetScope.launch {
+                NoteListWidgetProvider().updateWidget(
+                    appContext,
+                    AppWidgetManager.getInstance(appContext),
+                    appWidgetId,
+                )
+            }
+        }
+
+        internal fun folderPrefix(folder: String): String = if (folder.isBlank()) "/" else "$folder/%"
+
+        private fun folderTitle(context: Context, folder: String?): String = when {
+            folder == null -> context.getString(R.string.widget_folder_all_notes)
+            folder.isBlank() -> context.getString(R.string.widget_folder_root)
+            else -> folder.substringAfterLast('/')
+        }
+
+        internal fun compactTitle(note: NoteEntity): String = note.title
             .ifBlank { note.fileName.removeSuffix(".md") }
             .replace(Regex("\\s+"), " ")
             .trim()
             .ifBlank { "未命名" }
 
-        private fun compactBody(note: NoteEntity): String {
+        internal fun compactBody(note: NoteEntity): String {
             val raw = note.contentPreview.ifBlank { note.content }
             return raw
                 .replace(Regex("[#>*_`\\-\\[\\]()!]+"), " ")
@@ -189,10 +267,13 @@ class NoteListWidgetProvider : AppWidgetProvider() {
         }
 
         fun refreshAllWidgets(context: Context) {
-            val manager = AppWidgetManager.getInstance(context)
-            val widgetIds = manager.getAppWidgetIds(ComponentName(context, NoteListWidgetProvider::class.java))
-            widgetIds.forEach { widgetId ->
-                NoteListWidgetProvider().updateWidgetAsync(context, manager, widgetId)
+            val appContext = context.applicationContext
+            widgetScope.launch {
+                val manager = AppWidgetManager.getInstance(appContext)
+                val widgetIds = manager.getAppWidgetIds(ComponentName(appContext, NoteListWidgetProvider::class.java))
+                widgetIds.forEach { widgetId ->
+                    NoteListWidgetProvider().updateWidget(appContext, manager, widgetId)
+                }
             }
         }
     }

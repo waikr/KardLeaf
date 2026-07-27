@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import com.kangle.kardleaf.data.task.MarkdownTaskSource
 import kotlinx.coroutines.flow.Flow
@@ -20,6 +21,12 @@ interface TaskDao {
         """,
     )
     fun observeTasks(): Flow<List<TaskEntity>>
+
+    @Query("SELECT * FROM task_groups ORDER BY sortOrder ASC")
+    fun observeGroups(): Flow<List<TaskGroupEntity>>
+
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) FROM task_groups")
+    suspend fun getMaxGroupOrder(): Int
 
     @Query(
         """
@@ -63,9 +70,37 @@ interface TaskDao {
     @Insert
     suspend fun insert(task: TaskEntity): Long
 
+    @Insert
+    suspend fun insertGroup(group: TaskGroupEntity): Long
+
     @Update
     suspend fun update(task: TaskEntity)
 
+    @Update
+    suspend fun updateGroup(group: TaskGroupEntity)
+
     @Delete
     suspend fun delete(task: TaskEntity)
+
+    @Delete
+    suspend fun deleteGroup(group: TaskGroupEntity)
+
+    @Query("UPDATE tasks SET groupId = :groupId, updatedAt = :updatedAt WHERE id = :taskId")
+    suspend fun moveTaskToGroup(taskId: Long, groupId: Long?, updatedAt: Long)
+
+    @Query("UPDATE tasks SET groupId = NULL, updatedAt = :updatedAt WHERE groupId = :groupId")
+    suspend fun moveGroupTasksToUngrouped(groupId: Long, updatedAt: Long)
+
+    @Transaction
+    suspend fun deleteGroupKeepingTasks(group: TaskGroupEntity, updatedAt: Long) {
+        moveGroupTasksToUngrouped(group.id, updatedAt)
+        deleteGroup(group)
+    }
+
+    @Transaction
+    suspend fun swapGroupOrder(first: TaskGroupEntity, second: TaskGroupEntity) {
+        updateGroup(first.copy(sortOrder = -1))
+        updateGroup(second.copy(sortOrder = first.sortOrder))
+        updateGroup(first.copy(sortOrder = second.sortOrder))
+    }
 }

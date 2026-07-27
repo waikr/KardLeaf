@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/action_undo"
+        android:enabled="false"
+        android:icon="@drawable/ic_undo"
+        android:title="@string/action_undo"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_redo"
+        android:enabled="false"
+        android:icon="@drawable/ic_redo"
+        android:title="@string/action_redo"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_image"
+        android:icon="@drawable/ic_photo"
+        android:title="@string/action_insert_image"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_drawing"
+        android:title="@string/action_insert_drawing"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_heading_1"
+        android:title="@string/action_insert_heading_1"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_heading_2"
+        android:title="@string/action_insert_heading_2"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_heading_3"
+        android:title="@string/action_insert_heading_3"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_preview"
+        android:icon="@drawable/ic_show"
+        android:title="@string/action_preview"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_divider"
+        android:icon="@drawable/ic_horizontal_rule"
+        android:title="@string/action_insert_divider"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_bold"
+        android:icon="@drawable/ic_bold"
+        android:title="@string/action_insert_bold_text"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_italics"
+        android:icon="@drawable/ic_italics"
+        android:title="@string/action_insert_italics"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_underline"
+        android:title="@string/action_insert_underline"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_strikethrough"
+        android:icon="@drawable/ic_strikethrough"
+        android:title="@string/action_insert_strikethrough"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_link"
+        android:icon="@drawable/ic_link"
+        android:title="@string/action_insert_link"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_code"
+        android:icon="@drawable/ic_code"
+        android:title="@string/action_insert_code"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_code_block"
+        android:title="@string/action_insert_code_block"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_quote"
+        android:icon="@drawable/ic_quote"
+        android:title="@string/action_insert_quote"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_math"
+        android:title="@string/action_insert_math"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_bullet_list"
+        android:title="@string/action_insert_bullet_list"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_ordered_list"
+        android:title="@string/action_insert_ordered_list"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_toggle_check_line"
+        android:icon="@drawable/ic_box_checked_outline"
+        android:title="@string/action_toggle_check_line"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_complete_check_line"
+        android:title="@string/action_complete_check_line"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_table"
+        android:icon="@drawable/ic_table"
+        android:title="@string/action_insert_table"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_insert_highlight"
+        android:icon="@drawable/ic_highlight"
+        android:title="@string/action_insert_highlight"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_indent"
+        android:icon="@drawable/ic_indent"
+        android:title="@string/action_indent"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_outdent"
+        android:icon="@drawable/ic_outdent"
+        android:title="@string/action_outdent"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_scroll_to_top"
+        android:icon="@drawable/ic_up"
+        android:title="@string/action_scroll_to_top"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_scroll_to_bottom"
+        android:icon="@drawable/ic_down"
+        android:title="@string/action_scroll_to_bottom"
+        app:showAsAction="always" />
+</menu>

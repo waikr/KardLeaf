@@ -6,12 +6,20 @@
     <link rel="stylesheet" href="katex.min.css">
     <style>
         :root {
+            --kl-preview-bg: transparent;
             --kl-preview-fg: #172033;
             --kl-preview-muted: #46627f;
+            --kl-preview-heading: #172033;
+            --kl-preview-accent: #3b82f6;
             --kl-preview-border: #d8e6fb;
             --kl-preview-soft: rgba(228, 241, 255, 0.72);
-            --kl-preview-primary: #3b82f6;
             --kl-preview-code-bg: rgba(228, 241, 255, 0.82);
+            --kl-preview-inline-code-bg: rgba(228, 241, 255, 0.82);
+            --kl-preview-quote-border: #d8e6fb;
+            --kl-preview-quote-fg: #46627f;
+            --kl-preview-quote-bg: transparent;
+            --kl-preview-table-header-bg: rgba(228, 241, 255, 0.82);
+            --kl-preview-hr: #d8e6fb;
             --kl-preview-image-bg: rgba(228, 241, 255, 0.60);
         }
 
@@ -23,7 +31,7 @@
 
         body {
             font-family: sans-serif;
-            margin: 6px 12px;
+            margin: 6px 16px;
             min-height: 100%;
             line-height: 1.55;
             overflow-y: auto;
@@ -56,12 +64,20 @@
         }
 
         body.dark-mode {
+            --kl-preview-bg: transparent;
             --kl-preview-fg: #e5eef8;
             --kl-preview-muted: #c8d8e8;
+            --kl-preview-heading: #e5eef8;
+            --kl-preview-accent: #93c5fd;
             --kl-preview-border: #2b3b4d;
             --kl-preview-soft: rgba(43, 59, 77, 0.72);
-            --kl-preview-primary: #93c5fd;
             --kl-preview-code-bg: rgba(23, 33, 45, 0.92);
+            --kl-preview-inline-code-bg: rgba(23, 33, 45, 0.92);
+            --kl-preview-quote-border: #2b3b4d;
+            --kl-preview-quote-fg: #c8d8e8;
+            --kl-preview-quote-bg: transparent;
+            --kl-preview-table-header-bg: rgba(23, 33, 45, 0.92);
+            --kl-preview-hr: #2b3b4d;
             --kl-preview-image-bg: rgba(43, 59, 77, 0.72);
         }
 
@@ -111,7 +127,8 @@
 
         h1, h2, h3, h4, h5, h6,
         h1 *, h2 *, h3 *, h4 *, h5 *, h6 * {
-            color: var(--kl-preview-fg);
+            color: var(--kl-preview-heading);
+            font-family: var(--kl-preview-heading-font, inherit);
             border: 0 !important;
             border-bottom: 0 !important;
             outline: 0 !important;
@@ -152,13 +169,13 @@
 
         /* Light Mode (Default) */
         body {
-            background-color: transparent;
+            background-color: var(--kl-preview-bg);
             color: var(--kl-preview-fg);
         }
 
         /* Dark Mode */
         body.dark-mode {
-            background-color: transparent;
+            background-color: var(--kl-preview-bg);
             color: var(--kl-preview-fg);
         }
 
@@ -168,33 +185,53 @@
         body.dark-mode h4,
         body.dark-mode h5,
         body.dark-mode h6 {
-            color: var(--kl-preview-fg);
+            color: var(--kl-preview-heading);
         }
 
         a {
-            color: var(--kl-preview-primary);
+            color: var(--kl-preview-accent);
+            text-decoration-thickness: 1px;
+            text-underline-offset: 3px;
         }
 
         body.dark-mode a {
-            color: var(--kl-preview-primary);
+            color: var(--kl-preview-accent);
+        }
+
+        strong {
+            color: var(--kl-preview-strong, inherit);
+        }
+
+        hr {
+            border: 0;
+            border-top: 1px solid var(--kl-preview-hr);
+            margin: 16px 0;
         }
 
         blockquote {
-            border-left: 4px solid var(--kl-preview-border);
-            margin: 0;
-            padding-left: 16px;
-            color: var(--kl-preview-muted);
+            border-left: 4px solid var(--kl-preview-quote-border);
+            margin: 8px 0;
+            padding: 4px 16px;
+            border-radius: 0 8px 8px 0;
+            background: var(--kl-preview-quote-bg);
+            color: var(--kl-preview-quote-fg);
+        }
+
+        blockquote blockquote {
+            margin: 4px 0;
         }
 
         body.dark-mode blockquote {
-            border-left-color: var(--kl-preview-border);
-            color: var(--kl-preview-muted);
+            border-left-color: var(--kl-preview-quote-border);
+            color: var(--kl-preview-quote-fg);
         }
 
         pre {
             background-color: var(--kl-preview-code-bg);
+            color: var(--kl-preview-code-fg, inherit);
             padding: 12px;
-            border-radius: 4px;
+            border: 1px solid var(--kl-preview-code-border, transparent);
+            border-radius: 8px;
             overflow-x: auto;
         }
 
@@ -212,19 +249,34 @@
             position: absolute;
             top: 8px;
             right: 8px;
-            border: 1px solid rgba(0, 0, 0, 0.18);
-            border-radius: 999px;
-            padding: 5px 10px;
-            font-size: 12px;
+            width: 32px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 0;
+            border-radius: 8px;
+            padding: 0;
             color: #111111;
-            background: rgba(255, 255, 255, 0.94);
-            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+            background: transparent;
+            cursor: pointer;
+        }
+
+        .code-copy-button:hover {
+            background: rgba(0, 0, 0, 0.06);
+        }
+
+        .code-copy-button svg {
+            width: 18px;
+            height: 18px;
         }
 
         body.dark-mode .code-copy-button {
             color: #ffffff;
-            background: rgba(0, 0, 0, 0.72);
-            border-color: rgba(255, 255, 255, 0.26);
+        }
+
+        body.dark-mode .code-copy-button:hover {
+            background: rgba(255, 255, 255, 0.1);
         }
 
         body.dark-mode pre {
@@ -233,13 +285,22 @@
 
         code {
             font-family: monospace;
-            background-color: var(--kl-preview-code-bg);
-            padding: 2px 4px;
-            border-radius: 2px;
+            background-color: var(--kl-preview-inline-code-bg);
+            color: var(--kl-preview-inline-code-fg, inherit);
+            padding: 2px 5px;
+            border-radius: 4px;
         }
 
         body.dark-mode code {
-            background-color: var(--kl-preview-code-bg);
+            background-color: var(--kl-preview-inline-code-bg);
+        }
+
+        pre code,
+        body.dark-mode pre code {
+            background-color: transparent;
+            color: inherit;
+            padding: 0;
+            border-radius: 0;
         }
 
         /* Tables */
@@ -301,7 +362,7 @@
         th {
             color: var(--kl-preview-fg);
             font-weight: 700;
-            background: var(--kl-preview-code-bg);
+            background: var(--kl-preview-table-header-bg);
         }
 
         body.dark-mode th,
@@ -321,6 +382,7 @@
         .task-list-item-checkbox {
             margin-right: 8px;
             cursor: pointer;
+            accent-color: var(--kl-preview-accent);
         }
 
         /* Images */
@@ -399,8 +461,48 @@
         md.validateLink = function (url) {
             const value = String(url || '').trim();
             if (/^data:image\//i.test(value)) return true;
+            if (/^kardleaf-wikilink:/i.test(value)) return true;
             return defaultValidateLink(value);
         };
+
+        // Render Obsidian note links as local links. The Android bridge resolves
+        // the target against the current Room-backed note index.
+        md.inline.ruler.before('emphasis', 'kardleaf_wikilink', (state, silent) => {
+            const source = state.src.slice(state.pos);
+            const match = /^\[\[([^\[\]\n]+)\]\]/.exec(source);
+            if (!match) return false;
+            if (state.pos > 0 && state.src[state.pos - 1] === '!') return false;
+            let escapedSlashes = 0;
+            for (let i = state.pos - 1; i >= 0 && state.src[i] === '\\'; i--) escapedSlashes++;
+            if (escapedSlashes % 2 === 1) return false;
+            if (silent) {
+                return true;
+            }
+            const raw = match[1];
+            const firstUnescaped = (value, needle) => {
+                for (let i = 0; i < value.length; i++) {
+                    if (value[i] !== needle) continue;
+                    let slashes = 0;
+                    for (let j = i - 1; j >= 0 && value[j] === '\\'; j--) slashes++;
+                    if (slashes % 2 === 0) return i;
+                }
+                return -1;
+            };
+            const aliasIndex = firstUnescaped(raw, '|');
+            const targetWithFragment = aliasIndex >= 0 ? raw.slice(0, aliasIndex) : raw;
+            const fragmentIndex = firstUnescaped(targetWithFragment, '#');
+            const target = fragmentIndex >= 0 ? targetWithFragment.slice(0, fragmentIndex) : targetWithFragment;
+            const display = aliasIndex >= 0 ? raw.slice(aliasIndex + 1) : (fragmentIndex >= 0 ? target : raw);
+            const open = state.push('link_open', 'a', 1);
+            open.attrs = [['href', 'kardleaf-wikilink:' + encodeURIComponent(targetWithFragment.trim())], ['class', 'kardleaf-wikilink']];
+            open.markup = '[[';
+            const text = state.push('text', '', 0);
+            text.content = display.trim() || target.trim();
+            const close = state.push('link_close', 'a', -1);
+            close.markup = ']]';
+            state.pos += match[0].length;
+            return true;
+        });
 
         // Add support for <u> tag safely
         md.inline.ruler.before('emphasis', 'underline', (state, silent) => {
@@ -758,6 +860,7 @@
                 }
                 attachCheckboxListeners();
                 attachImageClickListeners();
+                attachWikilinkClickListeners();
                 attachCodeBlockCopyButtons();
                 tracePreviewRendered(source);
                 console.log('[KardLeafPreview] render markdown done len=' + source.length + ' elapsed=' + (performance.now() - start).toFixed(1) + 'ms');
@@ -769,6 +872,185 @@
                 return 'plain_error';
             }
         }
+
+        // Preview theme system.
+        // Named palettes reference popular GitHub projects: github-markdown-css (Primer),
+        // Typora Newsprint, Vue/VitePress docs, Atom One, Dracula, Nord and Solarized.
+        // 'follow_app' builds the palette from the app MaterialTheme colors sent by Android.
+        const PREVIEW_THEME_VARS = {
+            bg: '--kl-preview-bg',
+            fg: '--kl-preview-fg',
+            muted: '--kl-preview-muted',
+            heading: '--kl-preview-heading',
+            headingFont: '--kl-preview-heading-font',
+            accent: '--kl-preview-accent',
+            border: '--kl-preview-border',
+            soft: '--kl-preview-soft',
+            codeBg: '--kl-preview-code-bg',
+            codeFg: '--kl-preview-code-fg',
+            codeBorder: '--kl-preview-code-border',
+            inlineCodeBg: '--kl-preview-inline-code-bg',
+            inlineCodeFg: '--kl-preview-inline-code-fg',
+            quoteBorder: '--kl-preview-quote-border',
+            quoteFg: '--kl-preview-quote-fg',
+            quoteBg: '--kl-preview-quote-bg',
+            tableHeaderBg: '--kl-preview-table-header-bg',
+            strong: '--kl-preview-strong',
+            hr: '--kl-preview-hr',
+            imageBg: '--kl-preview-image-bg'
+        };
+
+        const PREVIEW_THEMES = (function () {
+            const serifStack = 'Georgia, "Times New Roman", "Noto Serif CJK SC", serif';
+            const githubLight = {
+                bg: '#ffffff', fg: '#1f2328', muted: '#59636e', heading: '#1f2328', accent: '#0969da',
+                border: '#d1d9e0', soft: '#f6f8fa', codeBg: '#f6f8fa',
+                inlineCodeBg: 'rgba(129, 139, 152, 0.16)',
+                quoteBorder: '#d1d9e0', quoteFg: '#59636e', quoteBg: 'transparent',
+                tableHeaderBg: '#f6f8fa', hr: '#d1d9e0', imageBg: '#ffffff'
+            };
+            const githubDark = {
+                bg: '#0d1117', fg: '#e6edf3', muted: '#8d96a0', heading: '#f0f6fc', accent: '#58a6ff',
+                border: '#30363d', soft: '#161b22', codeBg: '#161b22',
+                inlineCodeBg: 'rgba(110, 118, 129, 0.4)',
+                quoteBorder: '#3d444d', quoteFg: '#8d96a0', quoteBg: 'transparent',
+                tableHeaderBg: '#161b22', hr: '#30363d', imageBg: '#161b22'
+            };
+            const newsprintLight = {
+                bg: '#f3f2ee', fg: '#1f0909', muted: '#5c5c5c', heading: '#1f0909', headingFont: serifStack,
+                accent: '#065588', border: '#d8d6d0', soft: '#e8e6e0', codeBg: '#e8e6e0',
+                inlineCodeBg: '#e8e6e0',
+                quoteBorder: '#787670', quoteFg: '#5c5c5c', quoteBg: 'transparent',
+                tableHeaderBg: '#e8e6e0', hr: '#c8c6c0', imageBg: '#e8e6e0'
+            };
+            const newsprintDark = {
+                bg: '#2b2724', fg: '#e8e0d3', muted: '#a89f92', heading: '#f0e9dd', headingFont: serifStack,
+                accent: '#8fb4d4', border: '#4a443d', soft: '#38332d', codeBg: '#38332d',
+                inlineCodeBg: '#38332d',
+                quoteBorder: '#6b6257', quoteFg: '#a89f92', quoteBg: 'transparent',
+                tableHeaderBg: '#38332d', hr: '#4a443d', imageBg: '#38332d'
+            };
+            const vueLight = {
+                bg: '#ffffff', fg: '#34495e', muted: '#7f8c8d', heading: '#273849', accent: '#42b983',
+                border: '#eaecef', soft: '#f3f5f7', codeBg: '#f8f8f8',
+                inlineCodeBg: 'rgba(27, 31, 35, 0.05)', inlineCodeFg: '#e96900',
+                quoteBorder: '#42b983', quoteFg: '#57626b', quoteBg: 'rgba(66, 185, 131, 0.08)',
+                tableHeaderBg: '#f3f5f7', hr: '#eaecef', imageBg: '#f3f5f7'
+            };
+            const vueDark = {
+                bg: '#1b1b1f', fg: '#dfdfd6', muted: '#98989f', heading: '#ffffff', accent: '#42d392',
+                border: '#32363f', soft: '#202127', codeBg: '#161618',
+                inlineCodeBg: 'rgba(101, 117, 133, 0.16)', inlineCodeFg: '#ffab5c',
+                quoteBorder: '#42d392', quoteFg: '#98989f', quoteBg: 'rgba(66, 211, 146, 0.08)',
+                tableHeaderBg: '#202127', hr: '#32363f', imageBg: '#202127'
+            };
+            const oneLight = {
+                bg: '#fafafa', fg: '#383a42', muted: '#7c7f88', heading: '#383a42', accent: '#4078f2',
+                border: '#dbdbdc', soft: '#f0f0f1', codeBg: '#eaeaeb',
+                inlineCodeBg: '#eaeaeb', inlineCodeFg: '#e45649',
+                quoteBorder: '#c8c8ca', quoteFg: '#7c7f88', quoteBg: 'transparent',
+                tableHeaderBg: '#f0f0f1', hr: '#dbdbdc', imageBg: '#f0f0f1'
+            };
+            const oneDark = {
+                bg: '#282c34', fg: '#abb2bf', muted: '#7f848e', heading: '#e0e6f0', accent: '#61afef',
+                border: '#3e4451', soft: '#2f333d', codeBg: '#21252b',
+                inlineCodeBg: '#2f333d', inlineCodeFg: '#e06c75',
+                quoteBorder: '#4b5263', quoteFg: '#7f848e', quoteBg: 'transparent',
+                tableHeaderBg: '#2f333d', hr: '#3e4451', imageBg: '#2f333d'
+            };
+            const dracula = {
+                bg: '#282a36', fg: '#f8f8f2', muted: '#a5aecb', heading: '#bd93f9', accent: '#8be9fd',
+                border: '#44475a', soft: '#313442', codeBg: '#21222c',
+                inlineCodeBg: 'rgba(68, 71, 90, 0.55)', inlineCodeFg: '#ff79c6',
+                quoteBorder: '#bd93f9', quoteFg: '#b8bedd', quoteBg: 'rgba(189, 147, 249, 0.08)',
+                tableHeaderBg: '#343746', strong: '#ffb86c', hr: '#44475a', imageBg: '#343746'
+            };
+            const nordLight = {
+                bg: '#eceff4', fg: '#2e3440', muted: '#4c566a', heading: '#2e3440', accent: '#5e81ac',
+                border: '#d8dee9', soft: '#e5e9f0', codeBg: '#e5e9f0',
+                inlineCodeBg: '#e5e9f0', inlineCodeFg: '#5e81ac',
+                quoteBorder: '#81a1c1', quoteFg: '#4c566a', quoteBg: 'rgba(129, 161, 193, 0.08)',
+                tableHeaderBg: '#e5e9f0', hr: '#d8dee9', imageBg: '#e5e9f0'
+            };
+            const nordDark = {
+                bg: '#2e3440', fg: '#d8dee9', muted: '#aeb8c9', heading: '#eceff4', accent: '#88c0d0',
+                border: '#434c5e', soft: '#3b4252', codeBg: '#3b4252',
+                inlineCodeBg: '#434c5e', inlineCodeFg: '#88c0d0',
+                quoteBorder: '#81a1c1', quoteFg: '#aeb8c9', quoteBg: 'rgba(136, 192, 208, 0.06)',
+                tableHeaderBg: '#3b4252', hr: '#434c5e', imageBg: '#3b4252'
+            };
+            const solarizedLight = {
+                bg: '#fdf6e3', fg: '#657b83', muted: '#93a1a1', heading: '#073642', accent: '#268bd2',
+                border: '#e6dfc8', soft: '#eee8d5', codeBg: '#eee8d5',
+                inlineCodeBg: '#eee8d5', inlineCodeFg: '#cb4b16',
+                quoteBorder: '#93a1a1', quoteFg: '#657b83', quoteBg: 'transparent',
+                tableHeaderBg: '#eee8d5', hr: '#e6dfc8', imageBg: '#eee8d5'
+            };
+            const solarizedDark = {
+                bg: '#002b36', fg: '#839496', muted: '#758b93', heading: '#93a1a1', accent: '#268bd2',
+                border: '#073642', soft: '#073642', codeBg: '#073642',
+                inlineCodeBg: '#073642', inlineCodeFg: '#cb4b16',
+                quoteBorder: '#586e75', quoteFg: '#758b93', quoteBg: 'transparent',
+                tableHeaderBg: '#073642', hr: '#0a3540', imageBg: '#073642'
+            };
+            return {
+                github: { light: githubLight, dark: githubDark },
+                newsprint: { light: newsprintLight, dark: newsprintDark },
+                vue: { light: vueLight, dark: vueDark },
+                one: { light: oneLight, dark: oneDark },
+                // Dracula 只有暗色官方配色，明暗模式下都保持暗色纸面。
+                dracula: { light: dracula, dark: dracula },
+                nord: { light: nordLight, dark: nordDark },
+                solarized: { light: solarizedLight, dark: solarizedDark }
+            };
+        })();
+
+        function followAppThemeVars(app) {
+            const colors = app || {};
+            return {
+                bg: 'transparent',
+                fg: colors.fg,
+                muted: colors.muted,
+                heading: colors.fg,
+                accent: colors.accent,
+                border: colors.border,
+                soft: colors.soft,
+                codeBg: colors.codeBg,
+                inlineCodeBg: colors.codeBg,
+                inlineCodeFg: colors.accent,
+                quoteBorder: colors.accent,
+                quoteFg: colors.muted,
+                quoteBg: colors.quoteBg,
+                tableHeaderBg: colors.codeBg,
+                hr: colors.border,
+                imageBg: colors.imageBg
+            };
+        }
+
+        window.applyPreviewTheme = function (payloadJson) {
+            let payload = payloadJson;
+            try {
+                if (typeof payload === 'string') payload = JSON.parse(payload);
+            } catch (error) {
+                console.warn('[KardLeafPreview] theme payload parse failed: ' + error);
+                return 'bad_payload';
+            }
+            if (!payload || typeof payload !== 'object') return 'bad_payload';
+            const dark = !!payload.dark;
+            const named = PREVIEW_THEMES[String(payload.theme || '')];
+            const vars = named
+                ? (dark ? named.dark : named.light)
+                : followAppThemeVars(payload.app);
+            const style = document.body.style;
+            Object.keys(PREVIEW_THEME_VARS).forEach((key) => {
+                const value = vars[key];
+                if (value) style.setProperty(PREVIEW_THEME_VARS[key], String(value));
+                else style.removeProperty(PREVIEW_THEME_VARS[key]);
+            });
+            document.body.classList.toggle('dark-mode', dark);
+            console.log('[KardLeafPreview] theme applied name=' + (named ? payload.theme : 'follow_app') + ' dark=' + dark);
+            return 'ok';
+        };
 
         // Main Update Function
         window.updateContent = function (markdown, isDark, androidToken) {
@@ -881,6 +1163,24 @@
             });
         }
 
+        function attachWikilinkClickListeners() {
+            contentDiv.querySelectorAll('a.kardleaf-wikilink').forEach((link) => {
+                link.onclick = function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const href = link.getAttribute('href') || '';
+                    const encoded = href.indexOf('kardleaf-wikilink:') === 0
+                        ? href.slice('kardleaf-wikilink:'.length)
+                        : '';
+                    if (window.Android && window.Android.onPreviewControlTouched) window.Android.onPreviewControlTouched();
+                    if (window.Android && window.Android.onWikilinkClicked) {
+                        window.Android.onWikilinkClicked(decodeURIComponent(encoded));
+                    }
+                    return false;
+                };
+            });
+        }
+
         function attachCodeBlockCopyButtons() {
             const blocks = contentDiv.querySelectorAll('pre');
             blocks.forEach((pre) => {
@@ -892,14 +1192,22 @@
                 const button = document.createElement('button');
                 button.className = 'code-copy-button';
                 button.type = 'button';
-                button.textContent = '复制';
+                button.title = '复制';
+                button.setAttribute('aria-label', '复制');
+                setCodeCopyButtonIcon(button, false);
                 button.onclick = function (event) {
                     event.stopPropagation();
                     if (window.Android && window.Android.copyCodeBlock) {
                         window.Android.copyCodeBlock(pre.innerText || pre.textContent || '');
                     }
-                    button.textContent = '已复制';
-                    setTimeout(() => { button.textContent = '复制'; }, 1200);
+                    setCodeCopyButtonIcon(button, true);
+                    button.title = '已复制';
+                    button.setAttribute('aria-label', '已复制');
+                    setTimeout(() => {
+                        setCodeCopyButtonIcon(button, false);
+                        button.title = '复制';
+                        button.setAttribute('aria-label', '复制');
+                    }, 2000);
                 };
                 button.ontouchstart = function (event) {
                     event.stopPropagation();
@@ -909,6 +1217,12 @@
                 };
                 wrapper.appendChild(button);
             });
+        }
+
+        function setCodeCopyButtonIcon(button, copied) {
+            button.innerHTML = copied
+                ? '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                : '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="3" width="13" height="14" rx="3" stroke="currentColor" stroke-width="2"/><rect x="3" y="8" width="13" height="13" rx="3" stroke="currentColor" stroke-width="2"/></svg>';
         }
 
         function clearSearchHighlights() {

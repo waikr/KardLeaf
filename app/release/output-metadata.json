@@ -1,0 +1,20 @@
+{
+  "version": 3,
+  "artifactType": {
+    "type": "APK",
+    "kind": "Directory"
+  },
+  "applicationId": "com.kangle.kardleaf",
+  "variantName": "release",
+  "elements": [
+    {
+      "type": "SINGLE",
+      "filters": [],
+      "attributes": [],
+      "versionCode": 26,
+      "versionName": "2.6-beta",
+      "outputFile": "app-release.apk"
+    }
+  ],
+  "elementType": "File"
+}

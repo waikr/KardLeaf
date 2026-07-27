@@ -281,6 +281,7 @@ fun KardLeafTheme(
     // Dynamic color is available on Android 12+
     dynamicColor: Boolean = KardLeafCustomFeatures.UseDynamicColor,
     themeRevision: Int = 0,
+    styleSystemBars: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
@@ -365,7 +366,7 @@ fun KardLeafTheme(
     }
 
     val view = LocalView.current
-    if (!view.isInEditMode) {
+    if (!view.isInEditMode && styleSystemBars) {
         SideEffect {
             val window = (view.context as Activity).window
             window.statusBarColor = colorScheme.background.toArgb() // OR surface.toArgb()

@@ -1,6 +1,6 @@
 /**
  * 编辑器命令模块导出
- * 
+ *
  * **功能：**
  * 提供 Markdown 编辑器的各种格式化命令，包括：
  * - 内联格式化（加粗、斜体、代码、删除线、高亮）
@@ -16,6 +16,7 @@ export {
   toggleHighlight,   // 切换高亮
   toggleItalic,      // 切换斜体
   toggleStrike,      // 切换删除线
+  toggleUnderline,   // 切换下划线
 } from './markdown';
 export { toggleBlockquote } from './blockquote';  // 切换引用块
 export { toggleList } from './list';              // 切换列表类型

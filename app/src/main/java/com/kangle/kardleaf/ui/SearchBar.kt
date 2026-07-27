@@ -31,14 +31,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import com.kangle.kardleaf.R
+import com.kangle.kardleaf.localizedText
 import com.kangle.kardleaf.data.repository.PrefsManager
 
 private const val BACK_TRACE_TAG = "KardLeafBackTrace"
@@ -47,6 +52,14 @@ private const val MENU_REOPEN_GUARD_MS = 250L
 @Composable
 fun SearchBar(viewModel: MainViewModel) {
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        runCatching { focusRequester.requestFocus() }
+        keyboardController?.show()
+    }
 
     Row(
         modifier =
@@ -61,6 +74,7 @@ fun SearchBar(viewModel: MainViewModel) {
             modifier =
                 Modifier
                     .weight(1f)
+                    .focusRequester(focusRequester)
                     .padding(horizontal = 8.dp),
             singleLine = true,
             textStyle =
@@ -262,7 +276,7 @@ fun SortButton(viewModel: MainViewModel) {
 
         if (showCustomSortDialog && canCustomSort) {
             CustomSortDialog(
-                folderName = folderFilter?.name ?: "全部笔记",
+                folderName = folderFilter?.name ?: localizedText("全部笔记", "All notes"),
                 notes = customSortNotes,
                 onDismiss = { showCustomSortDialog = false },
                 onSave = { paths ->

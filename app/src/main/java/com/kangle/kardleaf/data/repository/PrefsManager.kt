@@ -2,18 +2,14 @@
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
-import android.util.Base64
-import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.BuildConfig
+import com.kangle.kardleaf.data.repository.prefs.DashboardPreferences
+import com.kangle.kardleaf.data.repository.prefs.EditorPreferences
+import com.kangle.kardleaf.data.repository.prefs.PrivacyPreferences
+import com.kangle.kardleaf.data.repository.prefs.SyncPreferences
 import java.text.SimpleDateFormat
-import java.security.KeyStore
 import java.util.Date
 import java.util.Locale
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 class PrefsManager(context: Context) {
     private val prefs: SharedPreferences =
@@ -34,21 +30,17 @@ class PrefsManager(context: Context) {
                 }.apply()
             }
         }
-    private val securePrefs: SharedPreferences =
-        context.getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
+    private val syncPreferences = SyncPreferences(context, prefs)
+    private val privacyPreferences = PrivacyPreferences(prefs)
+    private val editorPreferences = EditorPreferences(prefs)
+    private val dashboardPreferences = DashboardPreferences(prefs)
 
     companion object {
         private const val PREFS_NAME = "kardleaf_prefs"
-        private const val SECURE_PREFS_NAME = "kardleaf_secure_prefs"
         private const val OLD_PREFS_NAME = "keepnotes_prefs"
         private const val KEY_ROOT_URI = "root_uri"
         private const val KEY_SORT_ORDER = "sort_order"
         private const val KEY_SORT_DIRECTION = "sort_direction"
-        private const val KEY_FOLDER_SORT_PREFIX = "folder_sort_"
-        private const val KEY_FOLDER_CUSTOM_ORDER_PREFIX = "folder_custom_order_"
-        private const val KEY_FOLDER_DISPLAY_ORDER_PREFIX = "folder_display_order_"
-        private const val KEY_PINNED_NOTE_PATHS = "pinned_note_paths"
-        private const val KEY_FAVORITE_NOTE_PATHS = "favorite_note_paths"
         private const val KEY_VIEW_MODE = "view_mode"
         private const val KEY_TRASH_FOLDER_NAME = "trash_folder_name"
         private const val KEY_TRASH_SORT_ORDER = "trash_sort_order"
@@ -74,6 +66,7 @@ class PrefsManager(context: Context) {
         private const val KEY_HAS_SEEN_ONBOARDING = "has_seen_onboarding"
         private const val KEY_DRAWER_ITEM_ORDER = "drawer_item_order"
         private const val KEY_DRAWER_HIDDEN_ITEMS = "drawer_hidden_items"
+        private const val KEY_DRAWER_CATEGORY_ACTIONS_MIGRATED = "drawer_category_actions_migrated"
         private const val KEY_DRAWER_ITEM_LABEL_PREFIX = "drawer_item_label_"
         private const val KEY_DRAWER_STYLE = "drawer_style"
         private const val KEY_DRAWER_GROUP_START_ITEMS = "drawer_group_start_items"
@@ -81,15 +74,6 @@ class PrefsManager(context: Context) {
         private const val KEY_SELECTION_TOOLBAR_ITEM_ORDER = "selection_toolbar_item_order"
         private const val KEY_SELECTION_TOOLBAR_MORE_ITEMS = "selection_toolbar_more_items"
         private const val KEY_SELECTION_TOOLBAR_HIDDEN_ITEMS = "selection_toolbar_hidden_items"
-        private const val KEY_EDITOR_TOP_TOOLBAR_ITEM_ORDER = "editor_top_toolbar_item_order"
-        private const val KEY_EDITOR_TOP_TOOLBAR_MORE_ITEMS = "editor_top_toolbar_more_items"
-        private const val KEY_EDITOR_TOP_TOOLBAR_HIDDEN_ITEMS = "editor_top_toolbar_hidden_items"
-        private const val KEY_EDITOR_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED = "editor_top_toolbar_more_default_migrated"
-        private const val KEY_APP_PASSWORD = "app_password_hash"
-        private const val KEY_PRIVACY_PASSWORD = "privacy_password_hash"
-        private const val KEY_SAFETY_WORD = "safety_word_hash"
-        private const val KEY_APP_BIOMETRIC_UNLOCK = "app_biometric_unlock"
-        private const val KEY_PRIVACY_BIOMETRIC_UNLOCK = "privacy_biometric_unlock"
         private const val KEY_IMAGE_PATH_MODE = "image_path_mode"
         private const val KEY_RELATIVE_IMAGE_LOCATION = "relative_image_location"
         private const val KEY_AUTO_BACKUP_INTERVAL_DAYS = "auto_backup_interval_days"
@@ -99,6 +83,7 @@ class PrefsManager(context: Context) {
         private const val KEY_NOTE_SIDE_PANELS_ENABLED = "note_side_panels_enabled"
         private const val KEY_NOTE_SIDE_PANEL_OPEN_MODE = "note_side_panel_open_mode"
         private const val KEY_PREVIEW_DOUBLE_TAP_INTERVAL_MS = "preview_double_tap_interval_ms"
+        private const val KEY_PREVIEW_THEME = "preview_theme"
         private const val KEY_TRASH_AUTO_CLEAN_DAYS = "trash_auto_clean_days"
         private const val KEY_PASSWORD_INPUT_MODE = "password_input_mode"
         private const val KEY_SHOW_YAML_TAGS_ON_LOOSE_CARDS = "show_yaml_tags_on_loose_cards"
@@ -109,55 +94,41 @@ class PrefsManager(context: Context) {
         private const val KEY_SHOW_NOTE_DETAIL_TITLE = "show_note_detail_title"
         private const val KEY_SHOW_NOTE_DETAIL_FILE_INFO = "show_note_detail_file_info"
         private const val KEY_CUSTOM_HIDDEN_FILENAME_PATTERNS = "custom_hidden_filename_patterns"
-        private const val KEY_EDITOR_KERNEL = "editor_kernel"
-        private const val KEY_CODEMIRROR_LIVE_PREVIEW_ENABLED = "codemirror_live_preview_enabled"
-        private const val KEY_AUTO_CODEMIRROR_THRESHOLD_CHARS = "auto_codemirror_threshold_chars"
-        private const val KEY_EDITOR_FONT_SIZE_SP = "editor_font_size_sp"
-        private const val KEY_EDITOR_LINE_HEIGHT_MULTIPLIER = "editor_line_height_multiplier"
-        private const val KEY_EDITOR_LETTER_SPACING_SP = "editor_letter_spacing_sp"
-        private const val KEY_EDITOR_PARAGRAPH_SPACING_DP = "editor_paragraph_spacing_dp"
-        private const val KEY_EDITOR_FONT_FAMILY = "editor_font_family"
         private const val KEY_APP_LANGUAGE = "app_language"
-        private const val KEY_EDITOR_BOTTOM_TOOLBAR_ALWAYS_VISIBLE = "editor_bottom_toolbar_always_visible"
         private const val KEY_HOME_ACTION_STYLE = "home_action_style"
+        private const val KEY_HOME_WEB_CLIP_ACTION_VISIBLE = "home_web_clip_action_visible"
         private const val KEY_HOME_BOTTOM_TOOLBAR_ITEM_ORDER = "home_bottom_toolbar_item_order"
         private const val KEY_HOME_BOTTOM_TOOLBAR_HIDDEN_ITEMS = "home_bottom_toolbar_hidden_items"
+        private const val KEY_HOME_BOTTOM_TOOLBAR_DEFAULTS_V2_MIGRATED = "home_bottom_toolbar_defaults_v2_migrated"
         private const val KEY_HOME_BOTTOM_TOOLBAR_BUTTON_SIZE_DP = "home_bottom_toolbar_button_size_dp"
-        private const val KEY_WEBDAV_SERVER_URL = "webdav_server_url"
-        private const val KEY_WEBDAV_USERNAME = "webdav_username"
-        private const val KEY_WEBDAV_PASSWORD = "webdav_password"
-        private const val KEY_WEBDAV_REMOTE_FOLDER = "webdav_remote_folder"
-        private const val KEY_WEBDAV_SYNC_SCOPE = "webdav_sync_scope"
-        private const val KEY_WEBDAV_SYNC_MODE = "webdav_sync_mode"
-        private const val KEY_WEBDAV_INCREMENTAL_LAST_UPLOAD_MS = "webdav_incremental_last_upload_ms"
-        private const val KEY_WEBDAV_REALTIME_SYNC_ENABLED = "webdav_realtime_sync_enabled"
-        private const val KEY_WEBDAV_REALTIME_LOCAL_DIRTY_MS = "webdav_realtime_local_dirty_ms"
-        private const val KEY_WEBDAV_REALTIME_KNOWN_REMOTE_MARKER = "webdav_realtime_known_remote_marker"
-        private const val KEY_WEBDAV_REALTIME_LAST_UPLOAD_REMOTE_MARKER = "webdav_realtime_last_upload_remote_marker"
-        private const val KEY_WEBDAV_REALTIME_POLL_INTERVAL_MS = "webdav_realtime_poll_interval_ms"
-        private const val KEY_WEBDAV_FILE_SYNC_SNAPSHOT = "webdav_file_sync_snapshot_v1"
-        private const val KEY_WEBDAV_PENDING_CONFLICTS = "webdav_pending_conflicts_v1"
-        private const val KEY_WEBDAV_SYNC_LOGS = "webdav_sync_logs"
-        private const val KEY_WEBDAV_PASSWORD_ENCRYPTED = "webdav_password_encrypted"
-        private const val WEBDAV_PASSWORD_KEY_ALIAS = "kardleaf_webdav_password"
-        private const val WEBDAV_SECURITY_TAG = "KardLeafWebDavSecurity"
         private const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
-        private const val MAX_WEBDAV_SYNC_LOG_COUNT = 80
+        private const val KEY_APP_LOGGING_ENABLED = "app_logging_enabled"
+        private const val KEY_AUTO_UPDATE_CHECK_ENABLED = "auto_update_check_enabled"
+        private const val KEY_LAST_UPDATE_CHECK_DATE = "last_update_check_date"
+        private const val KEY_UPDATE_CHECK_ETAG = "update_check_etag"
+        private const val KEY_UPDATE_CHECK_CACHE = "update_check_cache"
+        private const val KEY_SHOW_MARKDOWN_TASKS_IN_TASK_LIST = "show_markdown_tasks_in_task_list"
+        private const val KEY_QUICK_NOTE_HIDDEN_DEFAULT_MIGRATED = "quick_note_hidden_default_migrated"
+        val DEFAULT_APP_LOGGING_ENABLED = BuildConfig.KARDLEAF_DEV_VARIANT
+        const val DEFAULT_AUTO_UPDATE_CHECK_ENABLED = true
         const val DEFAULT_WEBDAV_REALTIME_POLL_INTERVAL_MS = 1_000L
         const val DEFAULT_TRASH_FOLDER_NAME = ".trash"
-        const val DEFAULT_DRAFT_FOLDER_NAME = "草稿"
+        const val DEFAULT_QUICK_NOTE_FOLDER_NAME = "速记"
+        const val LEGACY_DRAFT_FOLDER_NAME = "草稿"
         const val DEFAULT_IMAGE_FOLDER = "attachments"
         const val DEFAULT_DRAWER_EDGE_WIDTH_DP = 40
         const val DEFAULT_HISTORY_VERSION_LIMIT = 20
         const val DEFAULT_NOTE_SIDE_PANELS_ENABLED = true
         val DEFAULT_NOTE_SIDE_PANEL_OPEN_MODE = NoteSidePanelOpenMode.TOOLBAR
         const val DEFAULT_PREVIEW_DOUBLE_TAP_INTERVAL_MS = 180
+        const val DEFAULT_PREVIEW_THEME = "FOLLOW_APP"
         const val DEFAULT_HIDDEN_DATE_FILENAME_PATTERN = "yyyy.MM.dd.HHmmss"
         const val DEFAULT_HIDDEN_COPY_FILENAME_PATTERN = "yyyy.MM.dd.HHmmss~副本*"
         const val DEFAULT_TRASH_AUTO_CLEAN_DAYS = 0
         const val DEFAULT_CARD_MODIFIED_DATE_FORMAT = "yyyy.MM.dd HH:mm"
-        const val DEFAULT_EDITOR_KERNEL = "NATIVE"
-        const val DEFAULT_CODEMIRROR_LIVE_PREVIEW_ENABLED = false
+        const val DEFAULT_EDITOR_KERNEL = "QUILLPAD_STYLE"
+        const val DEFAULT_CODEMIRROR_LIVE_PREVIEW_ENABLED = true
+        const val DEFAULT_EDITING_IMAGE_PREVIEW_ENABLED = true
         const val DEFAULT_AUTO_CODEMIRROR_THRESHOLD_CHARS = 100_000
         const val DEFAULT_EDITOR_FONT_SIZE_SP = 16f
         const val DEFAULT_EDITOR_LINE_HEIGHT_MULTIPLIER = 1.55f
@@ -165,8 +136,9 @@ class PrefsManager(context: Context) {
         const val DEFAULT_EDITOR_PARAGRAPH_SPACING_DP = 8f
         const val DEFAULT_EDITOR_FONT_FAMILY = "system"
         const val DEFAULT_APP_LANGUAGE = "zh"
-        const val DEFAULT_EDITOR_BOTTOM_TOOLBAR_ALWAYS_VISIBLE = false
+        const val DEFAULT_EDITOR_BOTTOM_TOOLBAR_ALWAYS_VISIBLE = true
         const val DEFAULT_HOME_ACTION_STYLE = "BOTTOM_TOOLBAR"
+        const val DEFAULT_HOME_WEB_CLIP_ACTION_VISIBLE = false
         const val DEFAULT_HOME_BOTTOM_TOOLBAR_BUTTON_SIZE_DP = 46
         const val THEME_CORNER_RADIUS_FOLLOW = -1
         const val MIN_THEME_CORNER_RADIUS_DP = 0
@@ -229,6 +201,7 @@ class PrefsManager(context: Context) {
         AUTO,
         NATIVE,
         CODEMIRROR_LIVE_PREVIEW,
+        QUILLPAD_STYLE,
     }
 
     enum class HomeActionStyle {
@@ -261,75 +234,63 @@ class PrefsManager(context: Context) {
         DARK,
     }
 
-    fun saveEditorKernel(kernel: EditorKernel) {
-        prefs.edit().putString(KEY_EDITOR_KERNEL, kernel.name).apply()
+    /** Markdown 预览状态的配色主题；FOLLOW_APP 表示实时跟随应用主题色。 */
+    enum class PreviewTheme {
+        FOLLOW_APP,
+        GITHUB,
+        NEWSPRINT,
+        VUE,
+        ONE,
+        DRACULA,
+        NORD,
+        SOLARIZED,
     }
 
-    fun getEditorKernel(): EditorKernel {
-        val name = prefs.getString(KEY_EDITOR_KERNEL, DEFAULT_EDITOR_KERNEL)
-        val kernel = try {
-            EditorKernel.valueOf(name ?: DEFAULT_EDITOR_KERNEL)
-        } catch (e: Exception) {
-            EditorKernel.NATIVE
-        }
-        return if (kernel == EditorKernel.AUTO) EditorKernel.NATIVE else kernel
+    fun savePreviewTheme(theme: PreviewTheme) {
+        prefs.edit().putString(KEY_PREVIEW_THEME, theme.name).apply()
     }
 
-    fun saveCodeMirrorLivePreviewEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_CODEMIRROR_LIVE_PREVIEW_ENABLED, enabled).apply()
+    fun getPreviewTheme(): PreviewTheme {
+        val name = prefs.getString(KEY_PREVIEW_THEME, DEFAULT_PREVIEW_THEME)
+        return runCatching { PreviewTheme.valueOf(name ?: DEFAULT_PREVIEW_THEME) }
+            .getOrDefault(PreviewTheme.FOLLOW_APP)
     }
 
-    fun isCodeMirrorLivePreviewEnabled(): Boolean =
-        prefs.getBoolean(KEY_CODEMIRROR_LIVE_PREVIEW_ENABLED, DEFAULT_CODEMIRROR_LIVE_PREVIEW_ENABLED)
+    fun saveEditorKernel(kernel: EditorKernel) = editorPreferences.saveKernel(kernel)
 
-    fun saveAutoCodeMirrorThresholdChars(chars: Int) {
-        val safeChars = chars.coerceIn(MIN_AUTO_CODEMIRROR_THRESHOLD_CHARS, MAX_AUTO_CODEMIRROR_THRESHOLD_CHARS)
-        prefs.edit().putInt(KEY_AUTO_CODEMIRROR_THRESHOLD_CHARS, safeChars).apply()
-    }
+    fun getEditorKernel(): EditorKernel = editorPreferences.getKernel()
 
-    fun getAutoCodeMirrorThresholdChars(): Int =
-        prefs.getInt(KEY_AUTO_CODEMIRROR_THRESHOLD_CHARS, DEFAULT_AUTO_CODEMIRROR_THRESHOLD_CHARS)
-            .coerceIn(MIN_AUTO_CODEMIRROR_THRESHOLD_CHARS, MAX_AUTO_CODEMIRROR_THRESHOLD_CHARS)
+    fun saveCodeMirrorLivePreviewEnabled(enabled: Boolean) = editorPreferences.saveCodeMirrorLivePreviewEnabled(enabled)
 
-    fun saveEditorFontSizeSp(sizeSp: Float) {
-        prefs.edit().putFloat(KEY_EDITOR_FONT_SIZE_SP, sizeSp.coerceIn(MIN_EDITOR_FONT_SIZE_SP, MAX_EDITOR_FONT_SIZE_SP)).apply()
-    }
+    fun isCodeMirrorLivePreviewEnabled(): Boolean = editorPreferences.isCodeMirrorLivePreviewEnabled()
 
-    fun getEditorFontSizeSp(): Float =
-        prefs.getFloat(KEY_EDITOR_FONT_SIZE_SP, DEFAULT_EDITOR_FONT_SIZE_SP)
-            .coerceIn(MIN_EDITOR_FONT_SIZE_SP, MAX_EDITOR_FONT_SIZE_SP)
+    fun saveEditingImagePreviewEnabled(enabled: Boolean) = editorPreferences.saveEditingImagePreviewEnabled(enabled)
 
-    fun saveEditorLineHeightMultiplier(multiplier: Float) {
-        prefs.edit().putFloat(KEY_EDITOR_LINE_HEIGHT_MULTIPLIER, multiplier.coerceIn(MIN_EDITOR_LINE_HEIGHT_MULTIPLIER, MAX_EDITOR_LINE_HEIGHT_MULTIPLIER)).apply()
-    }
+    fun isEditingImagePreviewEnabled(): Boolean = editorPreferences.isEditingImagePreviewEnabled()
 
-    fun getEditorLineHeightMultiplier(): Float =
-        prefs.getFloat(KEY_EDITOR_LINE_HEIGHT_MULTIPLIER, DEFAULT_EDITOR_LINE_HEIGHT_MULTIPLIER)
-            .coerceIn(MIN_EDITOR_LINE_HEIGHT_MULTIPLIER, MAX_EDITOR_LINE_HEIGHT_MULTIPLIER)
+    fun saveAutoCodeMirrorThresholdChars(chars: Int) = editorPreferences.saveAutoCodeMirrorThresholdChars(chars)
 
-    fun saveEditorLetterSpacingSp(spacingSp: Float) {
-        prefs.edit().putFloat(KEY_EDITOR_LETTER_SPACING_SP, spacingSp.coerceIn(MIN_EDITOR_LETTER_SPACING_SP, MAX_EDITOR_LETTER_SPACING_SP)).apply()
-    }
+    fun getAutoCodeMirrorThresholdChars(): Int = editorPreferences.getAutoCodeMirrorThresholdChars()
 
-    fun getEditorLetterSpacingSp(): Float =
-        prefs.getFloat(KEY_EDITOR_LETTER_SPACING_SP, DEFAULT_EDITOR_LETTER_SPACING_SP)
-            .coerceIn(MIN_EDITOR_LETTER_SPACING_SP, MAX_EDITOR_LETTER_SPACING_SP)
+    fun saveEditorFontSizeSp(sizeSp: Float) = editorPreferences.saveFontSizeSp(sizeSp)
 
-    fun saveEditorParagraphSpacingDp(spacingDp: Float) {
-        prefs.edit().putFloat(KEY_EDITOR_PARAGRAPH_SPACING_DP, spacingDp.coerceIn(MIN_EDITOR_PARAGRAPH_SPACING_DP, MAX_EDITOR_PARAGRAPH_SPACING_DP)).apply()
-    }
+    fun getEditorFontSizeSp(): Float = editorPreferences.getFontSizeSp()
 
-    fun getEditorParagraphSpacingDp(): Float =
-        prefs.getFloat(KEY_EDITOR_PARAGRAPH_SPACING_DP, DEFAULT_EDITOR_PARAGRAPH_SPACING_DP)
-            .coerceIn(MIN_EDITOR_PARAGRAPH_SPACING_DP, MAX_EDITOR_PARAGRAPH_SPACING_DP)
+    fun saveEditorLineHeightMultiplier(multiplier: Float) = editorPreferences.saveLineHeightMultiplier(multiplier)
 
-    fun saveEditorFontFamily(fontFamily: String) {
-        prefs.edit().putString(KEY_EDITOR_FONT_FAMILY, fontFamily.trim().ifBlank { DEFAULT_EDITOR_FONT_FAMILY }).apply()
-    }
+    fun getEditorLineHeightMultiplier(): Float = editorPreferences.getLineHeightMultiplier()
 
-    fun getEditorFontFamily(): String =
-        prefs.getString(KEY_EDITOR_FONT_FAMILY, DEFAULT_EDITOR_FONT_FAMILY)?.takeIf { it.isNotBlank() }
-            ?: DEFAULT_EDITOR_FONT_FAMILY
+    fun saveEditorLetterSpacingSp(spacingSp: Float) = editorPreferences.saveLetterSpacingSp(spacingSp)
+
+    fun getEditorLetterSpacingSp(): Float = editorPreferences.getLetterSpacingSp()
+
+    fun saveEditorParagraphSpacingDp(spacingDp: Float) = editorPreferences.saveParagraphSpacingDp(spacingDp)
+
+    fun getEditorParagraphSpacingDp(): Float = editorPreferences.getParagraphSpacingDp()
+
+    fun saveEditorFontFamily(fontFamily: String) = editorPreferences.saveFontFamily(fontFamily)
+
+    fun getEditorFontFamily(): String = editorPreferences.getFontFamily()
 
     fun saveAppLanguage(language: String) {
         prefs.edit().putString(KEY_APP_LANGUAGE, normalizeAppLanguage(language)).apply()
@@ -337,12 +298,9 @@ class PrefsManager(context: Context) {
 
     fun getAppLanguage(): String = normalizeAppLanguage(prefs.getString(KEY_APP_LANGUAGE, DEFAULT_APP_LANGUAGE))
 
-    fun saveEditorBottomToolbarAlwaysVisible(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_EDITOR_BOTTOM_TOOLBAR_ALWAYS_VISIBLE, enabled).apply()
-    }
+    fun saveEditorBottomToolbarAlwaysVisible(enabled: Boolean) = editorPreferences.saveBottomToolbarAlwaysVisible(enabled)
 
-    fun isEditorBottomToolbarAlwaysVisible(): Boolean =
-        prefs.getBoolean(KEY_EDITOR_BOTTOM_TOOLBAR_ALWAYS_VISIBLE, DEFAULT_EDITOR_BOTTOM_TOOLBAR_ALWAYS_VISIBLE)
+    fun isEditorBottomToolbarAlwaysVisible(): Boolean = editorPreferences.isBottomToolbarAlwaysVisible()
 
     fun saveHomeActionStyle(style: HomeActionStyle) {
         prefs.edit().putString(KEY_HOME_ACTION_STYLE, style.name).apply()
@@ -353,6 +311,13 @@ class PrefsManager(context: Context) {
         return runCatching { HomeActionStyle.valueOf(name ?: DEFAULT_HOME_ACTION_STYLE) }
             .getOrDefault(HomeActionStyle.BOTTOM_TOOLBAR)
     }
+
+    fun saveHomeWebClipActionVisible(visible: Boolean) {
+        prefs.edit().putBoolean(KEY_HOME_WEB_CLIP_ACTION_VISIBLE, visible).apply()
+    }
+
+    fun isHomeWebClipActionVisible(): Boolean =
+        prefs.getBoolean(KEY_HOME_WEB_CLIP_ACTION_VISIBLE, DEFAULT_HOME_WEB_CLIP_ACTION_VISIBLE)
 
     enum class ThemeColor {
         BLUE,
@@ -458,207 +423,53 @@ class PrefsManager(context: Context) {
         val mode: WebDavSyncMode,
     )
 
-    fun getWebDavSettings(): WebDavSettings {
-        val scopeName = prefs.getString(KEY_WEBDAV_SYNC_SCOPE, WebDavSyncScope.DATABASE_AND_VAULT.name)
-        val scope = runCatching {
-            WebDavSyncScope.valueOf(scopeName ?: WebDavSyncScope.DATABASE_AND_VAULT.name)
-        }.getOrDefault(WebDavSyncScope.DATABASE_AND_VAULT)
-            .takeIf { it == WebDavSyncScope.DATABASE_AND_VAULT }
-            ?: WebDavSyncScope.DATABASE_AND_VAULT
-        val modeName = prefs.getString(KEY_WEBDAV_SYNC_MODE, WebDavSyncMode.INCREMENTAL.name)
-        val mode = runCatching {
-            WebDavSyncMode.valueOf(modeName ?: WebDavSyncMode.INCREMENTAL.name)
-        }.getOrDefault(WebDavSyncMode.INCREMENTAL)
-            .takeIf { it == WebDavSyncMode.INCREMENTAL }
-            ?: WebDavSyncMode.INCREMENTAL
-        return WebDavSettings(
-            serverUrl = prefs.getString(KEY_WEBDAV_SERVER_URL, "").orEmpty(),
-            username = prefs.getString(KEY_WEBDAV_USERNAME, "").orEmpty(),
-            password = getWebDavPassword(),
-            remoteFolder = prefs.getString(KEY_WEBDAV_REMOTE_FOLDER, "KardLeaf").orEmpty(),
-            scope = scope,
-            mode = mode,
-        )
-    }
+    fun getWebDavSettings(): WebDavSettings = syncPreferences.getSettings()
 
-    fun saveWebDavSettings(settings: WebDavSettings): Boolean {
-        if (!saveWebDavPassword(settings.password)) {
-            KardLeafLog.e(WEBDAV_SECURITY_TAG, "Failed to save WebDAV password securely; settings were not updated")
-            return false
-        }
-        val saved = prefs.edit()
-            .putString(KEY_WEBDAV_SERVER_URL, settings.serverUrl.trim())
-            .putString(KEY_WEBDAV_USERNAME, settings.username.trim())
-            .remove(KEY_WEBDAV_PASSWORD)
-            .putString(KEY_WEBDAV_REMOTE_FOLDER, normalizeNotePath(settings.remoteFolder))
-            .putString(KEY_WEBDAV_SYNC_SCOPE, settings.scope.name)
-            .putString(KEY_WEBDAV_SYNC_MODE, settings.mode.name)
-            .commit()
-        if (!saved) {
-            KardLeafLog.e(WEBDAV_SECURITY_TAG, "Failed to save WebDAV settings")
-        }
-        return saved
-    }
+    fun saveWebDavSettings(settings: WebDavSettings): Boolean = syncPreferences.saveSettings(settings)
 
-    private fun getWebDavPassword(): String {
-        securePrefs.getString(KEY_WEBDAV_PASSWORD_ENCRYPTED, null)
-            ?.let(::decryptWebDavPassword)
-            ?.let { return it }
+    fun getWebDavIncrementalLastUploadMs(): Long = syncPreferences.getIncrementalLastUploadMs()
 
-        val legacy = prefs.getString(KEY_WEBDAV_PASSWORD, "").orEmpty()
-        if (legacy.isNotBlank() && saveWebDavPassword(legacy)) {
-            if (!prefs.edit().remove(KEY_WEBDAV_PASSWORD).commit()) {
-                KardLeafLog.e(WEBDAV_SECURITY_TAG, "Migrated WebDAV password but failed to remove legacy field")
-            }
-        } else if (legacy.isNotBlank()) {
-            KardLeafLog.e(WEBDAV_SECURITY_TAG, "Failed to migrate legacy WebDAV password; legacy field kept")
-        }
-        return legacy
-    }
+    fun saveWebDavIncrementalLastUploadMs(value: Long) = syncPreferences.saveIncrementalLastUploadMs(value)
 
-    private fun saveWebDavPassword(password: String): Boolean {
-        if (password.isBlank()) {
-            return securePrefs.edit().remove(KEY_WEBDAV_PASSWORD_ENCRYPTED).commit()
-        }
-        val encrypted = encryptWebDavPassword(password) ?: return false
-        return securePrefs.edit()
-            .putString(KEY_WEBDAV_PASSWORD_ENCRYPTED, encrypted)
-            .commit()
-    }
+    fun isWebDavRealtimeSyncEnabled(): Boolean = syncPreferences.isRealtimeSyncEnabled()
 
-    private fun encryptWebDavPassword(password: String): String? = runCatching {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateWebDavPasswordKey())
-        val encrypted = cipher.doFinal(password.toByteArray(Charsets.UTF_8))
-        Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
-    }.onFailure {
-        KardLeafLog.e(WEBDAV_SECURITY_TAG, "Failed to encrypt WebDAV password", it)
-    }.getOrNull()
+    fun saveWebDavRealtimeSyncEnabled(enabled: Boolean) = syncPreferences.saveRealtimeSyncEnabled(enabled)
 
-    private fun decryptWebDavPassword(value: String): String? = runCatching {
-        val bytes = Base64.decode(value, Base64.NO_WRAP)
-        if (bytes.size <= 12) return@runCatching null
-        val iv = bytes.copyOfRange(0, 12)
-        val encrypted = bytes.copyOfRange(12, bytes.size)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, getOrCreateWebDavPasswordKey(), GCMParameterSpec(128, iv))
-        String(cipher.doFinal(encrypted), Charsets.UTF_8)
-    }.onFailure {
-        KardLeafLog.e(WEBDAV_SECURITY_TAG, "Failed to decrypt WebDAV password", it)
-    }.getOrNull()
+    fun getWebDavRealtimePollIntervalMs(): Long = syncPreferences.getRealtimePollIntervalMs()
 
-    private fun getOrCreateWebDavPasswordKey(): SecretKey {
-        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (keyStore.getKey(WEBDAV_PASSWORD_KEY_ALIAS, null) as? SecretKey)?.let { return it }
+    fun saveWebDavRealtimePollIntervalMs(intervalMs: Long) = syncPreferences.saveRealtimePollIntervalMs(intervalMs)
 
-        val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        keyGenerator.init(
-            KeyGenParameterSpec.Builder(
-                WEBDAV_PASSWORD_KEY_ALIAS,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .build(),
-        )
-        return keyGenerator.generateKey()
-    }
+    fun markWebDavRealtimeLocalDirty() = syncPreferences.markRealtimeLocalDirty()
 
-    fun getWebDavIncrementalLastUploadMs(): Long =
-        prefs.getLong(KEY_WEBDAV_INCREMENTAL_LAST_UPLOAD_MS, 0L)
+    fun getWebDavRealtimeLocalDirtyMs(): Long = syncPreferences.getRealtimeLocalDirtyMs()
 
-    fun saveWebDavIncrementalLastUploadMs(value: Long) {
-        prefs.edit().putLong(KEY_WEBDAV_INCREMENTAL_LAST_UPLOAD_MS, value.coerceAtLeast(0L)).apply()
-    }
+    fun clearWebDavRealtimeLocalDirtyIfUnchanged(dirtyMs: Long) =
+        syncPreferences.clearRealtimeLocalDirtyIfUnchanged(dirtyMs)
 
-    fun isWebDavRealtimeSyncEnabled(): Boolean =
-        prefs.getBoolean(KEY_WEBDAV_REALTIME_SYNC_ENABLED, false)
+    fun getWebDavRealtimeKnownRemoteMarker(): String = syncPreferences.getRealtimeKnownRemoteMarker()
 
-    fun saveWebDavRealtimeSyncEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_WEBDAV_REALTIME_SYNC_ENABLED, enabled).apply()
-    }
+    fun saveWebDavRealtimeKnownRemoteMarker(marker: String) = syncPreferences.saveRealtimeKnownRemoteMarker(marker)
 
-    fun getWebDavRealtimePollIntervalMs(): Long =
-        prefs.getLong(
-            KEY_WEBDAV_REALTIME_POLL_INTERVAL_MS,
-            DEFAULT_WEBDAV_REALTIME_POLL_INTERVAL_MS,
-        ).coerceIn(1_000L, 60_000L)
+    fun getWebDavRealtimeLastUploadRemoteMarker(): String = syncPreferences.getRealtimeLastUploadRemoteMarker()
 
-    fun saveWebDavRealtimePollIntervalMs(intervalMs: Long) {
-        prefs.edit()
-            .putLong(KEY_WEBDAV_REALTIME_POLL_INTERVAL_MS, intervalMs.coerceIn(1_000L, 60_000L))
-            .apply()
-    }
+    fun saveWebDavRealtimeLastUploadRemoteMarker(marker: String) =
+        syncPreferences.saveRealtimeLastUploadRemoteMarker(marker)
 
-    fun markWebDavRealtimeLocalDirty() {
-        if (!isWebDavRealtimeSyncEnabled()) return
-        prefs.edit().putLong(KEY_WEBDAV_REALTIME_LOCAL_DIRTY_MS, System.currentTimeMillis()).apply()
-    }
+    fun getWebDavFileSyncSnapshot(): String = syncPreferences.getFileSyncSnapshot()
 
-    fun getWebDavRealtimeLocalDirtyMs(): Long =
-        prefs.getLong(KEY_WEBDAV_REALTIME_LOCAL_DIRTY_MS, 0L)
+    fun saveWebDavFileSyncSnapshot(snapshot: String) = syncPreferences.saveFileSyncSnapshot(snapshot)
 
-    fun clearWebDavRealtimeLocalDirtyIfUnchanged(dirtyMs: Long) {
-        if (dirtyMs <= 0L) return
-        if (getWebDavRealtimeLocalDirtyMs() <= dirtyMs) {
-            prefs.edit().remove(KEY_WEBDAV_REALTIME_LOCAL_DIRTY_MS).apply()
-        }
-    }
+    fun getWebDavPendingConflicts(): List<String> = syncPreferences.getPendingConflicts()
 
-    fun getWebDavRealtimeKnownRemoteMarker(): String =
-        prefs.getString(KEY_WEBDAV_REALTIME_KNOWN_REMOTE_MARKER, "").orEmpty()
+    fun saveWebDavPendingConflicts(value: String) = syncPreferences.savePendingConflicts(value)
 
-    fun saveWebDavRealtimeKnownRemoteMarker(marker: String) {
-        prefs.edit().putString(KEY_WEBDAV_REALTIME_KNOWN_REMOTE_MARKER, marker).apply()
-    }
+    fun clearWebDavPendingConflicts() = syncPreferences.clearPendingConflicts()
 
-    fun getWebDavRealtimeLastUploadRemoteMarker(): String =
-        prefs.getString(KEY_WEBDAV_REALTIME_LAST_UPLOAD_REMOTE_MARKER, "").orEmpty()
+    fun getWebDavSyncLogs(): List<String> = syncPreferences.getSyncLogs()
 
-    fun saveWebDavRealtimeLastUploadRemoteMarker(marker: String) {
-        prefs.edit().putString(KEY_WEBDAV_REALTIME_LAST_UPLOAD_REMOTE_MARKER, marker).apply()
-    }
+    fun appendWebDavSyncLog(message: String) = syncPreferences.appendSyncLog(message)
 
-    fun getWebDavFileSyncSnapshot(): String =
-        prefs.getString(KEY_WEBDAV_FILE_SYNC_SNAPSHOT, "").orEmpty()
-
-    fun saveWebDavFileSyncSnapshot(snapshot: String) {
-        prefs.edit().putString(KEY_WEBDAV_FILE_SYNC_SNAPSHOT, snapshot).apply()
-    }
-
-    fun getWebDavPendingConflicts(): List<String> =
-        prefs.getString(KEY_WEBDAV_PENDING_CONFLICTS, "").orEmpty()
-            .lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .toList()
-
-    fun saveWebDavPendingConflicts(value: String) {
-        prefs.edit().putString(KEY_WEBDAV_PENDING_CONFLICTS, value).apply()
-    }
-
-    fun clearWebDavPendingConflicts() {
-        prefs.edit().remove(KEY_WEBDAV_PENDING_CONFLICTS).apply()
-    }
-
-    fun getWebDavSyncLogs(): List<String> =
-        prefs.getString(KEY_WEBDAV_SYNC_LOGS, "").orEmpty()
-            .lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .toList()
-
-    fun appendWebDavSyncLog(message: String) {
-        val time = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        val cleanMessage = message.replace('\n', ' ').replace('\r', ' ').trim().take(240)
-        val logs = (listOf("$time  $cleanMessage") + getWebDavSyncLogs())
-            .take(MAX_WEBDAV_SYNC_LOG_COUNT)
-        prefs.edit().putString(KEY_WEBDAV_SYNC_LOGS, logs.joinToString("\n")).apply()
-    }
-
-    fun clearWebDavSyncLogs() {
-        prefs.edit().remove(KEY_WEBDAV_SYNC_LOGS).apply()
-    }
+    fun clearWebDavSyncLogs() = syncPreferences.clearSyncLogs()
 
     fun saveSortOrder(order: SortOrder) {
         prefs.edit().putString(KEY_SORT_ORDER, order.name).apply()
@@ -689,166 +500,61 @@ class PrefsManager(context: Context) {
     fun saveFolderSortSettings(
         folder: String,
         settings: FolderSortSettings,
-    ) {
-        prefs.edit()
-            .putString(folderSortKey(folder), "${settings.order.name}|${settings.direction.name}")
-            .apply()
-    }
+    ) = dashboardPreferences.saveFolderSortSettings(folder, settings)
 
-    fun getFolderSortSettings(folder: String): FolderSortSettings? {
-        val raw = prefs.getString(folderSortKey(folder), null) ?: return null
-        val parts = raw.split("|")
-        return runCatching {
-            FolderSortSettings(
-                order = SortOrder.valueOf(parts.getOrNull(0) ?: SortOrder.DATE_MODIFIED.name),
-                direction = SortDirection.valueOf(parts.getOrNull(1) ?: SortDirection.DESCENDING.name),
-            )
-        }.getOrNull()
-    }
+    fun getFolderSortSettings(folder: String): FolderSortSettings? = dashboardPreferences.getFolderSortSettings(folder)
 
-    fun clearFolderSortSettings(folder: String) {
-        prefs.edit().remove(folderSortKey(folder)).apply()
-    }
+    fun clearFolderSortSettings(folder: String) = dashboardPreferences.clearFolderSortSettings(folder)
 
     fun saveFolderCustomOrder(
         folder: String,
         paths: Collection<String>,
-    ) {
-        val normalizedPaths = paths
-            .map(::normalizeNotePath)
-            .filter { it.isNotBlank() }
-            .distinct()
-        prefs.edit()
-            .putString(folderCustomOrderKey(folder), normalizedPaths.joinToString("\n"))
-            .apply()
-    }
+    ) = dashboardPreferences.saveFolderCustomOrder(folder, paths)
 
-    fun getFolderCustomOrder(folder: String): List<String> {
-        return prefs.getString(folderCustomOrderKey(folder), null)
-            .orEmpty()
-            .lineSequence()
-            .map(::normalizeNotePath)
-            .filter { it.isNotBlank() }
-            .distinct()
-            .toList()
-    }
+    fun getFolderCustomOrder(folder: String): List<String> = dashboardPreferences.getFolderCustomOrder(folder)
 
-    fun clearFolderCustomOrder(folder: String) {
-        prefs.edit().remove(folderCustomOrderKey(folder)).apply()
-    }
+    fun clearFolderCustomOrder(folder: String) = dashboardPreferences.clearFolderCustomOrder(folder)
 
     fun saveFolderDisplayOrder(
         parentFolder: String,
         folderPaths: Collection<String>,
-    ) {
-        val normalizedPaths = folderPaths
-            .map(::normalizeNotePath)
-            .filter { it.isNotBlank() }
-            .distinct()
-        prefs.edit()
-            .putString(folderDisplayOrderKey(parentFolder), normalizedPaths.joinToString("\n"))
-            .apply()
-    }
+    ) = dashboardPreferences.saveFolderDisplayOrder(parentFolder, folderPaths)
 
-    fun getFolderDisplayOrder(parentFolder: String): List<String> {
-        return prefs.getString(folderDisplayOrderKey(parentFolder), null)
-            .orEmpty()
-            .lineSequence()
-            .map(::normalizeNotePath)
-            .filter { it.isNotBlank() }
-            .distinct()
-            .toList()
-    }
+    fun getFolderDisplayOrder(parentFolder: String): List<String> = dashboardPreferences.getFolderDisplayOrder(parentFolder)
 
-    fun clearFolderDisplayOrder(parentFolder: String) {
-        prefs.edit().remove(folderDisplayOrderKey(parentFolder)).apply()
-    }
+    fun clearFolderDisplayOrder(parentFolder: String) = dashboardPreferences.clearFolderDisplayOrder(parentFolder)
 
-    fun getPinnedNotePaths(): Set<String> {
-        return prefs.getStringSet(KEY_PINNED_NOTE_PATHS, emptySet()).orEmpty()
-    }
+    fun getPinnedNotePaths(): Set<String> = dashboardPreferences.getPinnedNotePaths()
 
-    fun replacePinnedNotePaths(paths: Collection<String>) {
-        prefs.edit()
-            .putStringSet(KEY_PINNED_NOTE_PATHS, paths.normalizedNotePathSet())
-            .apply()
-    }
+    fun replacePinnedNotePaths(paths: Collection<String>) = dashboardPreferences.replacePinnedNotePaths(paths)
 
-    fun isNotePinned(path: String): Boolean {
-        return getPinnedNotePaths().contains(normalizeNotePath(path))
-    }
+    fun isNotePinned(path: String): Boolean = dashboardPreferences.isNotePinned(path)
 
     fun setNotePinned(
         path: String,
         pinned: Boolean,
-    ) {
-        val normalized = normalizeNotePath(path)
-        if (normalized.isBlank()) return
-        val paths = getPinnedNotePaths().toMutableSet()
-        if (pinned) {
-            paths.add(normalized)
-        } else {
-            paths.remove(normalized)
-        }
-        prefs.edit().putStringSet(KEY_PINNED_NOTE_PATHS, paths).apply()
-    }
+    ) = dashboardPreferences.setNotePinned(path, pinned)
 
     fun replacePinnedNotePath(
         oldPath: String,
         newPath: String,
-    ) {
-        val oldNormalized = normalizeNotePath(oldPath)
-        val newNormalized = normalizeNotePath(newPath)
-        if (oldNormalized.isBlank() || newNormalized.isBlank()) return
-        val paths = getPinnedNotePaths().toMutableSet()
-        if (paths.remove(oldNormalized)) {
-            paths.add(newNormalized)
-            prefs.edit().putStringSet(KEY_PINNED_NOTE_PATHS, paths).apply()
-        }
-    }
+    ) = dashboardPreferences.replacePinnedNotePath(oldPath, newPath)
 
-    fun getFavoriteNotePaths(): Set<String> {
-        return prefs.getStringSet(KEY_FAVORITE_NOTE_PATHS, emptySet()).orEmpty()
-    }
+    fun getFavoriteNotePaths(): Set<String> = dashboardPreferences.getFavoriteNotePaths()
 
-    fun replaceFavoriteNotePaths(paths: Collection<String>) {
-        prefs.edit()
-            .putStringSet(KEY_FAVORITE_NOTE_PATHS, paths.normalizedNotePathSet())
-            .apply()
-    }
+    fun replaceFavoriteNotePaths(paths: Collection<String>) = dashboardPreferences.replaceFavoriteNotePaths(paths)
 
-    fun isNoteFavorite(path: String): Boolean {
-        return getFavoriteNotePaths().contains(normalizeNotePath(path))
-    }
+    fun isNoteFavorite(path: String): Boolean = dashboardPreferences.isNoteFavorite(path)
 
     fun setNoteFavorite(
         path: String,
         favorite: Boolean,
-    ) {
-        val normalized = normalizeNotePath(path)
-        if (normalized.isBlank()) return
-        val paths = getFavoriteNotePaths().toMutableSet()
-        if (favorite) {
-            paths.add(normalized)
-        } else {
-            paths.remove(normalized)
-        }
-        prefs.edit().putStringSet(KEY_FAVORITE_NOTE_PATHS, paths).apply()
-    }
+    ) = dashboardPreferences.setNoteFavorite(path, favorite)
 
     fun replaceFavoriteNotePath(
         oldPath: String,
         newPath: String,
-    ) {
-        val oldNormalized = normalizeNotePath(oldPath)
-        val newNormalized = normalizeNotePath(newPath)
-        if (oldNormalized.isBlank() || newNormalized.isBlank()) return
-        val paths = getFavoriteNotePaths().toMutableSet()
-        if (paths.remove(oldNormalized)) {
-            paths.add(newNormalized)
-            prefs.edit().putStringSet(KEY_FAVORITE_NOTE_PATHS, paths).apply()
-        }
-    }
+    ) = dashboardPreferences.replaceFavoriteNotePath(oldPath, newPath)
 
     fun saveViewMode(mode: ViewMode) {
         prefs.edit().putString(KEY_VIEW_MODE, mode.name).apply()
@@ -951,7 +657,19 @@ class PrefsManager(context: Context) {
 
     fun getHiddenFolderPaths(): Set<String> {
         val saved = prefs.getStringSet(KEY_HIDDEN_FOLDER_PATHS, null)
-        val source = saved ?: setOf(getImageFolder())
+        val source = if (prefs.getBoolean(KEY_QUICK_NOTE_HIDDEN_DEFAULT_MIGRATED, false)) {
+            saved ?: setOf(getImageFolder(), DEFAULT_QUICK_NOTE_FOLDER_NAME, LEGACY_DRAFT_FOLDER_NAME)
+        } else {
+            val migrated = (saved ?: setOf(getImageFolder())).toMutableSet().apply {
+                add(DEFAULT_QUICK_NOTE_FOLDER_NAME)
+                add(LEGACY_DRAFT_FOLDER_NAME)
+            }
+            prefs.edit()
+                .putStringSet(KEY_HIDDEN_FOLDER_PATHS, migrated)
+                .putBoolean(KEY_QUICK_NOTE_HIDDEN_DEFAULT_MIGRATED, true)
+                .apply()
+            migrated
+        }
         return source
             .map(::normalizeNotePath)
             .filter { it.isNotBlank() }
@@ -968,6 +686,13 @@ class PrefsManager(context: Context) {
             )
             .apply()
     }
+
+    fun saveShowMarkdownTasksInTaskList(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_MARKDOWN_TASKS_IN_TASK_LIST, enabled).apply()
+    }
+
+    fun isShowMarkdownTasksInTaskListEnabled(): Boolean =
+        prefs.getBoolean(KEY_SHOW_MARKDOWN_TASKS_IN_TASK_LIST, false)
 
     fun saveThemeColor(color: ThemeColor) {
         prefs.edit().putString(KEY_THEME_COLOR, color.name).apply()
@@ -1041,12 +766,6 @@ class PrefsManager(context: Context) {
             .ifBlank { DEFAULT_IMAGE_FOLDER }
     }
 
-    private fun folderSortKey(folder: String): String = KEY_FOLDER_SORT_PREFIX + normalizeNotePath(folder)
-
-    private fun folderCustomOrderKey(folder: String): String = KEY_FOLDER_CUSTOM_ORDER_PREFIX + normalizeNotePath(folder)
-
-    private fun folderDisplayOrderKey(parentFolder: String): String = KEY_FOLDER_DISPLAY_ORDER_PREFIX + normalizeNotePath(parentFolder)
-
     private fun normalizeNotePath(path: String): String =
         path
             .trim()
@@ -1085,11 +804,16 @@ class PrefsManager(context: Context) {
 
     // region 侧边栏功能项编辑
     enum class DrawerItemId {
-        ALL_NOTES, RECENT, TASKS, FAVORITES, DRAFTS, TAGS, FILES, DATES, IMAGES, ARCHIVE, TRASH, PRIVACY, ONBOARDING, SETTINGS;
+        ALL_NOTES, RECENT, TASKS, NEW_DRAWING, FAVORITES, DRAFTS, TAGS, RANDOM, FILES, DATES, IMAGES, RELATIONSHIP_GRAPH, ARCHIVE, TRASH, PRIVACY, ONBOARDING, SETTINGS;
 
         companion object {
             val DEFAULT_ORDER: List<DrawerItemId> =
-                listOf(ALL_NOTES, RECENT, TASKS, FAVORITES, DRAFTS, TAGS, FILES, DATES, IMAGES, ARCHIVE, TRASH, PRIVACY, ONBOARDING, SETTINGS)
+                listOf(ALL_NOTES, RECENT, FAVORITES, PRIVACY, DRAFTS, ARCHIVE, DATES, IMAGES, TAGS, RANDOM, RELATIONSHIP_GRAPH, TRASH, TASKS, NEW_DRAWING, FILES, ONBOARDING, SETTINGS)
+            val DEFAULT_GROUP_START_ITEMS: Set<DrawerItemId> = setOf(FAVORITES, DATES)
+            val DEFAULT_HIDDEN_ITEMS: Set<DrawerItemId> = setOf(TASKS, NEW_DRAWING, FILES, ONBOARDING)
+            val LEGACY_DEFAULT_ORDER: List<DrawerItemId> =
+                listOf(ALL_NOTES, RECENT, FAVORITES, PRIVACY, DRAFTS, ARCHIVE, DATES, IMAGES, RELATIONSHIP_GRAPH, TAGS, RANDOM, TASKS, NEW_DRAWING, FILES, TRASH, ONBOARDING, SETTINGS)
+            val LEGACY_DEFAULT_HIDDEN_ITEMS: Set<DrawerItemId> = setOf(TASKS, NEW_DRAWING, FILES, TRASH, ONBOARDING)
         }
     }
 
@@ -1103,7 +827,10 @@ class PrefsManager(context: Context) {
 
     fun getDrawerStyle(): DrawerStyle {
         val raw = prefs.getString(KEY_DRAWER_STYLE, null) ?: return DrawerStyle.DEFAULT
-        return runCatching { DrawerStyle.valueOf(raw) }.getOrDefault(DrawerStyle.DEFAULT)
+        return when (val style = runCatching { DrawerStyle.valueOf(raw) }.getOrDefault(DrawerStyle.DEFAULT)) {
+            DrawerStyle.ICON_BOX, DrawerStyle.GROUPED_CARD -> DrawerStyle.MINIMAL_TEXT
+            else -> style
+        }
     }
 
     fun saveDrawerStyle(style: DrawerStyle) {
@@ -1139,12 +866,28 @@ class PrefsManager(context: Context) {
     }
 
     private fun getDefaultDrawerGroupStartItems(): Set<DrawerItemId> =
-        setOf(DrawerItemId.TAGS, DrawerItemId.DATES, DrawerItemId.ARCHIVE, DrawerItemId.PRIVACY)
+        DrawerItemId.DEFAULT_GROUP_START_ITEMS
 
     fun getDrawerItemOrder(): List<DrawerItemId> {
         val raw = prefs.getString(KEY_DRAWER_ITEM_ORDER, null) ?: return DrawerItemId.DEFAULT_ORDER
         val ids = raw.split(",").mapNotNull { runCatching { DrawerItemId.valueOf(it) }.getOrNull() }
+        if (ids == DrawerItemId.LEGACY_DEFAULT_ORDER) {
+            saveDrawerItemOrder(DrawerItemId.DEFAULT_ORDER)
+            return DrawerItemId.DEFAULT_ORDER
+        }
         val result = ids.toMutableList()
+        if (DrawerItemId.RANDOM !in result) {
+            val tagsIndex = result.indexOf(DrawerItemId.TAGS)
+            result.add(if (tagsIndex >= 0) tagsIndex + 1 else result.size, DrawerItemId.RANDOM)
+        }
+        if (DrawerItemId.RELATIONSHIP_GRAPH !in result) {
+            val randomIndex = result.indexOf(DrawerItemId.RANDOM)
+            result.add(if (randomIndex >= 0) randomIndex + 1 else result.size, DrawerItemId.RELATIONSHIP_GRAPH)
+        }
+        if (DrawerItemId.TRASH !in result) {
+            val relationshipIndex = result.indexOf(DrawerItemId.RELATIONSHIP_GRAPH)
+            result.add(if (relationshipIndex >= 0) relationshipIndex + 1 else result.size, DrawerItemId.TRASH)
+        }
         DrawerItemId.DEFAULT_ORDER.forEach { if (it !in result) result.add(it) }
         return result
     }
@@ -1154,10 +897,16 @@ class PrefsManager(context: Context) {
     }
 
     fun getHiddenDrawerItems(): Set<DrawerItemId> {
+        migrateDrawerCategoryActionsIfNeeded()
         val savedHiddenItems = prefs.getStringSet(KEY_DRAWER_HIDDEN_ITEMS, null)
             ?.mapNotNull { runCatching { DrawerItemId.valueOf(it) }.getOrNull() }
-            ?.toSet() ?: getDefaultHiddenDrawerItems()
-        return (savedHiddenItems + getBottomToolbarDrawerHiddenItems())
+            ?.toSet()
+        val normalizedHiddenItems = when (savedHiddenItems) {
+            null -> getDefaultHiddenDrawerItems()
+            DrawerItemId.LEGACY_DEFAULT_HIDDEN_ITEMS -> getDefaultHiddenDrawerItems().also { saveHiddenDrawerItems(it) }
+            else -> savedHiddenItems
+        }
+        return (normalizedHiddenItems + getBottomToolbarDrawerHiddenItems())
             .filter { canHideDrawerItem(it) }
             .toSet()
     }
@@ -1168,7 +917,21 @@ class PrefsManager(context: Context) {
     }
 
     private fun getDefaultHiddenDrawerItems(): Set<DrawerItemId> =
-        setOf(DrawerItemId.ONBOARDING)
+        DrawerItemId.DEFAULT_HIDDEN_ITEMS
+
+    private fun migrateDrawerCategoryActionsIfNeeded() {
+        if (prefs.getBoolean(KEY_DRAWER_CATEGORY_ACTIONS_MIGRATED, false)) return
+        val savedHiddenItems = prefs.getStringSet(KEY_DRAWER_HIDDEN_ITEMS, null)
+        prefs.edit().apply {
+            if (savedHiddenItems != null) {
+                putStringSet(
+                    KEY_DRAWER_HIDDEN_ITEMS,
+                    savedHiddenItems + setOf(DrawerItemId.NEW_DRAWING.name, DrawerItemId.FILES.name),
+                )
+            }
+            putBoolean(KEY_DRAWER_CATEGORY_ACTIONS_MIGRATED, true)
+        }.apply()
+    }
 
     private fun getBottomToolbarDrawerHiddenItems(): Set<DrawerItemId> {
         if (getHomeActionStyle() != HomeActionStyle.BOTTOM_TOOLBAR) {
@@ -1232,30 +995,93 @@ class PrefsManager(context: Context) {
 
         companion object {
             val DEFAULT_ORDER: List<HomeBottomToolbarItemId> =
-                listOf(TASKS, NEW_DRAWING, NEW_NOTE, NEW_DRAFT, SETTINGS, NEW_FOLDER, ALL_NOTES, RECENT, FAVORITES, DRAFTS, TAGS, FILES, DATES, IMAGES, ARCHIVE, TRASH, PRIVACY)
+                listOf(FILES, TASKS, NEW_NOTE, NEW_DRAFT, SETTINGS, NEW_FOLDER, ALL_NOTES, RECENT, FAVORITES, DRAFTS, TAGS, DATES, IMAGES, ARCHIVE, TRASH, PRIVACY)
             val DEFAULT_HIDDEN_ITEMS: Set<HomeBottomToolbarItemId> =
-                setOf(NEW_FOLDER, ALL_NOTES, RECENT, FAVORITES, DRAFTS, TAGS, FILES, DATES, IMAGES, ARCHIVE, TRASH, PRIVACY)
+                setOf(NEW_FOLDER, ALL_NOTES, RECENT, FAVORITES, DRAFTS, TAGS, DATES, IMAGES, ARCHIVE, TRASH, PRIVACY)
         }
     }
 
     fun getHomeBottomToolbarItemOrder(): List<HomeBottomToolbarItemId> {
+        migrateHomeBottomToolbarDefaultsIfNeeded()
         val raw = prefs.getString(KEY_HOME_BOTTOM_TOOLBAR_ITEM_ORDER, null) ?: return HomeBottomToolbarItemId.DEFAULT_ORDER
-        val ids = raw.split(",").mapNotNull { runCatching { HomeBottomToolbarItemId.valueOf(it) }.getOrNull() }
+        val ids = raw.split(",")
+            .mapNotNull { runCatching { HomeBottomToolbarItemId.valueOf(it) }.getOrNull() }
+            .filter { it in HomeBottomToolbarItemId.DEFAULT_ORDER }
         val result = ids.distinct().toMutableList()
         HomeBottomToolbarItemId.DEFAULT_ORDER.forEach { if (it !in result) result.add(it) }
         return result
     }
 
     fun saveHomeBottomToolbarItemOrder(order: List<HomeBottomToolbarItemId>) {
-        val normalized = order.distinct().toMutableList()
+        val normalized = order.filter { it in HomeBottomToolbarItemId.DEFAULT_ORDER }.distinct().toMutableList()
         HomeBottomToolbarItemId.DEFAULT_ORDER.forEach { if (it !in normalized) normalized.add(it) }
         prefs.edit().putString(KEY_HOME_BOTTOM_TOOLBAR_ITEM_ORDER, normalized.joinToString(",") { it.name }).apply()
     }
 
-    fun getHomeBottomToolbarHiddenItems(): Set<HomeBottomToolbarItemId> =
-        prefs.getStringSet(KEY_HOME_BOTTOM_TOOLBAR_HIDDEN_ITEMS, null)
+    fun getHomeBottomToolbarHiddenItems(): Set<HomeBottomToolbarItemId> {
+        migrateHomeBottomToolbarDefaultsIfNeeded()
+        return prefs.getStringSet(KEY_HOME_BOTTOM_TOOLBAR_HIDDEN_ITEMS, null)
             ?.mapNotNull { runCatching { HomeBottomToolbarItemId.valueOf(it) }.getOrNull() }
             ?.toSet() ?: HomeBottomToolbarItemId.DEFAULT_HIDDEN_ITEMS
+    }
+
+    private fun migrateHomeBottomToolbarDefaultsIfNeeded() {
+        if (prefs.getBoolean(KEY_HOME_BOTTOM_TOOLBAR_DEFAULTS_V2_MIGRATED, false)) return
+        val savedOrder = prefs.getString(KEY_HOME_BOTTOM_TOOLBAR_ITEM_ORDER, null)
+            ?.split(",")
+            ?.mapNotNull { runCatching { HomeBottomToolbarItemId.valueOf(it) }.getOrNull() }
+        val savedHidden = prefs.getStringSet(KEY_HOME_BOTTOM_TOOLBAR_HIDDEN_ITEMS, null)
+            ?.mapNotNull { runCatching { HomeBottomToolbarItemId.valueOf(it) }.getOrNull() }
+            ?.toSet()
+        val oldDefaultOrder = listOf(
+            HomeBottomToolbarItemId.TASKS,
+            HomeBottomToolbarItemId.NEW_DRAWING,
+            HomeBottomToolbarItemId.NEW_NOTE,
+            HomeBottomToolbarItemId.NEW_DRAFT,
+            HomeBottomToolbarItemId.SETTINGS,
+            HomeBottomToolbarItemId.NEW_FOLDER,
+            HomeBottomToolbarItemId.ALL_NOTES,
+            HomeBottomToolbarItemId.RECENT,
+            HomeBottomToolbarItemId.FAVORITES,
+            HomeBottomToolbarItemId.DRAFTS,
+            HomeBottomToolbarItemId.TAGS,
+            HomeBottomToolbarItemId.FILES,
+            HomeBottomToolbarItemId.DATES,
+            HomeBottomToolbarItemId.IMAGES,
+            HomeBottomToolbarItemId.ARCHIVE,
+            HomeBottomToolbarItemId.TRASH,
+            HomeBottomToolbarItemId.PRIVACY,
+        )
+        val oldDefaultHidden = setOf(
+            HomeBottomToolbarItemId.NEW_FOLDER,
+            HomeBottomToolbarItemId.ALL_NOTES,
+            HomeBottomToolbarItemId.RECENT,
+            HomeBottomToolbarItemId.FAVORITES,
+            HomeBottomToolbarItemId.DRAFTS,
+            HomeBottomToolbarItemId.TAGS,
+            HomeBottomToolbarItemId.FILES,
+            HomeBottomToolbarItemId.DATES,
+            HomeBottomToolbarItemId.IMAGES,
+            HomeBottomToolbarItemId.ARCHIVE,
+            HomeBottomToolbarItemId.TRASH,
+            HomeBottomToolbarItemId.PRIVACY,
+        )
+        prefs.edit().apply {
+            if (savedOrder == oldDefaultOrder) {
+                putString(
+                    KEY_HOME_BOTTOM_TOOLBAR_ITEM_ORDER,
+                    HomeBottomToolbarItemId.DEFAULT_ORDER.joinToString(",") { it.name },
+                )
+            }
+            if (savedHidden == oldDefaultHidden) {
+                putStringSet(
+                    KEY_HOME_BOTTOM_TOOLBAR_HIDDEN_ITEMS,
+                    HomeBottomToolbarItemId.DEFAULT_HIDDEN_ITEMS.map { it.name }.toSet(),
+                )
+            }
+            putBoolean(KEY_HOME_BOTTOM_TOOLBAR_DEFAULTS_V2_MIGRATED, true)
+        }.apply()
+    }
 
     fun saveHomeBottomToolbarHiddenItems(items: Set<HomeBottomToolbarItemId>) {
         prefs.edit().putStringSet(KEY_HOME_BOTTOM_TOOLBAR_HIDDEN_ITEMS, items.map { it.name }.toSet()).apply()
@@ -1326,116 +1152,43 @@ class PrefsManager(context: Context) {
 
         companion object {
             val DEFAULT_ORDER: List<EditorTopToolbarItemId> =
-                listOf(MINDMAP, LABEL, SEARCH, EDIT, OUTLINE, REMARKS, HISTORY, PRIVACY, ARCHIVE, DELETE, MORE)
-            val DEFAULT_MORE_ITEMS: Set<EditorTopToolbarItemId> = setOf(HISTORY, PRIVACY, ARCHIVE, DELETE)
-            val DEFAULT_HIDDEN_ITEMS: Set<EditorTopToolbarItemId> = emptySet()
+                listOf(SEARCH, EDIT, OUTLINE, REMARKS, HISTORY, MINDMAP, PRIVACY, ARCHIVE, DELETE, MORE, LABEL)
+            val DEFAULT_MORE_ITEMS: Set<EditorTopToolbarItemId> = setOf(HISTORY, MINDMAP, PRIVACY, ARCHIVE, DELETE)
+            val DEFAULT_HIDDEN_ITEMS: Set<EditorTopToolbarItemId> = setOf(LABEL)
         }
     }
 
-    fun getEditorTopToolbarItemOrder(): List<EditorTopToolbarItemId> {
-        val raw = prefs.getString(KEY_EDITOR_TOP_TOOLBAR_ITEM_ORDER, null) ?: return EditorTopToolbarItemId.DEFAULT_ORDER
-        val ids = raw.split(",").mapNotNull { runCatching { EditorTopToolbarItemId.valueOf(it) }.getOrNull() }
-        val result = ids.toMutableList()
-        EditorTopToolbarItemId.DEFAULT_ORDER.forEach { if (it !in result) result.add(it) }
-        return result
-    }
+    fun getEditorTopToolbarItemOrder(): List<EditorTopToolbarItemId> = editorPreferences.getTopToolbarItemOrder()
 
-    fun saveEditorTopToolbarItemOrder(order: List<EditorTopToolbarItemId>) {
-        val normalized = order.distinct().toMutableList()
-        EditorTopToolbarItemId.DEFAULT_ORDER.forEach { if (it !in normalized) normalized.add(it) }
-        prefs.edit().putString(KEY_EDITOR_TOP_TOOLBAR_ITEM_ORDER, normalized.joinToString(",") { it.name }).apply()
-    }
+    fun saveEditorTopToolbarItemOrder(order: List<EditorTopToolbarItemId>) = editorPreferences.saveTopToolbarItemOrder(order)
 
-    fun getEditorTopToolbarMoreItems(): Set<EditorTopToolbarItemId> {
-        val storedItems = prefs.getStringSet(KEY_EDITOR_TOP_TOOLBAR_MORE_ITEMS, null)
-            ?.mapNotNull { runCatching { EditorTopToolbarItemId.valueOf(it) }.getOrNull() }
-            ?.filter { it != EditorTopToolbarItemId.MORE }
-            ?.toSet()
-        if (storedItems == null) return EditorTopToolbarItemId.DEFAULT_MORE_ITEMS
+    fun getEditorTopToolbarMoreItems(): Set<EditorTopToolbarItemId> = editorPreferences.getTopToolbarMoreItems()
 
-        if (!prefs.getBoolean(KEY_EDITOR_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED, false)) {
-            val migratedItems = storedItems + EditorTopToolbarItemId.DEFAULT_MORE_ITEMS
-            prefs.edit()
-                .putBoolean(KEY_EDITOR_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED, true)
-                .putStringSet(KEY_EDITOR_TOP_TOOLBAR_MORE_ITEMS, migratedItems.map { it.name }.toSet())
-                .apply()
-            return migratedItems
-        }
+    fun saveEditorTopToolbarMoreItems(items: Set<EditorTopToolbarItemId>) = editorPreferences.saveTopToolbarMoreItems(items)
 
-        return storedItems
-    }
+    fun getEditorTopToolbarHiddenItems(): Set<EditorTopToolbarItemId> = editorPreferences.getTopToolbarHiddenItems()
 
-    fun saveEditorTopToolbarMoreItems(items: Set<EditorTopToolbarItemId>) {
-        val safeItems = items.filter { it != EditorTopToolbarItemId.MORE }
-        prefs.edit()
-            .putBoolean(KEY_EDITOR_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED, true)
-            .putStringSet(KEY_EDITOR_TOP_TOOLBAR_MORE_ITEMS, safeItems.map { it.name }.toSet())
-            .apply()
-    }
-
-    fun getEditorTopToolbarHiddenItems(): Set<EditorTopToolbarItemId> =
-        prefs.getStringSet(KEY_EDITOR_TOP_TOOLBAR_HIDDEN_ITEMS, null)
-            ?.mapNotNull { runCatching { EditorTopToolbarItemId.valueOf(it) }.getOrNull() }
-            ?.filter { it != EditorTopToolbarItemId.MORE }
-            ?.toSet() ?: EditorTopToolbarItemId.DEFAULT_HIDDEN_ITEMS
-
-    fun saveEditorTopToolbarHiddenItems(items: Set<EditorTopToolbarItemId>) {
-        val safeItems = items.filter { it != EditorTopToolbarItemId.MORE }
-        prefs.edit().putStringSet(KEY_EDITOR_TOP_TOOLBAR_HIDDEN_ITEMS, safeItems.map { it.name }.toSet()).apply()
-    }
+    fun saveEditorTopToolbarHiddenItems(items: Set<EditorTopToolbarItemId>) = editorPreferences.saveTopToolbarHiddenItems(items)
     // endregion
 
     // region 应用密码 / 隐私密码
-    fun getAppPasswordHash(): String? = prefs.getString(KEY_APP_PASSWORD, null)?.takeIf { it.isNotBlank() }
+    fun getAppPasswordHash(): String? = privacyPreferences.getAppPasswordHash()
 
-    fun saveAppPasswordHash(hash: String?) {
-        prefs.edit().apply {
-            if (hash.isNullOrBlank()) {
-                remove(KEY_APP_PASSWORD)
-                remove(KEY_APP_BIOMETRIC_UNLOCK)
-            } else {
-                putString(KEY_APP_PASSWORD, hash)
-            }
-        }.apply()
-    }
+    fun saveAppPasswordHash(hash: String?) = privacyPreferences.saveAppPasswordHash(hash)
 
-    fun isAppBiometricUnlockEnabled(): Boolean = prefs.getBoolean(KEY_APP_BIOMETRIC_UNLOCK, false)
+    fun isAppBiometricUnlockEnabled(): Boolean = privacyPreferences.isAppBiometricUnlockEnabled()
 
-    fun saveAppBiometricUnlockEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_APP_BIOMETRIC_UNLOCK, enabled).apply()
-    }
+    fun saveAppBiometricUnlockEnabled(enabled: Boolean) = privacyPreferences.saveAppBiometricUnlockEnabled(enabled)
 
-    fun getPrivacyPasswordHash(): String? =
-        prefs.getString(KEY_PRIVACY_PASSWORD, null)?.takeIf { it.isNotBlank() }
+    fun getPrivacyPasswordHash(): String? = privacyPreferences.getPrivacyPasswordHash()
 
-    fun savePrivacyPasswordHash(hash: String?) {
-        prefs.edit().apply {
-            if (hash.isNullOrBlank()) {
-                remove(KEY_PRIVACY_PASSWORD)
-                remove(KEY_PRIVACY_BIOMETRIC_UNLOCK)
-            } else {
-                putString(KEY_PRIVACY_PASSWORD, hash)
-            }
-        }.apply()
-    }
+    fun savePrivacyPasswordHash(hash: String?) = privacyPreferences.savePrivacyPasswordHash(hash)
 
-    fun getSafetyWordHash(): String? = prefs.getString(KEY_SAFETY_WORD, null)?.takeIf { it.isNotBlank() }
 
-    fun saveSafetyWordHash(hash: String?) {
-        prefs.edit().apply {
-            if (hash.isNullOrBlank()) {
-                remove(KEY_SAFETY_WORD)
-            } else {
-                putString(KEY_SAFETY_WORD, hash)
-            }
-        }.apply()
-    }
+    fun isPrivacyBiometricUnlockEnabled(): Boolean = privacyPreferences.isPrivacyBiometricUnlockEnabled()
 
-    fun isPrivacyBiometricUnlockEnabled(): Boolean = prefs.getBoolean(KEY_PRIVACY_BIOMETRIC_UNLOCK, false)
-
-    fun savePrivacyBiometricUnlockEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_PRIVACY_BIOMETRIC_UNLOCK, enabled).apply()
-    }
+    fun savePrivacyBiometricUnlockEnabled(enabled: Boolean) =
+        privacyPreferences.savePrivacyBiometricUnlockEnabled(enabled)
     // endregion
 
     // region 图片路径模式
@@ -1581,7 +1334,7 @@ class PrefsManager(context: Context) {
         prefs.edit().putBoolean(KEY_SHOW_NOTE_DETAIL_TITLE, visible).apply()
     }
 
-    fun isNoteDetailFileInfoVisible(): Boolean = prefs.getBoolean(KEY_SHOW_NOTE_DETAIL_FILE_INFO, false)
+    fun isNoteDetailFileInfoVisible(): Boolean = prefs.getBoolean(KEY_SHOW_NOTE_DETAIL_FILE_INFO, true)
 
     fun saveNoteDetailFileInfoVisible(visible: Boolean) {
         prefs.edit().putBoolean(KEY_SHOW_NOTE_DETAIL_FILE_INFO, visible).apply()
@@ -1618,6 +1371,41 @@ class PrefsManager(context: Context) {
         prefs.edit().putBoolean(KEY_NOTIFICATION_PERMISSION_REQUESTED, true).apply()
     }
 
+    fun isAppLoggingEnabled(): Boolean =
+        prefs.getBoolean(KEY_APP_LOGGING_ENABLED, DEFAULT_APP_LOGGING_ENABLED)
+
+    fun saveAppLoggingEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_APP_LOGGING_ENABLED, enabled).apply()
+    }
+
+    fun isAutoUpdateCheckEnabled(): Boolean =
+        prefs.getBoolean(KEY_AUTO_UPDATE_CHECK_ENABLED, DEFAULT_AUTO_UPDATE_CHECK_ENABLED)
+
+    fun saveAutoUpdateCheckEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_UPDATE_CHECK_ENABLED, enabled).apply()
+    }
+
+    fun hasCheckedForUpdatesToday(): Boolean =
+        prefs.getString(KEY_LAST_UPDATE_CHECK_DATE, null) == currentLocalDateKey()
+
+    fun markUpdateCheckAttemptToday() {
+        prefs.edit().putString(KEY_LAST_UPDATE_CHECK_DATE, currentLocalDateKey()).apply()
+    }
+
+    fun getUpdateCheckEtag(): String? = prefs.getString(KEY_UPDATE_CHECK_ETAG, null)
+
+    fun getUpdateCheckCache(): String? = prefs.getString(KEY_UPDATE_CHECK_CACHE, null)
+
+    fun saveUpdateCheckCache(etag: String?, responseBody: String) {
+        prefs.edit().apply {
+            if (etag.isNullOrBlank()) remove(KEY_UPDATE_CHECK_ETAG) else putString(KEY_UPDATE_CHECK_ETAG, etag)
+            putString(KEY_UPDATE_CHECK_CACHE, responseBody)
+        }.apply()
+    }
+
+    private fun currentLocalDateKey(): String =
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+
     fun defaultHiddenFilenamePatterns(): List<String> =
         listOf(DEFAULT_HIDDEN_DATE_FILENAME_PATTERN, DEFAULT_HIDDEN_COPY_FILENAME_PATTERN)
     // endregion
@@ -1628,8 +1416,4 @@ class PrefsManager(context: Context) {
             else -> DEFAULT_APP_LANGUAGE
         }
 
-    private fun Collection<String>.normalizedNotePathSet(): Set<String> =
-        map(::normalizeNotePath)
-            .filter { it.isNotBlank() }
-            .toSet()
 }

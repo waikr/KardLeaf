@@ -148,9 +148,9 @@ export function createEditor(
             onEvent({ kind: EditorEventType.LinkOpen, url });
           }),
           createWikilinkClickExtension((target) => {
-            // Wikilink target 复用 LinkOpen channel；host 端按 url 形态路由
-            // （wikilink target 不会以 scheme `://` 开头，host 借此识别）
-            onEvent({ kind: EditorEventType.LinkOpen, url: target });
+            // Mark wikilinks explicitly so relative Markdown links keep their
+            // existing external-link handling in the Android bridge.
+            onEvent({ kind: EditorEventType.LinkOpen, url: `kardleaf-wikilink:${target}` });
           }),
         ]
       : []),

@@ -26,6 +26,7 @@ import {
   toggleItalic,
   toggleList,
   toggleStrike,
+  toggleUnderline,
 } from './editorCommands';
 import { insertLineAfter } from './editorCommands/insertLineAfter';
 import { sortSelectedLines } from './editorCommands/sortSelectedLines';
@@ -42,11 +43,11 @@ import { createSelectionRange } from './utils';
 
 /**
  * 编辑器控制器实现类
- * 
+ *
  * 这是编辑器的核心控制接口，负责封装所有对 CodeMirror 6 编辑器的操作。
  * 外部宿主应用（如 SwarmNote 桌面端/移动端）通过这个接口与编辑器交互，
  * 而不需要直接操作 CodeMirror 的底层 API。
- * 
+ *
  * 主要职责：
  * 1. 执行编辑命令（格式化、插入内容等）
  * 2. 管理文本内容和选区
@@ -77,7 +78,7 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 检查是否支持指定的编辑命令
-   * 
+   *
    * @param name - 命令名称
    * @returns 如果支持该命令返回 true
    */
@@ -87,6 +88,7 @@ export class EditorControlImpl implements EditorControl {
       case 'redo':
       case 'toggleBold':
       case 'toggleItalic':
+      case 'toggleUnderline':
       case 'toggleCode':
       case 'toggleStrike':
       case 'toggleHighlight':
@@ -122,11 +124,11 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 执行指定的编辑命令
-   * 
+   *
    * 这是一个统一的命令分发器，将字符串形式的命令名映射到具体的操作函数。
    * 这种设计让宿主应用可以通过统一的接口调用各种编辑功能，
    * 而不需要了解底层的 CodeMirror API。
-   * 
+   *
    * @param name - 命令名称
    * @param args - 命令参数（可变参数）
    * @returns 命令执行结果
@@ -151,6 +153,9 @@ export class EditorControlImpl implements EditorControl {
       /** 切换斜体格式 */
       case 'toggleItalic':
         return toggleItalic(this.view);
+      /** 切换下划线格式 */
+      case 'toggleUnderline':
+        return toggleUnderline(this.view);
       /** 切换行内代码格式 */
       case 'toggleCode':
         return toggleCode(this.view);
@@ -246,7 +251,7 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 获取编辑器中的全部文本内容
-   * 
+   *
    * @returns 完整的文档字符串
    */
   getText(): string {
@@ -255,7 +260,7 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 替换整个文档内容
-   * 
+   *
    * @param text - 新的文档内容
    */
   setText(text: string): void {
@@ -266,7 +271,7 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 在当前位置插入文本（替换选区或插入光标处）
-   * 
+   *
    * @param text - 要插入的文本
    */
   insertText(text: string): void {
@@ -275,10 +280,10 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 替换当前选区的文本内容
-   * 
+   *
    * 如果有选区，则替换选区内容；如果没有选区，则在光标位置插入。
    * 插入后将光标移动到插入文本的末尾。
-   * 
+   *
    * @param text - 要插入的文本
    */
   replaceSelection(text: string): void {
@@ -291,7 +296,7 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 获取当前选区的位置信息
-   * 
+   *
    * @returns 包含 anchor 和 head 的选区对象
    */
   getSelection() {
@@ -301,7 +306,7 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 设置选区位置
-   * 
+   *
    * @param anchor - 选区起始位置
    * @param head - 选区结束位置（可选，默认等于 anchor）
    */
@@ -316,7 +321,7 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 获取当前编辑器设置
-   * 
+   *
    * @returns 完整的编辑器设置对象
    */
   getSettings(): EditorSettings {
@@ -325,10 +330,10 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 更新编辑器设置
-   * 
+   *
    * 通过 CodeMirror 的 Effect 机制动态更新设置，无需重建编辑器。
    * 可以更新主题、功能开关等配置。
-   * 
+   *
    * @param settings - 要更新的设置（部分更新）
    */
   updateSettings(settings: EditorSettingsUpdate): void {
@@ -343,7 +348,7 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 获取当前搜索状态
-   * 
+   *
    * @returns 搜索状态对象，如果没有激活搜索则返回 null
    */
   getSearchState(): SearchState | null {
@@ -352,9 +357,9 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 设置搜索状态
-   * 
+   *
    * 可以激活搜索面板、设置搜索关键词等。
-   * 
+   *
    * @param state - 搜索状态对象，传 null 关闭搜索
    * @param source - 触发来源标识（用于区分不同的触发源）
    */
@@ -364,7 +369,7 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 清除搜索状态
-   * 
+   *
    * @param source - 触发来源标识
    */
   clearSearch(source?: string): void {
@@ -373,9 +378,9 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 获取当前选区的格式状态
-   * 
+   *
    * 用于工具栏按钮的状态显示（例如：当前是否在加粗文本中）。
-   * 
+   *
    * @returns 选区格式状态对象
    */
   getSelectionFormatting() {
@@ -384,13 +389,13 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 设置编辑器底部的滚动边距
-   * 
+   *
    * 这个方法同时调整两个地方：
    * 1. CodeMirror 的 scrollMargins - 控制滚动边界
    * 2. 内容的 padding-bottom - 控制视觉上的底部留白
-   * 
+   *
    * 使用 Compartment.reconfigure 实现原子性更新，避免闪烁。
-   * 
+   *
    * @param px - 底部边距的像素值
    */
   setScrollBottomMargin(px: number): void {
@@ -427,7 +432,7 @@ export class EditorControlImpl implements EditorControl {
 
   /**
    * 销毁编辑器实例
-   * 
+   *
    * 清理资源，移除 DOM，触发 onDestroy 回调。
    * 在 React/Vue 等框架的组件卸载时调用。
    */

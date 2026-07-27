@@ -118,6 +118,7 @@ fun NoteImagesScreen(
                     items(images, key = { "${it.note.file.path}:${it.reference}:${it.note.lastModified.time}" }) { image ->
                         ImageGalleryCard(
                             image = image,
+                            peekThumbnail = { viewModel.peekImageThumbnailBitmap(image.note, image.reference) },
                             loadThumbnail = { viewModel.resolveImageThumbnailBitmap(image.note, image.reference) },
                             onClick = { onNoteClick(image.note) },
                         )
@@ -131,17 +132,22 @@ fun NoteImagesScreen(
 @Composable
 private fun ImageGalleryCard(
     image: GalleryImage,
+    peekThumbnail: () -> android.graphics.Bitmap?,
     loadThumbnail: suspend () -> android.graphics.Bitmap?,
     onClick: () -> Unit,
 ) {
     var bitmap by remember(image.note.file.path, image.note.lastModified.time, image.reference) {
-        mutableStateOf<android.graphics.Bitmap?>(null)
+        mutableStateOf(peekThumbnail())
     }
     var loadFinished by remember(image.note.file.path, image.note.lastModified.time, image.reference) {
         mutableStateOf(false)
     }
 
     LaunchedEffect(image.note.file.path, image.note.lastModified.time, image.reference) {
+        if (bitmap != null) {
+            loadFinished = true
+            return@LaunchedEffect
+        }
         loadFinished = false
         bitmap = withTimeoutOrNull(2500L) { loadThumbnail() }
         loadFinished = true

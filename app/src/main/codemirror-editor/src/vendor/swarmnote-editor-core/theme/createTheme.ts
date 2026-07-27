@@ -24,13 +24,13 @@ const lightDefaults = {
   number: '#098658',
   bool: '#0000FF',
   variableName: '#001080',
-  definition: '#795E26',
+  definition: '#666666',
   typeName: '#267F99',
   className: '#267F99',
   propertyName: '#001080',
   operator: '#000000',
   punctuation: '#000000',
-  meta: '#795E26',
+  meta: '#666666',
   atom: '#0000FF',
   namespace: '#267F99',
 };
@@ -51,13 +51,13 @@ const darkDefaults = {
   number: '#B5CEA8',
   bool: '#569CD6',
   variableName: '#9CDCFE',
-  definition: '#DCDCAA',
+  definition: '#b8b8b8',
   typeName: '#4EC9B0',
   className: '#4EC9B0',
   propertyName: '#9CDCFE',
   operator: '#D4D4D4',
   punctuation: '#D4D4D4',
-  meta: '#DCDCAA',
+  meta: '#b8b8b8',
   atom: '#569CD6',
   namespace: '#4EC9B0',
 };
@@ -116,9 +116,6 @@ export function createEditorTheme(config: EditorThemeConfig): Extension {
       },
       '.cm-content': {
         caretColor: c.foreground,
-        paddingBottom: `${paragraphSpacing}px`,
-      },
-      '.cm-line': {
         paddingBottom: `${paragraphSpacing}px`,
       },
       '.cm-cursor, .cm-dropCursor': {

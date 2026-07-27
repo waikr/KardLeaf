@@ -41,7 +41,6 @@ import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.Drafts
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FormatBold
@@ -100,6 +99,7 @@ import com.kangle.kardleaf.data.model.HistoryCleanupPreview
 import com.kangle.kardleaf.data.model.NoteRecordSummary
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.localizedText
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -109,22 +109,43 @@ private const val SETTINGS_TRACE_TAG = "KardLeafSettingsTrace"
 internal fun settingsPageTitle(page: String): String {
     if (Locale.getDefault().language == "en") {
         return when (page) {
+            "layout" -> "Layout"
+            "sort" -> "Sorting"
             "theme" -> "Theme"
+            "image" -> "Image folder"
+            "hiddenFolders" -> "Hidden folders"
+            "density" -> "Card density"
+            "autoFileName" -> "Automatic file names"
+            "date" -> "Date format"
+            "cardModifiedDateFormat" -> "Modified date format"
+            "openNote" -> "Default editor mode"
+            "sidePanelOpenMode" -> "Side panel trigger"
+            "backup" -> "Data backup"
+            "drawerStyle" -> "Sidebar"
             "interface" -> "Interface"
             "homeBottomToolbar" -> "Home toolbar"
             "drawerSettings" -> "Sidebar"
+            "drawer" -> "Sidebar spacing"
+            "historyLimit" -> "History limit"
+            "trash" -> "Trash"
             "toolbar" -> "Format buttons"
             "editorTopToolbar" -> "Note top bar"
             "selectionToolbar" -> "Selection toolbar"
             "editorTypography" -> "Editor font"
             "appLanguage" -> "Language"
-            "image" -> "Image folder"
-            "hiddenFolders" -> "Hidden folders"
+            "drawerEdit" -> "Customize sidebar"
+            "imagePath" -> "Image path format"
+            "security" -> "Security"
+            "passwordMode" -> "Password type"
+            "doubleTap" -> "Double-tap interval"
+            "previewTheme" -> "Preview theme"
+            "autoCodeMirrorThreshold" -> "Automatic editor threshold"
+            "trashAutoClean" -> "Automatic trash cleanup"
             "webDav" -> "WebDAV"
             "autoBackup" -> "Auto backup"
             "taskReminders" -> "Tasks & reminders"
-            "trash" -> "Trash"
-            "security" -> "Security"
+            "remarkRecords" -> "Remark records"
+            "historyRecords" -> "Version history"
             "about" -> "About"
             else -> "Settings"
         }
@@ -159,6 +180,7 @@ internal fun settingsPageTitle(page: String): String {
         "security" -> "安全"
         "passwordMode" -> "密码类型"
         "doubleTap" -> "双击间隔"
+        "previewTheme" -> "预览主题"
         "autoCodeMirrorThreshold" -> "自动切换字数"
         "trashAutoClean" -> "自动清理回收站"
         "webDav" -> "WebDAV 云同步"
@@ -171,12 +193,71 @@ internal fun settingsPageTitle(page: String): String {
     }
 }
 
+internal fun previewThemeLabel(theme: PrefsManager.PreviewTheme): String =
+    if (Locale.getDefault().language == "en") {
+        when (theme) {
+            PrefsManager.PreviewTheme.FOLLOW_APP -> "Follow app theme"
+            PrefsManager.PreviewTheme.GITHUB -> "GitHub"
+            PrefsManager.PreviewTheme.NEWSPRINT -> "Newsprint"
+            PrefsManager.PreviewTheme.VUE -> "Vue"
+            PrefsManager.PreviewTheme.ONE -> "One Light / Dark"
+            PrefsManager.PreviewTheme.DRACULA -> "Dracula"
+            PrefsManager.PreviewTheme.NORD -> "Nord"
+            PrefsManager.PreviewTheme.SOLARIZED -> "Solarized"
+        }
+    } else {
+        when (theme) {
+            PrefsManager.PreviewTheme.FOLLOW_APP -> "跟随应用主题"
+            PrefsManager.PreviewTheme.GITHUB -> "GitHub"
+            PrefsManager.PreviewTheme.NEWSPRINT -> "报纸油墨"
+            PrefsManager.PreviewTheme.VUE -> "Vue 文档绿"
+            PrefsManager.PreviewTheme.ONE -> "One Light / Dark"
+            PrefsManager.PreviewTheme.DRACULA -> "Dracula 霓彩夜"
+            PrefsManager.PreviewTheme.NORD -> "Nord 极地蓝"
+            PrefsManager.PreviewTheme.SOLARIZED -> "Solarized 护眼"
+        }
+    }
+
+internal fun previewThemeSubtitle(theme: PrefsManager.PreviewTheme): String =
+    if (Locale.getDefault().language == "en") {
+        when (theme) {
+            PrefsManager.PreviewTheme.FOLLOW_APP -> "Preview colors track the app theme and accent"
+            PrefsManager.PreviewTheme.GITHUB -> "Classic github-markdown-css, auto light/dark"
+            PrefsManager.PreviewTheme.NEWSPRINT -> "Typora Newsprint style with serif headings"
+            PrefsManager.PreviewTheme.VUE -> "Vue docs green accent with orange inline code"
+            PrefsManager.PreviewTheme.ONE -> "Atom One editor palette, auto light/dark"
+            PrefsManager.PreviewTheme.DRACULA -> "Always-dark purple paper with pink code"
+            PrefsManager.PreviewTheme.NORD -> "Arctic blue-gray palette, auto light/dark"
+            PrefsManager.PreviewTheme.SOLARIZED -> "Low-contrast classic, auto light/dark"
+        }
+    } else {
+        when (theme) {
+            PrefsManager.PreviewTheme.FOLLOW_APP -> "预览配色实时跟随应用主题与强调色"
+            PrefsManager.PreviewTheme.GITHUB -> "经典 github-markdown-css 风格，自动明暗"
+            PrefsManager.PreviewTheme.NEWSPRINT -> "Typora 报纸风，衬线标题纸质底色"
+            PrefsManager.PreviewTheme.VUE -> "Vue 文档绿强调，行内代码橙色高亮"
+            PrefsManager.PreviewTheme.ONE -> "Atom 编辑器经典配色，自动明暗"
+            PrefsManager.PreviewTheme.DRACULA -> "德古拉暗紫纸面，始终深色"
+            PrefsManager.PreviewTheme.NORD -> "北极蓝灰冷色调，自动明暗"
+            PrefsManager.PreviewTheme.SOLARIZED -> "低对比经典护眼配色，自动明暗"
+        }
+    }
+
 internal fun drawerStyleLabel(style: PrefsManager.DrawerStyle): String =
-    when (style) {
-        PrefsManager.DrawerStyle.MINIMAL_TEXT -> "方案一：极简文字式"
-        PrefsManager.DrawerStyle.ICON_BOX -> "方案二：图标盒子式"
-        PrefsManager.DrawerStyle.GROUPED_CARD -> "方案三：分组卡片式"
-        PrefsManager.DrawerStyle.DATA_CARD -> "方案四：数据卡片式"
+    if (Locale.getDefault().language == "en") {
+        when (style) {
+            PrefsManager.DrawerStyle.MINIMAL_TEXT -> "Option 1: Minimal text"
+            PrefsManager.DrawerStyle.ICON_BOX -> "Option 2: Icon boxes"
+            PrefsManager.DrawerStyle.GROUPED_CARD -> "Option 3: Grouped cards"
+            PrefsManager.DrawerStyle.DATA_CARD -> "Option 2: Data cards"
+        }
+    } else {
+        when (style) {
+            PrefsManager.DrawerStyle.MINIMAL_TEXT -> "方案一：极简文字式"
+            PrefsManager.DrawerStyle.ICON_BOX -> "方案二：图标盒子式"
+            PrefsManager.DrawerStyle.GROUPED_CARD -> "方案三：分组卡片式"
+            PrefsManager.DrawerStyle.DATA_CARD -> "方案二：数据卡片式"
+        }
     }
 
 internal fun drawerStyleSubtitle(style: PrefsManager.DrawerStyle): String =
@@ -200,6 +281,16 @@ internal fun sortSummary(
     order: PrefsManager.SortOrder,
     direction: PrefsManager.SortDirection,
 ): String {
+    if (Locale.getDefault().language == "en") {
+        val orderText =
+            when (order) {
+                PrefsManager.SortOrder.DATE_MODIFIED -> "Modified"
+                PrefsManager.SortOrder.TITLE -> "Title"
+                PrefsManager.SortOrder.CUSTOM -> "Custom"
+            }
+        val directionText = if (direction == PrefsManager.SortDirection.DESCENDING) "descending" else "ascending"
+        return "$orderText ($directionText)"
+    }
     val orderText =
         when (order) {
             PrefsManager.SortOrder.DATE_MODIFIED -> "修改日期"
@@ -232,6 +323,8 @@ internal fun toolbarItemIcon(item: KardLeafCustomFeatures.ToolbarItem): ImageVec
         KardLeafCustomFeatures.ToolbarItem.MATH -> Icons.Outlined.Functions
         KardLeafCustomFeatures.ToolbarItem.BULLET -> Icons.Outlined.FormatListBulleted
         KardLeafCustomFeatures.ToolbarItem.NUMBERED -> Icons.Outlined.FormatListNumbered
+        KardLeafCustomFeatures.ToolbarItem.INDENT -> Icons.Outlined.FormatIndentIncrease
+        KardLeafCustomFeatures.ToolbarItem.OUTDENT -> Icons.Outlined.FormatIndentDecrease
         KardLeafCustomFeatures.ToolbarItem.CHECKBOX -> Icons.Outlined.CheckBox
         KardLeafCustomFeatures.ToolbarItem.CHECKBOX_DONE -> Icons.Outlined.CheckBoxOutlineBlank
         KardLeafCustomFeatures.ToolbarItem.TABLE -> Icons.Outlined.TableChart
@@ -460,17 +553,17 @@ internal fun normalizeEditorTopToolbarOrder(
 
 internal fun editorTopToolbarItemLabel(item: PrefsManager.EditorTopToolbarItemId): String =
     when (item) {
-        PrefsManager.EditorTopToolbarItemId.MINDMAP -> "思维导图"
-        PrefsManager.EditorTopToolbarItemId.LABEL -> "目录"
-        PrefsManager.EditorTopToolbarItemId.OUTLINE -> "大纲"
-        PrefsManager.EditorTopToolbarItemId.REMARKS -> "属性备注"
-        PrefsManager.EditorTopToolbarItemId.SEARCH -> "搜索"
-        PrefsManager.EditorTopToolbarItemId.EDIT -> "编辑"
-        PrefsManager.EditorTopToolbarItemId.HISTORY -> "历史版本"
-        PrefsManager.EditorTopToolbarItemId.PRIVACY -> "保护"
-        PrefsManager.EditorTopToolbarItemId.ARCHIVE -> "归档"
-        PrefsManager.EditorTopToolbarItemId.DELETE -> "删除"
-        PrefsManager.EditorTopToolbarItemId.MORE -> "更多"
+        PrefsManager.EditorTopToolbarItemId.MINDMAP -> localizedText("思维导图", "Mind map")
+        PrefsManager.EditorTopToolbarItemId.LABEL -> localizedText("目录", "Folder")
+        PrefsManager.EditorTopToolbarItemId.OUTLINE -> localizedText("大纲", "Outline")
+        PrefsManager.EditorTopToolbarItemId.REMARKS -> localizedText("属性备注", "Properties & remarks")
+        PrefsManager.EditorTopToolbarItemId.SEARCH -> localizedText("搜索", "Search")
+        PrefsManager.EditorTopToolbarItemId.EDIT -> localizedText("编辑", "Edit")
+        PrefsManager.EditorTopToolbarItemId.HISTORY -> localizedText("历史版本", "Version history")
+        PrefsManager.EditorTopToolbarItemId.PRIVACY -> localizedText("保护", "Protect")
+        PrefsManager.EditorTopToolbarItemId.ARCHIVE -> localizedText("归档", "Archive")
+        PrefsManager.EditorTopToolbarItemId.DELETE -> localizedText("删除", "Delete")
+        PrefsManager.EditorTopToolbarItemId.MORE -> localizedText("更多", "More")
     }
 
 internal fun editorTopToolbarItemIcon(item: PrefsManager.EditorTopToolbarItemId): ImageVector =
@@ -642,16 +735,16 @@ internal fun SettingsEditorTopToolbarEditRow(
 
 internal fun selectionToolbarItemLabel(item: PrefsManager.SelectionToolbarItemId): String =
     when (item) {
-        PrefsManager.SelectionToolbarItemId.MOVE -> "移动"
-        PrefsManager.SelectionToolbarItemId.COPY -> "复制"
-        PrefsManager.SelectionToolbarItemId.PIN -> "置顶"
-        PrefsManager.SelectionToolbarItemId.FAVORITE -> "收藏"
-        PrefsManager.SelectionToolbarItemId.TAG -> "标签"
-        PrefsManager.SelectionToolbarItemId.ARCHIVE -> "归档"
-        PrefsManager.SelectionToolbarItemId.PROPERTIES -> "属性"
-        PrefsManager.SelectionToolbarItemId.SHARE -> "分享"
-        PrefsManager.SelectionToolbarItemId.PRIVACY -> "保护"
-        PrefsManager.SelectionToolbarItemId.DELETE -> "删除"
+        PrefsManager.SelectionToolbarItemId.MOVE -> localizedText("移动", "Move")
+        PrefsManager.SelectionToolbarItemId.COPY -> localizedText("复制", "Copy")
+        PrefsManager.SelectionToolbarItemId.PIN -> localizedText("置顶", "Pin")
+        PrefsManager.SelectionToolbarItemId.FAVORITE -> localizedText("收藏", "Favorite")
+        PrefsManager.SelectionToolbarItemId.TAG -> localizedText("标签", "Tag")
+        PrefsManager.SelectionToolbarItemId.ARCHIVE -> localizedText("归档", "Archive")
+        PrefsManager.SelectionToolbarItemId.PROPERTIES -> localizedText("属性", "Properties")
+        PrefsManager.SelectionToolbarItemId.SHARE -> localizedText("分享", "Share")
+        PrefsManager.SelectionToolbarItemId.PRIVACY -> localizedText("保护", "Protect")
+        PrefsManager.SelectionToolbarItemId.DELETE -> localizedText("删除", "Delete")
     }
 
 internal fun selectionToolbarItemIcon(item: PrefsManager.SelectionToolbarItemId): ImageVector =
@@ -815,7 +908,7 @@ internal fun SettingsDrawerDragList(
     onRename: (PrefsManager.DrawerItemId, String) -> Unit,
     onToggleVisible: (PrefsManager.DrawerItemId) -> Unit,
     groupStartItems: Set<PrefsManager.DrawerItemId> = emptySet(),
-    onToggleGroupStart: (PrefsManager.DrawerItemId) -> Unit = {},
+    onMoveGroupStart: (PrefsManager.DrawerItemId, PrefsManager.DrawerItemId?) -> Unit = { _, _ -> },
 ) {
     val rowHeight = 64.dp
     val rowSpacing = 6.dp
@@ -824,12 +917,23 @@ internal fun SettingsDrawerDragList(
     var draggingStartIndex by remember { mutableStateOf(-1) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
+    var draggingGroupStart by remember { mutableStateOf<PrefsManager.DrawerItemId?>(null) }
+    var groupDragStartIndex by remember { mutableStateOf(-1) }
+    var groupDragOffset by remember { mutableStateOf(Offset.Zero) }
+    var groupDragTargetIndex by remember { mutableStateOf<Int?>(null) }
 
     fun clearDragState() {
         draggingItem = null
         draggingStartIndex = -1
         dragOffset = Offset.Zero
         dragTargetIndex = null
+    }
+
+    fun clearGroupDragState() {
+        draggingGroupStart = null
+        groupDragStartIndex = -1
+        groupDragOffset = Offset.Zero
+        groupDragTargetIndex = null
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(rowSpacing)) {
@@ -849,62 +953,123 @@ internal fun SettingsDrawerDragList(
                 IntOffset.Zero
             }
 
-            SettingsDrawerEditRow(
-                icon = drawerItemIcon(itemId),
-                title = title,
-                isHidden = itemId in hiddenItems,
-                isDragging = itemIsDragging,
-                isDropTarget = isDropTarget,
-                onRename = { onRename(itemId, title) },
-                canToggleVisible = itemId != PrefsManager.DrawerItemId.SETTINGS,
-                onToggleVisible = { onToggleVisible(itemId) },
-                isGroupStart = itemId in groupStartItems,
-                canToggleGroupStart = itemId !in hiddenItems && index > 0,
-                onToggleGroupStart = { onToggleGroupStart(itemId) },
-                modifier = Modifier
-                    .zIndex(if (itemIsDragging) 1f else 0f)
-                    .offset {
-                        if (itemIsDragging) {
-                            IntOffset(0, dragOffset.y.roundToInt())
-                        } else {
-                            avoidanceOffset
+            Box {
+                SettingsDrawerEditRow(
+                    icon = drawerItemIcon(itemId),
+                    title = title,
+                    isHidden = itemId in hiddenItems,
+                    isDragging = itemIsDragging,
+                    isDropTarget = isDropTarget,
+                    onRename = { onRename(itemId, title) },
+                    canToggleVisible = itemId != PrefsManager.DrawerItemId.SETTINGS,
+                    onToggleVisible = { onToggleVisible(itemId) },
+                    modifier = Modifier
+                        .zIndex(if (itemIsDragging) 1f else 0f)
+                        .offset {
+                            if (itemIsDragging) {
+                                IntOffset(0, dragOffset.y.roundToInt())
+                            } else {
+                                avoidanceOffset
+                            }
                         }
-                    }
-                    .pointerInput(itemId, items.size, rowStepPx) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = {
-                                draggingItem = itemId
-                                draggingStartIndex = index
-                                dragOffset = Offset.Zero
-                                dragTargetIndex = index
-                            },
-                            onDragCancel = { clearDragState() },
-                            onDragEnd = {
-                                val dragged = draggingItem
-                                val fromIndex = if (dragged == null) -1 else items.indexOf(dragged)
-                                val toIndex = dragTargetIndex
-                                if (fromIndex >= 0 && toIndex != null && toIndex != fromIndex) {
-                                    val newOrder = items.toMutableList().also { list ->
-                                        val moved = list.removeAt(fromIndex)
-                                        list.add(toIndex.coerceIn(0, list.size), moved)
+                        .pointerInput(itemId, items.size, rowStepPx) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = {
+                                    draggingItem = itemId
+                                    draggingStartIndex = index
+                                    dragOffset = Offset.Zero
+                                    dragTargetIndex = index
+                                },
+                                onDragCancel = { clearDragState() },
+                                onDragEnd = {
+                                    val dragged = draggingItem
+                                    val fromIndex = if (dragged == null) -1 else items.indexOf(dragged)
+                                    val toIndex = dragTargetIndex
+                                    if (fromIndex >= 0 && toIndex != null && toIndex != fromIndex) {
+                                        val newOrder = items.toMutableList().also { list ->
+                                            val moved = list.removeAt(fromIndex)
+                                            list.add(toIndex.coerceIn(0, list.size), moved)
+                                        }
+                                        onOrderChange(newOrder)
                                     }
-                                    onOrderChange(newOrder)
+                                    clearDragState()
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    dragOffset += dragAmount
+                                    dragTargetIndex = calculateDrawerDragTarget(
+                                        startIndex = draggingStartIndex,
+                                        dragOffset = dragOffset,
+                                        rowHeightPx = rowStepPx,
+                                        itemCount = items.size,
+                                    )
+                                },
+                            )
+                        },
+                )
+
+                if (index > 0 && itemId in groupStartItems) {
+                    val groupLineIsDragging = draggingGroupStart == itemId
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .zIndex(2f)
+                            .offset(y = (-12).dp)
+                            .offset {
+                                if (groupLineIsDragging) {
+                                    IntOffset(0, groupDragOffset.y.roundToInt())
+                                } else {
+                                    IntOffset.Zero
                                 }
-                                clearDragState()
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                dragOffset += dragAmount
-                                dragTargetIndex = calculateDrawerDragTarget(
-                                    startIndex = draggingStartIndex,
-                                    dragOffset = dragOffset,
-                                    rowHeightPx = rowStepPx,
-                                    itemCount = items.size,
+                            }
+                            .fillMaxWidth()
+                            .height(18.dp)
+                            .pointerInput(itemId, items.size, rowStepPx) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        draggingGroupStart = itemId
+                                        groupDragStartIndex = index
+                                        groupDragOffset = Offset.Zero
+                                        groupDragTargetIndex = index
+                                    },
+                                    onDragCancel = { clearGroupDragState() },
+                                    onDragEnd = {
+                                        val dragged = draggingGroupStart
+                                        val targetIndex = groupDragTargetIndex
+                                        if (dragged != null && targetIndex != null) {
+                                            onMoveGroupStart(
+                                                dragged,
+                                                items.getOrNull(targetIndex)?.takeIf { targetIndex > 0 },
+                                            )
+                                        }
+                                        clearGroupDragState()
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        groupDragOffset += dragAmount
+                                        groupDragTargetIndex = calculateDrawerGroupLineTarget(
+                                            startIndex = groupDragStartIndex,
+                                            dragOffset = groupDragOffset,
+                                            rowHeightPx = rowStepPx,
+                                            itemCount = items.size,
+                                        )
+                                    },
                                 )
                             },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            thickness = 1.dp,
+                            color = if (groupLineIsDragging) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.outlineVariant
+                            },
                         )
-                    },
-            )
+                    }
+                }
+            }
         }
     }
 }
@@ -918,9 +1083,6 @@ internal fun SettingsDrawerEditRow(
     onRename: () -> Unit,
     canToggleVisible: Boolean,
     onToggleVisible: () -> Unit,
-    isGroupStart: Boolean = false,
-    canToggleGroupStart: Boolean = false,
-    onToggleGroupStart: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val active = isDragging || isDropTarget
@@ -942,9 +1104,6 @@ internal fun SettingsDrawerEditRow(
         contentHorizontalPadding = 14.dp,
         trailing = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (canToggleGroupStart) {
-                    TextButton(onClick = onToggleGroupStart) { Text(if (isGroupStart) "合并" else "分组") }
-                }
                 TextButton(onClick = onRename) { Text("改名") }
                 if (canToggleVisible) {
                     TextButton(onClick = onToggleVisible) { Text(if (isHidden) "显示" else "隐藏") }
@@ -964,6 +1123,16 @@ internal fun calculateDrawerDragTarget(
 
     val centerY = startIndex * rowHeightPx + rowHeightPx / 2f + dragOffset.y
     return (centerY / rowHeightPx).toInt().coerceIn(0, itemCount - 1)
+}
+
+internal fun calculateDrawerGroupLineTarget(
+    startIndex: Int,
+    dragOffset: Offset,
+    rowHeightPx: Float,
+    itemCount: Int,
+): Int {
+    if (startIndex !in 0 until itemCount) return 0
+    return (startIndex + (dragOffset.y / rowHeightPx).roundToInt()).coerceIn(0, itemCount - 1)
 }
 
 internal fun calculateDrawerAvoidanceOffset(
@@ -989,23 +1158,23 @@ internal fun calculateDrawerAvoidanceOffset(
 
 internal fun homeBottomToolbarItemLabel(itemId: PrefsManager.HomeBottomToolbarItemId): String =
     when (itemId) {
-        PrefsManager.HomeBottomToolbarItemId.TASKS -> "清单"
-        PrefsManager.HomeBottomToolbarItemId.NEW_NOTE -> "新建笔记"
-        PrefsManager.HomeBottomToolbarItemId.NEW_DRAFT -> "新建草稿"
-        PrefsManager.HomeBottomToolbarItemId.NEW_DRAWING -> "新建绘图"
-        PrefsManager.HomeBottomToolbarItemId.NEW_FOLDER -> "新建分类"
-        PrefsManager.HomeBottomToolbarItemId.ALL_NOTES -> "全部笔记"
-        PrefsManager.HomeBottomToolbarItemId.RECENT -> "最近修改"
-        PrefsManager.HomeBottomToolbarItemId.FAVORITES -> "收藏"
-        PrefsManager.HomeBottomToolbarItemId.DRAFTS -> "草稿"
-        PrefsManager.HomeBottomToolbarItemId.TAGS -> "标签"
-        PrefsManager.HomeBottomToolbarItemId.FILES -> "分类"
-        PrefsManager.HomeBottomToolbarItemId.DATES -> "日期"
-        PrefsManager.HomeBottomToolbarItemId.IMAGES -> "图片"
-        PrefsManager.HomeBottomToolbarItemId.ARCHIVE -> "归档"
-        PrefsManager.HomeBottomToolbarItemId.TRASH -> "废弃"
-        PrefsManager.HomeBottomToolbarItemId.PRIVACY -> "隐私"
-        PrefsManager.HomeBottomToolbarItemId.SETTINGS -> "设置"
+        PrefsManager.HomeBottomToolbarItemId.TASKS -> localizedText("任务", "Tasks")
+        PrefsManager.HomeBottomToolbarItemId.NEW_NOTE -> localizedText("新建", "New")
+        PrefsManager.HomeBottomToolbarItemId.NEW_DRAFT -> localizedText("新建速记", "New quick note")
+        PrefsManager.HomeBottomToolbarItemId.NEW_DRAWING -> localizedText("新建绘图", "New drawing")
+        PrefsManager.HomeBottomToolbarItemId.NEW_FOLDER -> localizedText("新建分类", "New folder")
+        PrefsManager.HomeBottomToolbarItemId.ALL_NOTES -> localizedText("全部笔记", "All notes")
+        PrefsManager.HomeBottomToolbarItemId.RECENT -> localizedText("最近修改", "Recent")
+        PrefsManager.HomeBottomToolbarItemId.FAVORITES -> localizedText("收藏", "Favorites")
+        PrefsManager.HomeBottomToolbarItemId.DRAFTS -> localizedText("速记", "Quick notes")
+        PrefsManager.HomeBottomToolbarItemId.TAGS -> localizedText("标签", "Tags")
+        PrefsManager.HomeBottomToolbarItemId.FILES -> localizedText("分类", "Folders")
+        PrefsManager.HomeBottomToolbarItemId.DATES -> localizedText("日期", "Dates")
+        PrefsManager.HomeBottomToolbarItemId.IMAGES -> localizedText("图片", "Images")
+        PrefsManager.HomeBottomToolbarItemId.ARCHIVE -> localizedText("归档", "Archive")
+        PrefsManager.HomeBottomToolbarItemId.TRASH -> localizedText("废弃", "Trash")
+        PrefsManager.HomeBottomToolbarItemId.PRIVACY -> localizedText("隐私", "Privacy")
+        PrefsManager.HomeBottomToolbarItemId.SETTINGS -> localizedText("设置", "Settings")
     }
 
 internal fun homeBottomToolbarItemIcon(itemId: PrefsManager.HomeBottomToolbarItemId): ImageVector =
@@ -1153,20 +1322,23 @@ internal fun SettingsHomeBottomToolbarEditRow(
 
 internal fun drawerItemLabel(itemId: PrefsManager.DrawerItemId): String =
     when (itemId) {
-        PrefsManager.DrawerItemId.ALL_NOTES -> "全部笔记"
-        PrefsManager.DrawerItemId.RECENT -> "最近修改"
-        PrefsManager.DrawerItemId.TASKS -> "任务"
-        PrefsManager.DrawerItemId.FAVORITES -> "收藏"
-        PrefsManager.DrawerItemId.DRAFTS -> "草稿"
-        PrefsManager.DrawerItemId.TAGS -> "标签"
-        PrefsManager.DrawerItemId.FILES -> "分类"
-        PrefsManager.DrawerItemId.DATES -> "日期"
-        PrefsManager.DrawerItemId.IMAGES -> "图片"
-        PrefsManager.DrawerItemId.ARCHIVE -> "归档"
-        PrefsManager.DrawerItemId.TRASH -> "废弃"
-        PrefsManager.DrawerItemId.PRIVACY -> "隐私"
-        PrefsManager.DrawerItemId.ONBOARDING -> "介绍"
-        PrefsManager.DrawerItemId.SETTINGS -> "设置"
+        PrefsManager.DrawerItemId.ALL_NOTES -> localizedText("全部笔记", "All notes")
+        PrefsManager.DrawerItemId.RECENT -> localizedText("最近修改", "Recent")
+        PrefsManager.DrawerItemId.TASKS -> localizedText("任务", "Tasks")
+        PrefsManager.DrawerItemId.NEW_DRAWING -> localizedText("新建绘图", "New drawing")
+        PrefsManager.DrawerItemId.FAVORITES -> localizedText("收藏", "Favorites")
+        PrefsManager.DrawerItemId.DRAFTS -> localizedText("速记", "Quick notes")
+        PrefsManager.DrawerItemId.TAGS -> localizedText("标签", "Tags")
+        PrefsManager.DrawerItemId.RANDOM -> localizedText("随机", "Random")
+        PrefsManager.DrawerItemId.FILES -> localizedText("分类", "Folders")
+        PrefsManager.DrawerItemId.DATES -> localizedText("日期", "Dates")
+        PrefsManager.DrawerItemId.IMAGES -> localizedText("图片", "Images")
+        PrefsManager.DrawerItemId.RELATIONSHIP_GRAPH -> localizedText("关系", "Relations")
+        PrefsManager.DrawerItemId.ARCHIVE -> localizedText("归档", "Archive")
+        PrefsManager.DrawerItemId.TRASH -> localizedText("废弃", "Trash")
+        PrefsManager.DrawerItemId.PRIVACY -> localizedText("隐私", "Privacy")
+        PrefsManager.DrawerItemId.ONBOARDING -> localizedText("介绍", "Intro")
+        PrefsManager.DrawerItemId.SETTINGS -> localizedText("设置", "Settings")
     }
 
 internal fun drawerItemIcon(itemId: PrefsManager.DrawerItemId): ImageVector =
@@ -1174,12 +1346,15 @@ internal fun drawerItemIcon(itemId: PrefsManager.DrawerItemId): ImageVector =
         PrefsManager.DrawerItemId.ALL_NOTES -> Icons.Outlined.Article
         PrefsManager.DrawerItemId.RECENT -> Icons.Outlined.History
         PrefsManager.DrawerItemId.TASKS -> Icons.Outlined.Checklist
+        PrefsManager.DrawerItemId.NEW_DRAWING -> Icons.Outlined.Palette
         PrefsManager.DrawerItemId.FAVORITES -> Icons.Outlined.StarBorder
         PrefsManager.DrawerItemId.DRAFTS -> Icons.Outlined.EditNote
         PrefsManager.DrawerItemId.TAGS -> Icons.Outlined.Sell
+        PrefsManager.DrawerItemId.RANDOM -> Icons.Outlined.Shuffle
         PrefsManager.DrawerItemId.FILES -> Icons.Outlined.FolderOpen
         PrefsManager.DrawerItemId.DATES -> Icons.Outlined.EventNote
         PrefsManager.DrawerItemId.IMAGES -> Icons.Outlined.PhotoLibrary
+        PrefsManager.DrawerItemId.RELATIONSHIP_GRAPH -> Icons.Outlined.AccountTree
         PrefsManager.DrawerItemId.ARCHIVE -> Icons.Outlined.Inventory2
         PrefsManager.DrawerItemId.TRASH -> Icons.Outlined.DeleteOutline
         PrefsManager.DrawerItemId.PRIVACY -> Icons.Outlined.Shield

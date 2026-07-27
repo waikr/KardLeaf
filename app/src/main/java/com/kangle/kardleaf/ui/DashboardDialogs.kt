@@ -115,7 +115,7 @@ private fun PropertyRow(
             onLongClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 clipboard.setText(AnnotatedString(value))
-                Toast.makeText(context, "已复制$value", Toast.LENGTH_SHORT).show()
+                context.showToast("已复制$value")
             },
         ),
     ) {

@@ -279,3 +279,69 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
         )
     }
 }
+
+/*
+ * version 15 → 16：仅扩展独立任务数据，新增分组、优先级、截止时间、重复和备注。
+ * 旧任务保持未分组，不修改任何笔记、历史、隐私或同步表。
+ */
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `groupId` INTEGER")
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `dueAt` INTEGER")
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `repeatRule` TEXT NOT NULL DEFAULT 'NONE'")
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `notes` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_tasks_groupId` ON `tasks` (`groupId`)")
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `task_groups` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `name` TEXT NOT NULL,
+                `sortOrder` INTEGER NOT NULL,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_task_groups_sortOrder` ON `task_groups` (`sortOrder`)",
+        )
+    }
+}
+
+/* version 16 -> 17: persistent derived note-level wikilink occurrences. */
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `note_links` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `sourceRecordId` TEXT NOT NULL,
+                `sourcePath` TEXT NOT NULL,
+                `targetRaw` TEXT NOT NULL,
+                `targetNormalized` TEXT NOT NULL,
+                `targetRecordId` TEXT,
+                `targetPath` TEXT,
+                `alias` TEXT,
+                `heading` TEXT,
+                `blockId` TEXT,
+                `startOffset` INTEGER NOT NULL,
+                `endOffset` INTEGER NOT NULL,
+                `contextSnippet` TEXT NOT NULL,
+                `resolutionStatus` TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_note_links_source` ON `note_links` (`sourceRecordId`, `sourcePath`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_note_links_target` ON `note_links` (`targetRecordId`, `targetPath`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_note_links_target_normalized` ON `note_links` (`targetNormalized`)")
+    }
+}
+
+/* version 17 -> 18: per-task reminder delivery options (popup/notification, ring, vibrate). */
+val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `reminderMode` TEXT NOT NULL DEFAULT 'POPUP'")
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `reminderRing` INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `reminderVibrate` INTEGER NOT NULL DEFAULT 1")
+    }
+}

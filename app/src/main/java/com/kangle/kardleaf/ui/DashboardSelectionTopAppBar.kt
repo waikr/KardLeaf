@@ -223,9 +223,9 @@ internal fun MoveNotesBottomSheet(
         if (path !in favoritePaths) {
             saveFavoritePaths(favoritePaths + path)
             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-            Toast.makeText(context, "已收藏：${destinationDisplayName(path)}", Toast.LENGTH_SHORT).show()
+            context.showToast("已收藏：${destinationDisplayName(path)}")
         } else {
-            Toast.makeText(context, "已在收藏栏：${destinationDisplayName(path)}", Toast.LENGTH_SHORT).show()
+            context.showToast("已在收藏栏：${destinationDisplayName(path)}")
         }
     }
 

@@ -22,6 +22,7 @@ import {
   type EditorControl,
   type EditorEvent,
   type EditorPlugin,
+  type EditorTableContextMenuEvent,
   type EditorSettings,
 } from './vendor/swarmnote-editor-core';
 import { admonitionPlugin } from './vendor/swarmnote-editor-core/plugins/admonition';
@@ -38,6 +39,10 @@ import { tablePlugin } from './vendor/swarmnote-editor-core/plugins/table';
 import { selectionToolbarPlugin } from './vendor/swarmnote-editor-core/plugins/interactions/selectionToolbar';
 import { slashCommandPlugin } from './vendor/swarmnote-editor-core/plugins/interactions/slash';
 import { wikilinkPlugin } from './vendor/swarmnote-editor-core/plugins/interactions/wikilink';
+import {
+  mouseSelectingField,
+  setMouseSelecting,
+} from './vendor/swarmnote-editor-core/core';
 
 type AndroidBridge = Record<string, (...args: unknown[]) => unknown>;
 
@@ -49,7 +54,6 @@ declare global {
 }
 
 const VERSION = 'kardleaf-swarmnote-core-2026-06-27';
-const SCROLL_METRIC_INTERVAL_MS = 48;
 const root = document.getElementById('editorRoot');
 const statusEl = document.getElementById('status');
 const imageDataUris = new Map<string, string>();
@@ -78,10 +82,11 @@ let scrollSession: {
   maxFrameMs: number;
 } | null = null;
 let scrollSettleTimer = 0;
-let lastScrollMetricAt = 0;
+let scrollMetricFrame = 0;
 let cursorEnsureTimer = 0;
 let viewportEnsureTimer = 0;
 let lastViewportKeyboardInsetPx = -1;
+let lastAndroidKeyboardInsetPx = 0;
 let viewportKeyboardSyncInstalled = false;
 let contentApplied = false;
 let contentApplying = false;
@@ -105,6 +110,32 @@ let pendingTapBeforeContentApplied:
     }
   | null = null;
 let lastSelectionSetAt = 0;
+let selectionRevision = 0;
+const nativeSelectionDrag = {
+  pointerDown: false,
+  active: false,
+  cursorOnly: false,
+  x: 0,
+  y: 0,
+  revisionAtDown: 0,
+  downAnchor: 0,
+  downHead: 0,
+  fixedAnchor: 0,
+  frame: 0,
+  lastFrameAt: 0,
+  frameCount: 0,
+  totalScroll: 0,
+  startFrom: 0,
+  startTo: 0,
+};
+let titleHeader: HTMLDivElement | null = null;
+let titleInput: HTMLInputElement | null = null;
+let currentTitle = '';
+let currentTitleHint = '';
+let titleVisible = true;
+let currentTitleFontSize = 22;
+let suppressTitleBridge = false;
+let tableToolbar: HTMLDivElement | null = null;
 
 function nowMs() {
   return typeof performance !== 'undefined' && performance.now
@@ -251,6 +282,13 @@ function isSafeExternalImageSrc(src: string) {
   return /^(data:image\/|https?:\/\/|file:\/\/|content:\/\/|blob:)/i.test(src);
 }
 
+function notifyLocalImageClicked(rawSrc: string, from: number, to: number) {
+  const normalized = normalizeImageReference(rawSrc);
+  if (!normalized || isSafeExternalImageSrc(normalized)) return;
+  log('KardLeafCM6Image', `image clicked src=${normalized} range=${from}..${to}`);
+  callBridge('onDrawingImageClicked', [normalized, from, to]);
+}
+
 function resolveImageSource(rawSrc: string) {
   const raw = String(rawSrc || '').trim();
   const normalized = normalizeImageReference(raw);
@@ -339,6 +377,155 @@ function notifySelection() {
   callBridge('onSelectionChanged', [selection.from, selection.to]);
 }
 
+function setTouchSelecting(view: EditorView, selecting: boolean) {
+  if (view.state.field(mouseSelectingField, false) === selecting) return;
+  view.dispatch({
+    effects: setMouseSelecting.of(selecting),
+    annotations: Transaction.addToHistory.of(false),
+  });
+}
+
+function nativeSelectionEdgeVelocity(view: EditorView, y: number) {
+  const rect = view.scrollDOM.getBoundingClientRect();
+  const edgeSize = Math.min(72, rect.height * 0.18);
+  if (y < rect.top + edgeSize) {
+    const depth = Math.max(0, Math.min(1, (rect.top + edgeSize - y) / edgeSize));
+    return -(3 + depth * depth * 21);
+  }
+  if (y > rect.bottom - edgeSize) {
+    const depth = Math.max(0, Math.min(1, (y - (rect.bottom - edgeSize)) / edgeSize));
+    return 3 + depth * depth * 21;
+  }
+  return 0;
+}
+
+function stopNativeSelectionAutoScroll(reason: string) {
+  if (nativeSelectionDrag.frame) {
+    cancelAnimationFrame(nativeSelectionDrag.frame);
+    nativeSelectionDrag.frame = 0;
+  }
+  if (nativeSelectionDrag.frameCount > 0) {
+    const view = editor?.view;
+    const selection = view?.state.selection.main;
+    log(
+      'KardLeafAutoScrollTrace',
+      `stop reason=${reason} frames=${nativeSelectionDrag.frameCount} ` +
+        `scrollDelta=${nativeSelectionDrag.totalScroll.toFixed(2)} ` +
+        `selection=${nativeSelectionDrag.startFrom}-${nativeSelectionDrag.startTo}->${selection?.from ?? -1}-${selection?.to ?? -1}`,
+    );
+  }
+  nativeSelectionDrag.lastFrameAt = 0;
+  nativeSelectionDrag.frameCount = 0;
+  nativeSelectionDrag.totalScroll = 0;
+}
+
+function runNativeSelectionAutoScroll(timestamp: number) {
+  nativeSelectionDrag.frame = 0;
+  const view = editor?.view;
+  if (!view || !nativeSelectionDrag.pointerDown || !nativeSelectionDrag.active) return;
+
+  const velocity = nativeSelectionEdgeVelocity(view, nativeSelectionDrag.y);
+  if (velocity === 0) return;
+
+  const frameMs = nativeSelectionDrag.lastFrameAt > 0
+    ? Math.max(1, Math.min(32, timestamp - nativeSelectionDrag.lastFrameAt))
+    : 16.67;
+  nativeSelectionDrag.lastFrameAt = timestamp;
+  const scroller = view.scrollDOM;
+  const before = scroller.scrollTop;
+  const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  scroller.scrollTop = Math.max(0, Math.min(maxScrollTop, before + velocity * frameMs / 16.67));
+  const scrollDelta = scroller.scrollTop - before;
+
+  if (scrollDelta !== 0) {
+    const rect = scroller.getBoundingClientRect();
+    const x = Math.max(rect.left + 4, Math.min(rect.right - 4, nativeSelectionDrag.x));
+    const y = velocity < 0 ? rect.top + 4 : rect.bottom - 4;
+    const pos = view.posAtCoords({ x, y });
+    if (typeof pos === 'number') {
+      const safePos = Math.max(0, Math.min(view.state.doc.length, pos));
+      const selection = nativeSelectionDrag.cursorOnly
+        ? EditorSelection.cursor(safePos)
+        : EditorSelection.range(nativeSelectionDrag.fixedAnchor, safePos);
+      view.dispatch({
+        selection,
+        annotations: Transaction.addToHistory.of(false),
+      });
+    }
+    nativeSelectionDrag.frameCount += 1;
+    nativeSelectionDrag.totalScroll += scrollDelta;
+  }
+
+  nativeSelectionDrag.frame = requestAnimationFrame(runNativeSelectionAutoScroll);
+}
+
+function scheduleNativeSelectionAutoScroll() {
+  const view = editor?.view;
+  if (!view || nativeSelectionEdgeVelocity(view, nativeSelectionDrag.y) === 0) {
+    stopNativeSelectionAutoScroll('left-edge');
+    return;
+  }
+  if (!nativeSelectionDrag.frame) {
+    nativeSelectionDrag.frame = requestAnimationFrame(runNativeSelectionAutoScroll);
+  }
+}
+
+function handleNativeSelectionPointer(action: unknown, rawX: unknown, rawY: unknown) {
+  const view = editor?.view;
+  if (!view) return 'missing';
+  const pointerAction = String(action || '').toLowerCase();
+  const x = Number(rawX);
+  const y = Number(rawY);
+
+  if (pointerAction === 'down') {
+    stopNativeSelectionAutoScroll('new-pointer');
+    const selection = view.state.selection.main;
+    nativeSelectionDrag.pointerDown = true;
+    nativeSelectionDrag.active = false;
+    nativeSelectionDrag.x = Number.isFinite(x) ? x : 0;
+    nativeSelectionDrag.y = Number.isFinite(y) ? y : 0;
+    nativeSelectionDrag.revisionAtDown = selectionRevision;
+    nativeSelectionDrag.downAnchor = selection.anchor;
+    nativeSelectionDrag.downHead = selection.head;
+    nativeSelectionDrag.startFrom = selection.from;
+    nativeSelectionDrag.startTo = selection.to;
+    setTouchSelecting(view, true);
+    return 'tracking';
+  }
+
+  if (pointerAction === 'move' && nativeSelectionDrag.pointerDown) {
+    nativeSelectionDrag.x = Number.isFinite(x) ? x : nativeSelectionDrag.x;
+    nativeSelectionDrag.y = Number.isFinite(y) ? y : nativeSelectionDrag.y;
+    const selection = view.state.selection.main;
+    if (!nativeSelectionDrag.active && selectionRevision !== nativeSelectionDrag.revisionAtDown) {
+      const anchorDelta = Math.abs(selection.anchor - nativeSelectionDrag.downAnchor);
+      const headDelta = Math.abs(selection.head - nativeSelectionDrag.downHead);
+      nativeSelectionDrag.active = true;
+      nativeSelectionDrag.cursorOnly = selection.empty;
+      nativeSelectionDrag.fixedAnchor = anchorDelta > headDelta ? selection.head : selection.anchor;
+      nativeSelectionDrag.startFrom = selection.from;
+      nativeSelectionDrag.startTo = selection.to;
+      log(
+        'KardLeafAutoScrollTrace',
+        `start cursorOnly=${nativeSelectionDrag.cursorOnly} fixed=${nativeSelectionDrag.fixedAnchor} ` +
+          `selection=${selection.from}-${selection.to} x=${nativeSelectionDrag.x.toFixed(1)} y=${nativeSelectionDrag.y.toFixed(1)}`,
+      );
+    }
+    if (nativeSelectionDrag.active) scheduleNativeSelectionAutoScroll();
+    return nativeSelectionDrag.active ? 'active' : 'tracking';
+  }
+
+  if (pointerAction === 'up' || pointerAction === 'cancel') {
+    nativeSelectionDrag.pointerDown = false;
+    nativeSelectionDrag.active = false;
+    stopNativeSelectionAutoScroll(pointerAction);
+    setTouchSelecting(view, false);
+    return 'stopped';
+  }
+
+  return nativeSelectionDrag.active ? 'active' : 'tracking';
+}
+
 function emitScrollMetrics(
   eventName: string,
   elapsedMs = 0,
@@ -364,6 +551,14 @@ function emitScrollMetrics(
   ]);
 }
 
+function scheduleScrollMetrics() {
+  if (scrollMetricFrame) return;
+  scrollMetricFrame = requestAnimationFrame(() => {
+    scrollMetricFrame = 0;
+    emitScrollMetrics('scroll');
+  });
+}
+
 function handleScroll() {
   const timestamp = nowMs();
   if (!scrollSession) {
@@ -383,10 +578,7 @@ function handleScroll() {
     if (delta > scrollSession.maxFrameMs) scrollSession.maxFrameMs = delta;
   }
 
-  if (timestamp - lastScrollMetricAt > SCROLL_METRIC_INTERVAL_MS) {
-    lastScrollMetricAt = timestamp;
-    emitScrollMetrics('scroll');
-  }
+  scheduleScrollMetrics();
 
   clearTimeout(scrollSettleTimer);
   scrollSettleTimer = window.setTimeout(() => {
@@ -411,6 +603,7 @@ class WikiImageWidget extends WidgetType {
     private readonly rawSrc: string,
     private readonly alt: string,
     private readonly from: number,
+    private readonly to: number,
     private readonly sourceVisible: boolean,
     private readonly resolver: (src: string) => string | Promise<string>,
     private readonly tick: number,
@@ -423,6 +616,7 @@ class WikiImageWidget extends WidgetType {
       this.rawSrc === other.rawSrc &&
       this.alt === other.alt &&
       this.from === other.from &&
+      this.to === other.to &&
       this.sourceVisible === other.sourceVisible &&
       this.resolver === other.resolver &&
       this.tick === other.tick
@@ -469,6 +663,12 @@ class WikiImageWidget extends WidgetType {
     container.appendChild(frame);
 
     container.addEventListener('mousedown', (event) => {
+      if (!isSafeExternalImageSrc(this.rawSrc)) {
+        event.preventDefault();
+        event.stopPropagation();
+        notifyLocalImageClicked(this.rawSrc, this.from, this.to);
+        return;
+      }
       if (this.sourceVisible) return;
       event.preventDefault();
       event.stopPropagation();
@@ -518,6 +718,7 @@ function createWikiImageExtension(
         parsed.rawSrc,
         parsed.alt,
         line.from,
+        line.to,
         sourceVisible,
         resolver,
         tick,
@@ -599,7 +800,7 @@ function editorHasFocus() {
 }
 
 function applyViewportKeyboardInset(reason: string) {
-  const inset = computeViewportKeyboardInsetPx();
+  const inset = Math.max(computeViewportKeyboardInsetPx(), lastAndroidKeyboardInsetPx);
   if (inset === lastViewportKeyboardInsetPx) return inset;
   lastViewportKeyboardInsetPx = inset;
   const margin = computeScrollBottomMarginPx(inset);
@@ -821,6 +1022,7 @@ function createKardLeafBridgePlugin(): EditorPlugin {
           }
 
           if (update.selectionSet) {
+            selectionRevision += 1;
             lastSelectionSetAt = nowMs();
             notifySelection();
           }
@@ -829,6 +1031,7 @@ function createKardLeafBridgePlugin(): EditorPlugin {
         }),
         EditorView.domEventHandlers({
           touchstart(event) {
+            if (editor?.view) setTouchSelecting(editor.view, true);
             callBridge('onUserInteraction');
             const touch = event.touches && event.touches[0];
             if (!touch || isTapIgnoredTarget(event.target)) {
@@ -860,6 +1063,7 @@ function createKardLeafBridgePlugin(): EditorPlugin {
             return false;
           },
           touchend() {
+            if (editor?.view) setTouchSelecting(editor.view, false);
             const tap = pendingTap;
             pendingTap = null;
             if (!tap) return false;
@@ -876,6 +1080,7 @@ function createKardLeafBridgePlugin(): EditorPlugin {
             return false;
           },
           touchcancel() {
+            if (!window.KardLeafAndroid && editor?.view) setTouchSelecting(editor.view, false);
             pendingTap = null;
             return false;
           },
@@ -910,7 +1115,10 @@ function buildPlugins(): EditorPlugin[] {
     mermaidPlugin(),
     admonitionPlugin(),
     codeBlockPlugin({ mode: 'inline' }),
-    blockImagePlugin({ maxLoadAttempts: 1 }),
+    blockImagePlugin({
+      maxLoadAttempts: 1,
+      onImageClick: notifyLocalImageClicked,
+    }),
     rawHtmlPlugin(),
     smartPastePlugin(),
     slashCommandPlugin(),
@@ -919,6 +1127,119 @@ function buildPlugins(): EditorPlugin[] {
     createKardLeafWikiImagePlugin(),
     createKardLeafBridgePlugin(),
   ];
+}
+
+function hideTableToolbar() {
+  tableToolbar?.remove();
+  tableToolbar = null;
+}
+
+function tableToolbarButton(
+  label: string,
+  enabled: boolean,
+  action: () => void,
+): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.disabled = !enabled;
+  button.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (button.disabled) return;
+    hideTableToolbar();
+    action();
+  });
+  return button;
+}
+
+function showTableToolbar(event: EditorTableContextMenuEvent) {
+  if (readOnly) {
+    hideTableToolbar();
+    return;
+  }
+
+  injectStyle(
+    'kardleaf-table-toolbar-style',
+    `
+      .kl-table-toolbar {
+        position: fixed;
+        left: max(10px, env(safe-area-inset-left));
+        right: max(10px, env(safe-area-inset-right));
+        bottom: calc(var(--kardleaf-ime-safe-bottom, 0px) + 8px);
+        z-index: 2147483000;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 5px;
+        align-items: center;
+        padding: 6px;
+        border: 1px solid var(--kl-shell-border);
+        border-radius: 12px;
+        background: var(--kl-shell-bg);
+        color: var(--kl-shell-fg);
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+      }
+      .kl-table-toolbar button {
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 36px;
+        padding: 6px 6px;
+        border: 1px solid var(--kl-shell-border);
+        border-radius: 8px;
+        background: var(--kl-shell-soft);
+        color: var(--kl-shell-fg);
+        font: inherit;
+        font-size: 13px;
+        white-space: nowrap;
+        touch-action: manipulation;
+      }
+      .kl-table-toolbar button:disabled {
+        opacity: 0.4;
+      }
+    `,
+  );
+
+  hideTableToolbar();
+  const toolbar = document.createElement('div');
+  toolbar.className = 'kl-table-toolbar';
+  toolbar.setAttribute('role', 'toolbar');
+  toolbar.setAttribute('aria-label', '表格编辑');
+
+  const nextAlignment =
+    event.alignment === null
+      ? 'left'
+      : event.alignment === 'left'
+        ? 'center'
+        : event.alignment === 'center'
+          ? 'right'
+          : null;
+  const alignmentLabel =
+    event.alignment === 'left'
+      ? '左对齐'
+      : event.alignment === 'center'
+        ? '居中'
+        : event.alignment === 'right'
+          ? '右对齐'
+          : '默认对齐';
+
+  toolbar.append(
+    tableToolbarButton('+ 行', true, () => event.actions.addRowAt(event.rowIdx, 'below')),
+    tableToolbarButton('+ 列', true, () => event.actions.addColumnAt(event.colIdx, 'right')),
+    tableToolbarButton('- 行', event.rowIdx >= 0, () => event.actions.deleteRow(event.rowIdx)),
+    tableToolbarButton('- 列', event.colCount > 1, () => event.actions.deleteColumn(event.colIdx)),
+    tableToolbarButton(alignmentLabel, true, () =>
+      event.actions.setAlignment(event.colIdx, nextAlignment),
+    ),
+    tableToolbarButton('源码', true, () => event.actions.toggleSource()),
+  );
+
+  document.body.appendChild(toolbar);
+  tableToolbar = toolbar;
 }
 
 function handleEditorEvent(event: EditorEvent) {
@@ -931,6 +1252,7 @@ function handleEditorEvent(event: EditorEvent) {
         'KardLeafCM6TableTrace',
         `table context row=${event.rowIdx} col=${event.colIdx} rows=${event.rowCount} cols=${event.colCount}`,
       );
+      showTableToolbar(event);
       break;
     case EditorEventType.MermaidZoomRequest:
       log('KardLeafCM6', `mermaid zoom requested id=${event.id}`);
@@ -938,6 +1260,90 @@ function handleEditorEvent(event: EditorEvent) {
     default:
       break;
   }
+}
+
+document.addEventListener('focusin', (event) => {
+  const target = event.target;
+  if (
+    !(target instanceof Element) ||
+    !target.closest('.cm-table-widget, .kl-table-toolbar')
+  ) {
+    hideTableToolbar();
+  }
+});
+
+function titleHeaderHeightPx() {
+  return Math.ceil(currentTitleFontSize * 1.5 + 8);
+}
+
+function applyTitleHeaderState() {
+  document.documentElement.style.setProperty(
+    '--kl-title-header-height',
+    `${titleVisible ? titleHeaderHeightPx() : 0}px`,
+  );
+  document.documentElement.style.setProperty(
+    '--kl-title-font-size',
+    `${currentTitleFontSize}px`,
+  );
+
+  if (!titleHeader || !titleInput) return;
+  titleHeader.hidden = !titleVisible;
+  titleInput.placeholder = currentTitleHint;
+  titleInput.readOnly = readOnly;
+  if (titleInput.value !== currentTitle) {
+    suppressTitleBridge = true;
+    titleInput.value = currentTitle;
+    suppressTitleBridge = false;
+  }
+}
+
+function installTitleHeader() {
+  const scroller = editor?.view.scrollDOM;
+  if (!scroller) return;
+
+  titleHeader?.remove();
+  titleHeader = document.createElement('div');
+  titleHeader.className = 'kl-editor-title-header';
+
+  titleInput = document.createElement('input');
+  titleInput.className = 'kl-editor-title-input';
+  titleInput.type = 'text';
+  titleInput.autocomplete = 'off';
+  titleInput.spellcheck = false;
+  titleInput.setAttribute('autocapitalize', 'sentences');
+  titleInput.setAttribute('enterkeyhint', 'done');
+  titleInput.addEventListener('input', () => {
+    if (suppressTitleBridge || !titleInput) return;
+    currentTitle = titleInput.value;
+    callBridge('onTitleChanged', [currentTitle]);
+  });
+  titleInput.addEventListener('focus', () => callBridge('onUserInteraction'));
+  titleInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      titleInput?.blur();
+    }
+  });
+
+  titleHeader.appendChild(titleInput);
+  scroller.insertBefore(titleHeader, scroller.firstChild);
+  applyTitleHeaderState();
+}
+
+function setTitleState(
+  title: unknown,
+  hint: unknown,
+  visible: unknown,
+  fontSize: unknown,
+) {
+  currentTitle = String(title ?? '');
+  currentTitleHint = String(hint ?? '');
+  titleVisible = !!visible;
+  if (Number.isFinite(Number(fontSize))) {
+    currentTitleFontSize = Math.max(16, Math.min(34, Number(fontSize)));
+  }
+  applyTitleHeaderState();
+  return 'ok';
 }
 
 function createEditorInstance(initialText = '', initialSelection?: { anchor: number; head: number }) {
@@ -962,13 +1368,24 @@ function createEditorInstance(initialText = '', initialSelection?: { anchor: num
         callBridge('openExternalUrl', [url]);
       },
       getSlashItems: async () => [],
-      getWikilinkItems: async () => [],
+      getWikilinkItems: async (query) => {
+        const payload = callBridge('getWikilinkItems', [query]);
+        if (typeof payload !== 'string' || payload.length === 0) return [];
+        try {
+          const parsed = JSON.parse(payload);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+          log('KardLeafWikiLinkTrace', `candidate payload parse failed queryLen=${query.length}`);
+          return [];
+        }
+      },
       getSelectionToolbarActions: () => [],
     },
     plugins: buildPlugins(),
     onEvent: handleEditorEvent,
   });
   editor.view.scrollDOM.addEventListener('scroll', handleScroll, { passive: true });
+  installTitleHeader();
   installViewportKeyboardSync();
   notifyHistoryState(true);
   notifySelection();
@@ -1046,6 +1463,31 @@ function dispatchFullDocument(
   }
 }
 
+function replaceRangeFromAndroid(
+  from: unknown,
+  to: unknown,
+  replacement: unknown,
+  selectionStart: unknown,
+  selectionEnd: unknown,
+) {
+  const view = editor?.view;
+  if (!view) return 'missing';
+  const length = view.state.doc.length;
+  const start = Math.max(0, Math.min(length, Number(from) || 0));
+  const end = Math.max(start, Math.min(length, Number(to) || start));
+  const text = String(replacement ?? '');
+  const selection = clampSelection(selectionStart, selectionEnd, length - (end - start) + text.length);
+  view.dispatch({
+    changes: { from: start, to: end, insert: text },
+    selection: EditorSelection.single(selection.anchor, selection.head),
+    annotations: Transaction.addToHistory.of(true),
+  });
+  notifyHistoryState(true);
+  notifySelection();
+  log('KardLeafEditorUndo', `action=replace kernel=CodeMirror range=${start}..${end} insertLen=${text.length} canUndo=${undoDepth(view.state) > 0} canRedo=${redoDepth(view.state) > 0}`);
+  return 'ok';
+}
+
 function selectEditorRangeAndReveal(start: unknown, end: unknown) {
   const view = editor?.view;
   if (!view) return 'missing';
@@ -1106,6 +1548,9 @@ function setImageDataUris(payload: unknown) {
 function installFallbackApi() {
   window.KardLeafEditor = {
     version: VERSION,
+    setTitleState(title: unknown, hint: unknown, visible: unknown, fontSize: unknown) {
+      return setTitleState(title, hint, visible, fontSize);
+    },
     setDocument(content: unknown, selectionStart: unknown, selectionEnd: unknown, fontSize: unknown, nextDarkMode: unknown, typographyStyle?: unknown) {
       fallbackText = String(content ?? '');
       if (Number.isFinite(Number(fontSize))) currentFontSize = Number(fontSize);
@@ -1128,6 +1573,9 @@ function installFallbackApi() {
         darkMode,
       );
     },
+    replaceRangeFromAndroid(_from: unknown, _to: unknown, replacement: unknown, selectionStart: unknown, selectionEnd: unknown) {
+      return (this as Record<string, (...args: unknown[]) => unknown>).setContentFromAndroid(replacement, selectionStart, selectionEnd);
+    },
     getText() {
       return fallbackTextArea ? fallbackTextArea.value : fallbackText;
     },
@@ -1144,6 +1592,7 @@ function installFallbackApi() {
     },
     setLivePreviewEnabled(enabled: unknown) {
       livePreviewEnabled = !!enabled;
+      if (!livePreviewEnabled) hideTableToolbar();
       return 'fallback';
     },
     setDarkMode(enabled: unknown) {
@@ -1155,7 +1604,9 @@ function installFallbackApi() {
     },
     setReadOnly(enabled: unknown) {
       readOnly = !!enabled;
+      if (readOnly) hideTableToolbar();
       if (fallbackTextArea) fallbackTextArea.readOnly = readOnly;
+      applyTitleHeaderState();
       return 'fallback';
     },
     setImageDataUris() {
@@ -1168,9 +1619,10 @@ function installFallbackApi() {
       return 'fallback';
     },
     setKeyboardInsetPx(px: unknown) {
+      lastAndroidKeyboardInsetPx = Math.max(0, Number(px) || 0);
       document.documentElement.style.setProperty(
         '--kardleaf-ime-safe-bottom',
-        `${Math.max(0, Number(px) || 0)}px`,
+        `${lastAndroidKeyboardInsetPx}px`,
       );
       return 'fallback';
     },
@@ -1213,6 +1665,9 @@ function installFallbackApi() {
 function installEditorApi() {
   window.KardLeafEditor = {
     version: VERSION,
+    setTitleState(title: unknown, hint: unknown, visible: unknown, fontSize: unknown) {
+      return setTitleState(title, hint, visible, fontSize);
+    },
     setDocument(content: unknown, selectionStart: unknown, selectionEnd: unknown, fontSize: unknown, nextDarkMode: unknown, typographyStyle?: unknown) {
       if (Number.isFinite(Number(fontSize))) {
         currentFontSize = Math.max(12, Math.min(30, Number(fontSize)));
@@ -1228,6 +1683,9 @@ function installEditorApi() {
     },
     setContentFromAndroid(content: unknown, selectionStart: unknown, selectionEnd: unknown) {
       return dispatchFullDocument(content, selectionStart, selectionEnd, false);
+    },
+    replaceRangeFromAndroid(from: unknown, to: unknown, replacement: unknown, selectionStart: unknown, selectionEnd: unknown) {
+      return replaceRangeFromAndroid(from, to, replacement, selectionStart, selectionEnd);
     },
     getText() {
       return editor ? editor.getText() : fallbackText;
@@ -1247,6 +1705,7 @@ function installEditorApi() {
     },
     setLivePreviewEnabled(enabled: unknown) {
       livePreviewEnabled = !!enabled;
+      if (!livePreviewEnabled) hideTableToolbar();
       updateRuntimeSettings();
       log('KardLeafCM6', `live preview enabled=${livePreviewEnabled}`);
       return 'ok';
@@ -1261,7 +1720,9 @@ function installEditorApi() {
     },
     setReadOnly(enabled: unknown) {
       readOnly = !!enabled;
+      if (readOnly) hideTableToolbar();
       updateRuntimeSettings();
+      applyTitleHeaderState();
       return 'ok';
     },
     setImageDataUris(payload: unknown) {
@@ -1286,10 +1747,14 @@ function installEditorApi() {
     ensureCursorVisible(reason?: unknown) {
       return ensureEditorCursorVisible(reason);
     },
+    nativeSelectionPointer(action: unknown, x: unknown, y: unknown) {
+      return handleNativeSelectionPointer(action, x, y);
+    },
     setKeyboardInsetPx(px: unknown) {
       const layoutHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0);
       const cap = layoutHeight > 0 ? Math.round(layoutHeight * 0.62) : 0;
       const safePx = Math.min(Math.max(0, Number(px) || 0), cap);
+      lastAndroidKeyboardInsetPx = safePx;
       lastViewportKeyboardInsetPx = safePx;
       document.documentElement.style.setProperty(
         '--kardleaf-ime-safe-bottom',

@@ -119,6 +119,8 @@ export interface BlockImageOptions {
   resolver?: ImageResolver;
   /** 图片加载失败后的最大重试次数。默认为 3。 */
   maxLoadAttempts?: number;
+  /** 点击已渲染图片时回传原始引用及其 Markdown 源码范围。 */
+  onImageClick?: (src: string, from: number, to: number) => void;
 }
 
 /**
@@ -513,6 +515,9 @@ class ImageWidget extends WidgetType {
     /** 如果图片被包裹在 Markdown 链接中 `[![](img)](href)` */
     private readonly linkUrl: string | undefined,
     private readonly linkTitle: string | undefined,
+    private readonly markdownFrom: number,
+    private readonly markdownTo: number,
+    private readonly onImageClick: BlockImageOptions['onImageClick'],
   ) {
     super();
   }
@@ -534,6 +539,9 @@ class ImageWidget extends WidgetType {
       this.sourceVisible === other.sourceVisible &&
       this.linkUrl === other.linkUrl &&
       this.linkTitle === other.linkTitle
+      && this.markdownFrom === other.markdownFrom
+      && this.markdownTo === other.markdownTo
+      && this.onImageClick === other.onImageClick
     );
   }
 
@@ -637,6 +645,13 @@ class ImageWidget extends WidgetType {
         return;
       }
       
+      if (this.onImageClick) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.onImageClick(this.rawSrc, this.markdownFrom, this.markdownTo);
+        return;
+      }
+
       // 如果源码已可见，不处理（允许正常选择文本）
       if (this.sourceVisible) return;
       
@@ -706,6 +721,9 @@ class InlineImageWidget extends WidgetType {
     /** 链接 URL（如果存在） */
     private readonly linkUrl: string | undefined,
     private readonly linkTitle: string | undefined,
+    private readonly markdownFrom: number,
+    private readonly markdownTo: number,
+    private readonly onImageClick: BlockImageOptions['onImageClick'],
   ) {
     super();
   }
@@ -722,6 +740,9 @@ class InlineImageWidget extends WidgetType {
       this.tick === other.tick &&
       this.linkUrl === other.linkUrl &&
       this.linkTitle === other.linkTitle
+      && this.markdownFrom === other.markdownFrom
+      && this.markdownTo === other.markdownTo
+      && this.onImageClick === other.onImageClick
     );
   }
 
@@ -773,6 +794,15 @@ class InlineImageWidget extends WidgetType {
       wrap.appendChild(makeLinkBadge(view, this.linkUrl, this.linkTitle, CLS.inlineLinkBadge));
     }
 
+    if (this.onImageClick) {
+      wrap.addEventListener('mousedown', (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.onImageClick?.(this.rawSrc, this.markdownFrom, this.markdownTo);
+      });
+    }
+
     return wrap;
   }
 
@@ -791,7 +821,7 @@ class InlineImageWidget extends WidgetType {
 const blockImageTheme = EditorView.theme({
   // Default selection-border color tokens — overridable via createEditorTheme
   '&': {
-    '--cm-image-selection-border': 'hsl(40, 72%, 46%)',
+    '--cm-image-selection-border': '#9a9a9a',
     '--cm-image-icon-fg': 'hsl(28, 10%, 14%)',
     '--cm-image-icon-bg': 'rgba(255, 255, 255, 0.92)',
     '--cm-image-icon-bg-hover': 'rgba(255, 255, 255, 1)',
@@ -928,7 +958,7 @@ const blockImageTheme = EditorView.theme({
     verticalAlign: 'middle',
   },
   '&.cm-editor.cm-dark': {
-    '--cm-image-selection-border': 'hsl(40, 72%, 52%)',
+    '--cm-image-selection-border': '#b0b0b0',
     '--cm-image-icon-fg': 'hsl(36, 10%, 93%)',
     '--cm-image-icon-bg': 'rgba(36, 36, 36, 0.92)',
     '--cm-image-icon-bg-hover': 'rgba(48, 48, 48, 1)',
@@ -973,6 +1003,7 @@ function buildDecorations(
   resolver: ImageResolver | undefined,
   maxAttempts: number,
   tick: number,
+  onImageClick: BlockImageOptions['onImageClick'],
 ): DecorationSet {
   const entries: DecorationEntry[] = [];
   // 获取主选区的光标位置
@@ -1035,6 +1066,9 @@ function buildDecorations(
           sourceVisible,
           linkUrl,
           linkTitle,
+          node.from,
+          node.to,
+          onImageClick,
         );
 
         if (sourceVisible) {
@@ -1069,6 +1103,9 @@ function buildDecorations(
         tick,
         linkUrl,
         linkTitle,
+        node.from,
+        node.to,
+        onImageClick,
       );
       entries.push({
         from: effFrom,
@@ -1114,6 +1151,7 @@ function buildDecorations(
 export function createBlockImageExtension(options: BlockImageOptions = {}): Extension {
   const resolver = options.resolver;  // URL 解析器
   const maxAttempts = options.maxLoadAttempts ?? 3;  // 最大加载尝试次数
+  const onImageClick = options.onImageClick;
 
   // 可变刷新计数器 —— 在 StateField 事务间共享，
   // 每当 dispatch `refreshBlockImagesEffect` 时递增。
@@ -1123,20 +1161,20 @@ export function createBlockImageExtension(options: BlockImageOptions = {}): Exte
   const decorationField = StateField.define<DecorationSet>({
     create(state) {
       // 初始化时构建装饰
-      return buildDecorations(state, resolver, maxAttempts, tick);
+      return buildDecorations(state, resolver, maxAttempts, tick, onImageClick);
     },
     update(deco, tr) {
       // 检查是否有刷新效果
       const hasRefresh = tr.effects.some((e) => e.is(refreshBlockImagesEffect));
       if (hasRefresh) {
         tick += 1;  // 递增刷新计数器以强制重建
-        return buildDecorations(tr.state, resolver, maxAttempts, tick);
+        return buildDecorations(tr.state, resolver, maxAttempts, tick, onImageClick);
       }
       // 检查是否有选中状态变化
       const selectionChanged = tr.effects.some((e) => e.is(setSelectedImageEffect));
       if (tr.docChanged || tr.selection || selectionChanged) {
         // 文档变化、选区变化或选中状态变化时重建装饰
-        return buildDecorations(tr.state, resolver, maxAttempts, tick);
+        return buildDecorations(tr.state, resolver, maxAttempts, tick, onImageClick);
       }
       return deco;  // 无变化时返回原装饰
     },

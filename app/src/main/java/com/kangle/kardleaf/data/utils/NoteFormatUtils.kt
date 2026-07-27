@@ -12,6 +12,8 @@ object NoteFormatUtils {
     private val invalidFileNameChars = setOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
     const val KARDLEAF_ID_KEY = "kardleaf_id"
     const val TAGS_KEY = "tags"
+    const val SOURCE_TYPE_KEY = "source_type"
+    const val SOURCE_URL_KEY = "source_url"
     private val REMOVED_LEGACY_FRONT_MATTER_KEYS = setOf("color", "reminder")
 
     internal val obsidianImageReferenceRegex = Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
@@ -213,6 +215,57 @@ object NoteFormatUtils {
             ?.let(::normalizeTags)
             .orEmpty()
 
+    /** Menu-time check that stops at the first remote Markdown image. */
+    fun hasRemoteMarkdownImage(content: CharSequence): Boolean {
+        var searchFrom = 0
+        while (searchFrom < content.length - 4) {
+            val imageStart = content.indexOf("![", startIndex = searchFrom)
+            if (imageStart < 0) return false
+
+            val altEnd = content.indexOf(']', startIndex = imageStart + 2)
+            if (altEnd < 0) return false
+            if (altEnd + 1 >= content.length || content[altEnd + 1] != '(') {
+                searchFrom = imageStart + 2
+                continue
+            }
+
+            var urlStart = altEnd + 2
+            while (urlStart < content.length && content[urlStart].isWhitespace()) {
+                urlStart++
+            }
+            if (urlStart < content.length && content[urlStart] == '<') {
+                urlStart++
+            }
+            val schemeLength =
+                when {
+                    content.startsWithAsciiIgnoreCase(urlStart, "http://") -> 7
+                    content.startsWithAsciiIgnoreCase(urlStart, "https://") -> 8
+                    else -> 0
+                }
+            if (schemeLength > 0) {
+                val firstUrlChar = urlStart + schemeLength
+                val hasUrlBody =
+                    firstUrlChar < content.length &&
+                        !content[firstUrlChar].isWhitespace() &&
+                        content[firstUrlChar] != ')' &&
+                        content[firstUrlChar] != '>'
+                if (hasUrlBody && content.indexOf(')', startIndex = firstUrlChar) >= 0) {
+                    return true
+                }
+            }
+            searchFrom = imageStart + 2
+        }
+        return false
+    }
+
+    private fun CharSequence.startsWithAsciiIgnoreCase(offset: Int, value: String): Boolean {
+        if (offset < 0 || offset + value.length > length) return false
+        value.indices.forEach { index ->
+            if (this[offset + index].lowercaseChar() != value[index]) return false
+        }
+        return true
+    }
+
     fun normalizeTags(tags: Collection<String>): List<String> =
         tags
             .flatMap { value ->
@@ -349,6 +402,12 @@ object NoteFormatUtils {
                 existingRawContent?.let { extractTags(it) }.orEmpty()
             }
         replaceYamlList(frontMatterLines, TAGS_KEY, tagsForFile)
+        note.sourceType?.trim()?.takeIf { it.isNotBlank() }?.let { sourceType ->
+            upsertTopLevelValue(frontMatterLines, SOURCE_TYPE_KEY, escapeYamlScalar(sourceType))
+        }
+        note.sourceUrl?.trim()?.takeIf { it.isNotBlank() }?.let { sourceUrl ->
+            upsertTopLevelValue(frontMatterLines, SOURCE_URL_KEY, escapeYamlScalar(sourceUrl))
+        }
 
         return frontMatterLines
     }
@@ -390,6 +449,9 @@ object NoteFormatUtils {
             cleaned
         }
     }
+
+    private fun escapeYamlScalar(value: String): String =
+        "\"${value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ")}\""
 
     private fun preserveUnknownFrontMatter(rawContent: String): List<String> {
         val lines = rawContent.lines()

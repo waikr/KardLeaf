@@ -1,20 +1,20 @@
 package com.kangle.kardleaf.ui
 
-import com.kangle.kardleaf.data.utils.KardLeafLog
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items as lazyRowItems
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -22,40 +22,61 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.localizedText
+import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
-import kotlinx.coroutines.flow.first
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 
 private const val CUSTOM_SORT_FLASH_TAG = "KardLeafCustomSortFlash"
+private const val TAB_VISIBILITY_TAG = "KardLeafTabVisibility"
+private val nextTabVisibilityRequestId = AtomicLong()
+
 private inline fun logFolderStripTrace(message: () -> String) {
     if (KardLeafLog.isEnabled(CUSTOM_SORT_FLASH_TAG)) {
         KardLeafLog.d(CUSTOM_SORT_FLASH_TAG, message())
     }
 }
 
+private inline fun logTabVisibility(message: () -> String) {
+    if (KardLeafLog.isEnabled(TAB_VISIBILITY_TAG)) {
+        KardLeafLog.d(TAB_VISIBILITY_TAG, message())
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FolderPathStrip(
     currentFilter: MainViewModel.NoteFilter,
     labels: List<String>,
     onOpenFolder: (String) -> Unit,
     onShowAllInFolder: (String) -> Unit = { path -> onOpenFolder(path) },
+    rootChip: FolderChipData? = null,
     previewPath: String = "",
+    pagerCurrentPage: Int = -1,
+    pagerSettledPage: Int = -1,
+    pagerScrolling: Boolean = false,
+    folderOrderVersion: Int = 0,
+    savedOrderFor: (String) -> List<String> = { emptyList() },
 ) {
     val filterLabel = currentFilter as? MainViewModel.NoteFilter.Label
     val filterPath = filterLabel?.name.orEmpty()
     val isRecursive = filterLabel?.recursive == true
     val currentPath = previewPath.ifBlank { filterPath }
-    val rows = remember(labels, currentPath) { buildFolderRows(labels, currentPath) }
+    val rows = remember(labels, currentPath, folderOrderVersion) {
+        buildFolderRows(labels, currentPath, savedOrderFor)
+    }
 
     Column(
         modifier =
@@ -66,82 +87,97 @@ fun FolderPathStrip(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         rows.forEach { row ->
-            val rowKey = remember(row.children) { row.children.joinToString("|") { it.path } }
-            val rowState = rememberLazyListState()
-            val selectedIndex = row.children.indexOfFirst { it.path == row.selectedPath }
-            val itemSpacingPx = with(LocalDensity.current) { 8.dp.toPx() }
-
-            // 选中项变化时滚动保证其可见，不被遮挡。
-            // 用 snapshotFlow 监听布局信息变化，选中项不可见或被边缘遮挡时滚动。
-            LaunchedEffect(rowKey, row.selectedPath) {
-                if (selectedIndex < 0) return@LaunchedEffect
-                snapshotFlow { rowState.layoutInfo }
-                    .first { it.totalItemsCount > 0 }
-                if (selectedIndex == 0) {
-                    rowState.animateScrollToItem(0)
-                    return@LaunchedEffect
-                }
-                val layoutInfo = rowState.layoutInfo
-                val selectedItem = layoutInfo.visibleItemsInfo.find { it.index == selectedIndex }
-                val visibleItems = layoutInfo.visibleItemsInfo
-                val viewportEnd = layoutInfo.viewportEndOffset
-                if (selectedItem == null && visibleItems.isNotEmpty()) {
-                    val firstVisible = visibleItems.first()
-                    val lastVisible = visibleItems.last()
-                    val oneItemScroll =
-                        visibleItems
-                            .zipWithNext()
-                            .firstOrNull()
-                            ?.let { (first, second) -> second.offset - first.offset }
-                            ?.takeIf { it > 0 }
-                            ?.toFloat()
-                            ?: (lastVisible.size + itemSpacingPx)
-                    when {
-                        selectedIndex > lastVisible.index -> rowState.animateScrollBy(oneItemScroll)
-                        selectedIndex < firstVisible.index -> rowState.animateScrollBy(-oneItemScroll)
-                    }
-                    return@LaunchedEffect
-                }
-                if (selectedItem == null) return@LaunchedEffect
-                val selectedEnd = selectedItem.offset + selectedItem.size
-                if (selectedEnd > viewportEnd) {
-                    rowState.animateScrollBy((selectedEnd - viewportEnd).toFloat())
-                } else if (selectedItem.offset < layoutInfo.viewportStartOffset) {
-                    rowState.animateScrollBy((selectedItem.offset - layoutInfo.viewportStartOffset).toFloat())
+            val rowChildren = remember(row.children, row.parentPath, rootChip) {
+                if (row.parentPath.isBlank() && rootChip != null) {
+                    listOf(rootChip) + row.children
+                } else {
+                    row.children
                 }
             }
-
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                state = rowState,
-                contentPadding = PaddingValues(0.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                lazyRowItems(
-                    items = row.children,
-                    key = { it.path },
-                ) { folder ->
-                    val isHighlighted = folder.path == row.selectedPath
-                    // recursive 模式下，被选中并显示全部子笔记的高亮分类项追加" · 全部"后缀
-                    val displayText =
-                        if (isHighlighted && isRecursive && folder.path == filterPath) {
-                            "${folder.name} · 全部"
-                        } else {
-                            folder.name
-                        }
-                    FolderChip(
-                        text = displayText,
-                        selected = isHighlighted,
-                        onClick = {
-                            // 点击高亮（当前选中）的分类标签 → 显示该文件夹全部子笔记；
-                            // 点击非高亮标签 → 切换到对应目录浏览
-                            if (isHighlighted) {
-                                onShowAllInFolder(folder.path)
-                            } else {
-                                onOpenFolder(folder.path)
-                            }
-                        },
+            val selectedPath = when {
+                row.parentPath.isBlank() && rootChip != null && currentFilter is MainViewModel.NoteFilter.All -> rootChip.path
+                else -> row.selectedPath
+            }
+            val rowKey = rowChildren.joinToString("|") { it.path }
+            key(row.parentPath) {
+                val rowState = rememberScrollState()
+                val requesters =
+                    remember(rowChildren) {
+                        rowChildren.associate { it.path to BringIntoViewRequester() }
+                    }
+                val selectedIndex = rowChildren.indexOfFirst { it.path == selectedPath }
+                val pagerTrace =
+                    rememberUpdatedState(
+                        "pager=$pagerCurrentPage/$pagerSettledPage scrolling=$pagerScrolling",
                     )
+
+                LaunchedEffect(selectedPath) {
+                    val targetPath = selectedPath ?: return@LaunchedEffect
+                    val requester = requesters[targetPath] ?: return@LaunchedEffect
+                    val requestId = nextTabVisibilityRequestId.incrementAndGet()
+                    val scrollBefore = rowState.value
+                    logTabVisibility {
+                        "requestStart rowHash=${rowKey.hashCode()} pathHash=${targetPath.hashCode()} " +
+                            "selectedIndex=$selectedIndex requestId=$requestId ${pagerTrace.value} " +
+                            "scrollBefore=$scrollBefore scrollMax=${rowState.maxValue} " +
+                            "mechanism=bringIntoView selectedChangeSource=selectedPath"
+                    }
+                    try {
+                        requester.bringIntoView()
+                        val scrollAfter = rowState.value
+                        logTabVisibility {
+                            "requestEnd rowHash=${rowKey.hashCode()} pathHash=${targetPath.hashCode()} " +
+                                "selectedIndex=$selectedIndex requestId=$requestId ${pagerTrace.value} " +
+                                "scrollBefore=$scrollBefore scrollAfter=$scrollAfter scrollMax=${rowState.maxValue} " +
+                                "mechanism=bringIntoView result=${if (scrollAfter == scrollBefore) "noMove" else "completed"}"
+                        }
+                    } catch (cancelled: CancellationException) {
+                        logTabVisibility {
+                            "requestEnd rowHash=${rowKey.hashCode()} pathHash=${targetPath.hashCode()} " +
+                                "selectedIndex=$selectedIndex requestId=$requestId ${pagerTrace.value} " +
+                                "scrollBefore=$scrollBefore scrollAfter=${rowState.value} scrollMax=${rowState.maxValue} " +
+                                "mechanism=bringIntoView result=cancelled cancellationReason=supersededOrInterrupted"
+                        }
+                        throw cancelled
+                    }
+                }
+
+                Row(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rowState),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    rowChildren.forEach { folder ->
+                        key(folder.path) {
+                            val isRootChip = rootChip != null && row.parentPath.isBlank() && folder.path == rootChip.path
+                            val isHighlighted = folder.path == selectedPath
+                            // recursive 模式下，被选中并显示全部子笔记的高亮分类项追加" · 全部"后缀
+                            val displayText =
+                                if (isHighlighted && isRecursive && folder.path == filterPath) {
+                                    "${folder.name} · 全部"
+                                } else {
+                                    folder.name
+                                }
+                            FolderChip(
+                                text = displayText,
+                                selected = isHighlighted,
+                                modifier = Modifier.bringIntoViewRequester(requesters.getValue(folder.path)),
+                                onClick = {
+                                    if (isRootChip) {
+                                        onOpenFolder(folder.path)
+                                    } else if (isHighlighted) {
+                                        // 点击高亮（当前选中）的分类标签 → 显示该文件夹全部子笔记
+                                        onShowAllInFolder(folder.path)
+                                    } else {
+                                        // 点击非高亮标签 → 切换到对应目录浏览
+                                        onOpenFolder(folder.path)
+                                    }
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -149,11 +185,12 @@ fun FolderPathStrip(
 }
 
 private data class FolderRow(
+    val parentPath: String,
     val children: List<FolderChipData>,
     val selectedPath: String?,
 )
 
-internal data class FolderChipData(
+data class FolderChipData(
     val name: String,
     val path: String,
 )
@@ -161,6 +198,7 @@ internal data class FolderChipData(
 internal fun buildFolderPagerPages(
     labels: List<String>,
     currentFilter: MainViewModel.NoteFilter,
+    savedOrderFor: (String) -> List<String> = { emptyList() },
 ): List<FolderChipData> {
     val normalizedLabels = labels
         .map(::normalizeFolderPathForUi)
@@ -172,8 +210,8 @@ internal fun buildFolderPagerPages(
         if (normalizedLabels.isEmpty()) {
             emptyList()
         } else {
-            val rootPage = FolderChipData("全部笔记", "")
-            val topLevel = directChildFolders(normalizedLabels, "")
+            val rootPage = FolderChipData(localizedText("全部笔记", "All notes"), "")
+            val topLevel = directChildFolders(normalizedLabels, "", savedOrderFor)
             listOf(rootPage) + topLevel
         }
     } else {
@@ -184,7 +222,7 @@ internal fun buildFolderPagerPages(
             emptyList()
         } else {
             val parent = currentPath.substringBeforeLast("/", missingDelimiterValue = "")
-            val siblings = directChildFolders(normalizedLabels, parent)
+            val siblings = directChildFolders(normalizedLabels, parent, savedOrderFor)
             val siblingPages =
                 if (siblings.any { it.path == currentPath }) {
                     siblings
@@ -197,7 +235,7 @@ internal fun buildFolderPagerPages(
             // 顶层目录和“全部笔记”共用同一组 Pager 页面，避免从全部笔记滑入目录后
             // pages 立刻从 [全部, 顶层目录...] 变成 [顶层目录...]，导致连续滑动被重建吞掉。
             if (parent.isBlank()) {
-                listOf(FolderChipData("全部笔记", "")) + siblingPages
+                listOf(FolderChipData(localizedText("全部笔记", "All notes"), "")) + siblingPages
             } else {
                 siblingPages
             }
@@ -219,6 +257,7 @@ private fun folderChipSummary(pages: Collection<FolderChipData>, limit: Int = 8)
 private fun buildFolderRows(
     labels: List<String>,
     currentPath: String,
+    savedOrderFor: (String) -> List<String>,
 ): List<FolderRow> {
     val normalizedLabels = labels.map { normalizeFolderPathForUi(it) }.filter { it.isNotBlank() }.distinct().sorted()
     val currentSegments = normalizeFolderPathForUi(currentPath).split("/").filter { it.isNotBlank() }
@@ -227,7 +266,7 @@ private fun buildFolderRows(
     var parent = ""
     var depth = 0
     while (true) {
-        val children = directChildFolders(normalizedLabels, parent)
+        val children = directChildFolders(normalizedLabels, parent, savedOrderFor)
         if (children.isEmpty()) break
         val selectedPath =
             if (depth < currentSegments.size) {
@@ -235,7 +274,7 @@ private fun buildFolderRows(
             } else {
                 null
             }
-        rows += FolderRow(children = children, selectedPath = selectedPath)
+        rows += FolderRow(parentPath = parent, children = children, selectedPath = selectedPath)
         if (selectedPath.isNullOrBlank()) break
         parent = selectedPath.orEmpty()
         depth += 1
@@ -247,19 +286,27 @@ private fun buildFolderRows(
 private fun directChildFolders(
     labels: List<String>,
     parent: String,
+    savedOrderFor: (String) -> List<String>,
 ): List<FolderChipData> {
     val prefix = parent.takeIf { it.isNotBlank() }?.let { "$it/" }.orEmpty()
+    val orderIndex = savedOrderFor(parent).withIndex().associate { it.value to it.index }
     return labels
         .asSequence()
         .filter { it.startsWith(prefix) && it != parent }
-        .map { it.removePrefix(prefix) }
-        .filter { it.isNotBlank() && !it.contains("/") }
+        .map { path -> normalizeFolderPathForUi(path) }
+        .filter { path ->
+            val child = path.removePrefix(prefix)
+            child.isNotBlank() && !child.contains("/")
+        }
         .distinct()
-        .sorted()
-        .map { child ->
+        .sortedWith(
+            compareBy<String> { path -> orderIndex[path] ?: Int.MAX_VALUE }
+                .thenBy { path -> path.substringAfterLast('/').lowercase() },
+        )
+        .map { path ->
             FolderChipData(
-                name = child,
-                path = if (parent.isBlank()) child else "$parent/$child",
+                name = path.substringAfterLast('/'),
+                path = path,
             )
         }
         .toList()
@@ -277,6 +324,7 @@ internal fun normalizeFolderPathForUi(path: String): String =
 fun FolderChip(
     text: String,
     selected: Boolean = false,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val themeStyle = LocalKardLeafThemeStyle.current
@@ -306,7 +354,7 @@ fun FolderChip(
         tonalElevation = if (isModern && selected && !isDracula) 3.dp else 0.dp,
         shadowElevation = if (isModern && selected && !isDracula) 2.dp else 0.dp,
         modifier =
-            Modifier
+            modifier
                 .graphicsLayer {
                     scaleX = scale
                     scaleY = scale

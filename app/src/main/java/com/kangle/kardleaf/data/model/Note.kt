@@ -19,6 +19,8 @@ data class Note(
     val contentPreview: String = content,
     val firstImageReference: String? = null,
     val tags: List<String> = emptyList(),
+    val sourceType: String? = null,
+    val sourceUrl: String? = null,
 ) {
     val folder: String
         get() = file.parent ?: ""

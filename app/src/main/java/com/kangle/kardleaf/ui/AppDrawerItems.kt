@@ -28,7 +28,6 @@ import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.Drafts
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Image
@@ -76,6 +75,7 @@ internal fun ThemedDrawerItem(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     val context = LocalContext.current
     val prefsManager = remember(context) { PrefsManager(context) }
@@ -91,7 +91,7 @@ internal fun ThemedDrawerItem(
             icon = { Icon(icon, contentDescription = null) },
             selected = selected,
             onClick = onClick,
-            modifier = modifier.padding(horizontal = 12.dp),
+            modifier = modifier.padding(horizontal = 12.dp).then(if (compact) Modifier.height(40.dp) else Modifier),
             colors = drawerItemColors(),
         )
         return
@@ -111,6 +111,7 @@ internal fun ThemedDrawerItem(
         PrefsManager.DrawerStyle.GROUPED_CARD -> 30.dp
         PrefsManager.DrawerStyle.DATA_CARD -> if (isCleanList) 40.dp else 30.dp
     }
+    val effectiveIconSize = if (compact) 28.dp else iconSize
     val iconCorner = when (drawerStyle) {
         PrefsManager.DrawerStyle.ICON_BOX -> if (isDracula) 8.dp else 14.dp
         PrefsManager.DrawerStyle.GROUPED_CARD -> 12.dp
@@ -123,6 +124,7 @@ internal fun ThemedDrawerItem(
         PrefsManager.DrawerStyle.GROUPED_CARD -> 8.dp
         else -> if (isDracula) 9.dp else 10.dp
     }
+    val effectiveItemVerticalPadding = if (compact) 4.dp else itemVerticalPadding
     val itemHorizontalPadding = when (drawerStyle) {
         PrefsManager.DrawerStyle.MINIMAL_TEXT -> 10.dp
         PrefsManager.DrawerStyle.GROUPED_CARD -> 10.dp
@@ -167,7 +169,7 @@ internal fun ThemedDrawerItem(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = if (drawerStyle == PrefsManager.DrawerStyle.MINIMAL_TEXT) 2.dp else 4.dp)
+            .padding(horizontal = 12.dp, vertical = if (compact) 1.dp else if (drawerStyle == PrefsManager.DrawerStyle.MINIMAL_TEXT) 2.dp else 4.dp)
             .graphicsLayer {
                 scaleX = pressedScale
                 scaleY = pressedScale
@@ -180,7 +182,7 @@ internal fun ThemedDrawerItem(
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = itemHorizontalPadding, vertical = itemVerticalPadding),
+            .padding(horizontal = itemHorizontalPadding, vertical = effectiveItemVerticalPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -196,7 +198,7 @@ internal fun ThemedDrawerItem(
         if (showIconBox) {
             Box(
                 modifier = Modifier
-                    .size(iconSize)
+                    .size(effectiveIconSize)
                     .clip(RoundedCornerShape(iconCorner))
                     .background(iconBackgroundColor),
                 contentAlignment = Alignment.Center,
@@ -215,7 +217,7 @@ internal fun ThemedDrawerItem(
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
-                    modifier = Modifier.size(if (isCleanList && drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) 24.dp else 21.dp),
+                    modifier = Modifier.size(if (compact) 18.dp else if (isCleanList && drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) 24.dp else 21.dp),
                 )
             }
         } else {
@@ -226,7 +228,7 @@ internal fun ThemedDrawerItem(
                 modifier = Modifier.size(21.dp),
             )
         }
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(if (compact) 8.dp else 12.dp))
         Text(
             text = label,
             style = if (drawerStyle == PrefsManager.DrawerStyle.MINIMAL_TEXT) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.titleSmall,
@@ -257,6 +259,7 @@ internal fun DrawerEntry(
     currentFilter: MainViewModel.NoteFilter,
     onDashboardFilterSelect: (MainViewModel.NoteFilter) -> Unit,
     onScreenSelect: (MainViewModel.Screen) -> Unit,
+    onCreateDrawing: () -> Unit,
     onShowOnboarding: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenPrivacy: () -> Unit,
@@ -286,6 +289,12 @@ internal fun DrawerEntry(
             selected = currentScreen is MainViewModel.Screen.Tasks,
             onClick = { onScreenSelect(MainViewModel.Screen.Tasks) },
         )
+        PrefsManager.DrawerItemId.NEW_DRAWING -> ThemedDrawerItem(
+            label = label,
+            icon = Icons.Outlined.Palette,
+            selected = false,
+            onClick = onCreateDrawing,
+        )
         PrefsManager.DrawerItemId.FAVORITES -> ThemedDrawerItem(
             label = label,
             icon = Icons.Outlined.StarBorder,
@@ -295,14 +304,20 @@ internal fun DrawerEntry(
         PrefsManager.DrawerItemId.DRAFTS -> ThemedDrawerItem(
             label = label,
             icon = Icons.Outlined.EditNote,
-            selected = currentScreen is MainViewModel.Screen.Dashboard && currentFilter is MainViewModel.NoteFilter.Drafts,
-            onClick = { onDashboardFilterSelect(MainViewModel.NoteFilter.Drafts) },
+            selected = currentScreen is MainViewModel.Screen.Dashboard && currentFilter is MainViewModel.NoteFilter.QuickNotes,
+            onClick = { onDashboardFilterSelect(MainViewModel.NoteFilter.QuickNotes) },
         )
         PrefsManager.DrawerItemId.TAGS -> ThemedDrawerItem(
             label = label,
             icon = Icons.Outlined.Sell,
             selected = currentScreen is MainViewModel.Screen.Tags,
             onClick = { onScreenSelect(MainViewModel.Screen.Tags) },
+        )
+        PrefsManager.DrawerItemId.RANDOM -> ThemedDrawerItem(
+            label = label,
+            icon = Icons.Outlined.Shuffle,
+            selected = currentScreen is MainViewModel.Screen.Dashboard && currentFilter is MainViewModel.NoteFilter.Random,
+            onClick = { onDashboardFilterSelect(MainViewModel.NoteFilter.Random()) },
         )
         PrefsManager.DrawerItemId.FILES -> Unit
         PrefsManager.DrawerItemId.DATES -> ThemedDrawerItem(
@@ -316,6 +331,12 @@ internal fun DrawerEntry(
             icon = Icons.Outlined.PhotoLibrary,
             selected = currentScreen is MainViewModel.Screen.Images,
             onClick = { onScreenSelect(MainViewModel.Screen.Images) },
+        )
+        PrefsManager.DrawerItemId.RELATIONSHIP_GRAPH -> ThemedDrawerItem(
+            label = label,
+            icon = Icons.Outlined.AccountTree,
+            selected = currentScreen is MainViewModel.Screen.RelationshipGraph,
+            onClick = { onScreenSelect(MainViewModel.Screen.RelationshipGraph) },
         )
         PrefsManager.DrawerItemId.ARCHIVE -> ThemedDrawerItem(
             label = label,
@@ -355,12 +376,15 @@ internal fun defaultDrawerItemLabel(itemId: PrefsManager.DrawerItemId): String =
         PrefsManager.DrawerItemId.ALL_NOTES -> "全部笔记"
         PrefsManager.DrawerItemId.RECENT -> "最近修改"
         PrefsManager.DrawerItemId.TASKS -> "任务"
+        PrefsManager.DrawerItemId.NEW_DRAWING -> "新建绘图"
         PrefsManager.DrawerItemId.FAVORITES -> "收藏"
-        PrefsManager.DrawerItemId.DRAFTS -> "草稿"
+        PrefsManager.DrawerItemId.DRAFTS -> "速记"
         PrefsManager.DrawerItemId.TAGS -> "标签"
+        PrefsManager.DrawerItemId.RANDOM -> "随机"
         PrefsManager.DrawerItemId.FILES -> "分类"
         PrefsManager.DrawerItemId.DATES -> "日期"
         PrefsManager.DrawerItemId.IMAGES -> "图片"
+        PrefsManager.DrawerItemId.RELATIONSHIP_GRAPH -> "关系"
         PrefsManager.DrawerItemId.ARCHIVE -> "归档"
         PrefsManager.DrawerItemId.TRASH -> "废弃"
         PrefsManager.DrawerItemId.PRIVACY -> "隐私"
@@ -373,12 +397,15 @@ internal fun englishDrawerItemLabel(itemId: PrefsManager.DrawerItemId): String =
         PrefsManager.DrawerItemId.ALL_NOTES -> "All notes"
         PrefsManager.DrawerItemId.RECENT -> "Recent"
         PrefsManager.DrawerItemId.TASKS -> "Tasks"
+        PrefsManager.DrawerItemId.NEW_DRAWING -> "New drawing"
         PrefsManager.DrawerItemId.FAVORITES -> "Favorites"
-        PrefsManager.DrawerItemId.DRAFTS -> "Drafts"
+        PrefsManager.DrawerItemId.DRAFTS -> "Quick notes"
         PrefsManager.DrawerItemId.TAGS -> "Tags"
+        PrefsManager.DrawerItemId.RANDOM -> "Random"
         PrefsManager.DrawerItemId.FILES -> "Folders"
         PrefsManager.DrawerItemId.DATES -> "Dates"
         PrefsManager.DrawerItemId.IMAGES -> "Images"
+        PrefsManager.DrawerItemId.RELATIONSHIP_GRAPH -> "Relations"
         PrefsManager.DrawerItemId.ARCHIVE -> "Archive"
         PrefsManager.DrawerItemId.TRASH -> "Trash"
         PrefsManager.DrawerItemId.PRIVACY -> "Privacy"

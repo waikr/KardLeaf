@@ -116,12 +116,12 @@ fun PrivacyScreen(
 
     fun verifyPrivacyPassword(input: String) {
         val inputHash = hashPassword(input)
-        if (inputHash == prefsManager.getPrivacyPasswordHash() || inputHash == prefsManager.getSafetyWordHash()) {
+        if (inputHash == prefsManager.getPrivacyPasswordHash()) {
             unlocked = true
             errorMsg = null
             pwdInput = ""
         } else {
-            errorMsg = "密码或安全词错误"
+            errorMsg = "隐私密码错误"
             if (prefsManager.getPasswordInputMode() == PrefsManager.PasswordInputMode.SIMPLE) {
                 pwdInput = ""
             }
@@ -133,7 +133,7 @@ fun PrivacyScreen(
             screenTitle = "隐私仓库",
             headline = "隐私仓库已锁定",
             description = "输入隐私密码，查看受保护的笔记。",
-            passwordLabel = if (prefsManager.getSafetyWordHash() != null) "隐私密码或安全词" else "隐私密码",
+            passwordLabel = "隐私密码",
             password = pwdInput,
             onPasswordChange = { pwdInput = it },
             primaryButtonText = "进入隐私仓库",
@@ -142,7 +142,6 @@ fun PrivacyScreen(
             errorMessage = errorMsg,
             biometricAvailable = canUsePrivacyBiometric,
             onBiometricUnlock = { unlockWithPrivacyBiometric() },
-            autoShowBiometric = canUsePrivacyBiometric,
             onBack = onBack,
             passwordInputMode = prefsManager.getPasswordInputMode(),
         )

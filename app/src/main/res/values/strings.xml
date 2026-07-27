@@ -75,13 +75,29 @@
     <string name="start_typing_hint">开始输入...</string>
     <string name="inline_math">Inline $...$</string>
     <string name="block_math">Block $$...$$</string>
+    <string name="action_insert_bold_text">Insert bold markdown</string>
+    <string name="action_insert_italics">Insert italics markdown</string>
+    <string name="action_insert_strikethrough">Insert strikethrough markdown</string>
+    <string name="action_insert_highlight">Insert highlight markdown</string>
+    <string name="action_insert_heading">Insert heading markdown</string>
+    <string name="action_insert_quote">Insert quotation markdown</string>
+    <string name="action_insert_code">Insert code markdown</string>
+    <string name="action_insert_link">Insert link</string>
+    <string name="action_insert_table">Insert table</string>
+    <string name="action_insert_image">Insert image</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_insert">插入</string>
+    <string name="hint_hyperlink_text">链接文字</string>
+    <string name="hint_hyperlink_url">链接地址</string>
+    <string name="hint_image_description">图片描述</string>
+    <string name="hint_image_path">图片地址</string>
+    <string name="hint_number_columns">列数</string>
+    <string name="hint_number_rows">行数</string>
+    <string name="message_invalid_number_rows_columns">请输入有效的行数和列数</string>
+    <string name="quillpad_date_format_pattern" translatable="false">yyyy-MM-dd</string>
+    <string name="quillpad_time_format_pattern" translatable="false">HH:mm</string>
 
     <!-- Widgets -->
-    <string name="widget_quick_note_label">快速新建笔记</string>
-    <string name="widget_quick_note_text">新建</string>
-    <string name="widget_quick_note_title">快速添加笔记</string>
-    <string name="widget_quick_note_subtitle">点击记录灵感 · 保存到草稿</string>
-    <string name="widget_quick_note_desc">点击快速新建 KardLeaf 笔记</string>
     <string name="widget_task_list_label">任务清单</string>
     <string name="widget_task_list_title">任务清单</string>
     <string name="widget_task_list_desc">查看和完成卡叶笔记任务</string>
@@ -90,14 +106,28 @@
     <string name="widget_note_list_title">笔记列表</string>
     <string name="widget_note_list_desc">查看最近的卡叶笔记</string>
     <string name="widget_note_empty">暂无笔记</string>
+    <string name="widget_folder_picker_title">选择浏览目录</string>
+    <string name="widget_folder_picker_loading">正在读取目录…</string>
+    <string name="widget_folder_all_notes">全部笔记</string>
+    <string name="widget_folder_root">根目录</string>
+    <string name="widget_picker_title">选择要添加到桌面的内容</string>
+    <string name="widget_pin_unsupported">当前系统未允许或不支持应用内添加桌面小组件。请在应用详情的“权限”或“其他权限”中开启“创建桌面快捷方式/添加到桌面”；如果没有该选项，请长按桌面空白处，从“小组件”中手动添加。</string>
+    <string name="widget_pin_request_failed">未能打开添加界面，请长按桌面空白处，从“小组件”中添加</string>
+    <string name="widget_open_permission_settings">去开启</string>
+    <string name="widget_permission_settings_failed">无法打开权限设置，请在系统设置中手动打开 KardLeaf 的应用详情</string>
 
     <!-- Launcher shortcuts -->
     <string name="shortcut_quick_note_short">新建笔记</string>
     <string name="shortcut_quick_note_long">快速新建笔记</string>
-    <string name="shortcut_search_short">搜索</string>
-    <string name="shortcut_search_long">搜索笔记</string>
-    <string name="shortcut_draft_short">草稿</string>
-    <string name="shortcut_draft_long">新建草稿</string>
+    <string name="shortcut_search_short">全文搜索</string>
+    <string name="shortcut_search_long">搜索全部笔记内容</string>
+    <string name="shortcut_widgets_short">添加桌面插件</string>
+    <string name="shortcut_widgets_long">选择并添加桌面小组件</string>
+    <string name="shortcut_quick_memo_short">速记</string>
+    <string name="shortcut_quick_memo_long">新建速记</string>
+    <string name="shortcut_quick_memo_desc">创建 1×1 速记应用快捷方式</string>
+    <string name="quick_memo_tile_label">添加速记</string>
+    <string name="shortcut_quick_memo_pin_failed">未能请求创建速记快捷方式，请检查桌面权限</string>
     <string name="shortcut_disabled_message">快捷功能暂不可用</string>
     <string name="shortcut_settings_short">设置</string>
     <string name="shortcut_settings_long">打开设置</string>

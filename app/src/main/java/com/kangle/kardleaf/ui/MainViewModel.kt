@@ -1,5 +1,6 @@
 package com.kangle.kardleaf.ui
 
+import com.kangle.kardleaf.data.utils.EditorOpenSession
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.data.utils.KardLeafLogTags
 import android.graphics.Bitmap
@@ -13,12 +14,17 @@ import com.kangle.kardleaf.data.model.NoteHistory
 import com.kangle.kardleaf.data.model.NoteRecordSummary
 import com.kangle.kardleaf.data.model.NoteRemark
 import com.kangle.kardleaf.data.model.NoteSearchMatch
+import com.kangle.kardleaf.data.database.NoteLinkEntity
 import com.kangle.kardleaf.data.repository.MetadataManager
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.repository.RoomNoteRepository
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import com.kangle.kardleaf.data.utils.NoteTextStats
 import com.kangle.kardleaf.data.utils.SearchQueryUtils
+import com.kangle.kardleaf.ui.viewmodel.PrivacyViewModel
+import com.kangle.kardleaf.ui.viewmodel.SettingsViewModel
+import com.kangle.kardleaf.ui.viewmodel.EditorViewModel
+import com.kangle.kardleaf.ui.viewmodel.DashboardViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -32,7 +38,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -54,6 +62,10 @@ class MainViewModel(
     private val metadataManager: MetadataManager,
     private val prefsManager: PrefsManager,
 ) : ViewModel() {
+    private val privacyViewModel = PrivacyViewModel(repository, viewModelScope)
+    private val settingsViewModel = SettingsViewModel(repository, viewModelScope)
+    private val editorViewModel = EditorViewModel(repository, viewModelScope)
+    private val dashboardViewModel = DashboardViewModel(prefsManager)
     private var notesRawEmissionCount = 0
     private var uiItemsEmissionCount = 0
 
@@ -79,83 +91,35 @@ class MainViewModel(
         val trashOrder: PrefsManager.TrashSortOrder,
     )
 
-    private fun normalizeFolderPath(path: String): String =
-        path.trim().replace("\\", "/").trim('/')
+    private fun normalizeFolderPath(path: String): String = dashboardViewModel.normalizePath(path)
 
-    private fun hiddenFolderPaths(): Set<String> = prefsManager.getHiddenFolderPaths()
+    private fun hiddenFolderPaths(): Set<String> = dashboardViewModel.hiddenFolderPaths()
 
     private fun isHiddenFolderPath(
         folder: String,
         hiddenFolders: Set<String> = hiddenFolderPaths(),
-    ): Boolean {
-        val normalized = normalizeFolderPath(folder)
-        if (normalized.isBlank()) return false
-        return hiddenFolders.any { hidden ->
-            normalized == hidden || normalized.startsWith("$hidden/")
-        }
-    }
+    ): Boolean = dashboardViewModel.isHiddenFolderPath(folder, hiddenFolders)
 
     private fun List<Note>.withoutHiddenFolders(
         hiddenFolders: Set<String> = hiddenFolderPaths(),
     ): List<Note> =
-        if (hiddenFolders.isEmpty()) {
-            this
-        } else {
-            filterNot { isHiddenFolderPath(it.folder, hiddenFolders) }
-        }
+        dashboardViewModel.withoutHiddenFolders(this, hiddenFolders)
 
-    private fun normalizeNotePath(path: String): String =
-        path.trim().replace("\\", "/").trim('/')
+    private fun normalizeNotePath(path: String): String = dashboardViewModel.normalizePath(path)
 
-    private fun customSortPathSummary(paths: Collection<String>, limit: Int = 5): String {
-        val normalized = paths.map(::normalizeNotePath)
-        val suffix = if (normalized.size > limit) ", ..." else ""
-        return "size=${normalized.size} head=${normalized.take(limit)}$suffix"
-    }
+    private fun customSortPathSummary(paths: Collection<String>, limit: Int = 5): String =
+        dashboardViewModel.customSortPathSummary(paths, limit)
 
     private fun customSortNoteSummary(notes: Collection<Note>, limit: Int = 5): String =
-        customSortPathSummary(notes.map { it.file.path }, limit)
+        dashboardViewModel.customSortNoteSummary(notes, limit)
 
-    private fun customSortUiItemSummary(items: Collection<DashboardUiItem>, limit: Int = 5): String {
-        val notePaths = items.mapNotNull { (it as? DashboardUiItem.NoteItem)?.note?.file?.path }
-        val headerCount = items.count { it is DashboardUiItem.HeaderItem }
-        val spacerCount = items.count { it is DashboardUiItem.SpacerItem }
-        return "items=${items.size} notes=${customSortPathSummary(notePaths, limit)} headers=$headerCount spacers=$spacerCount"
-    }
+    private fun customSortUiItemSummary(items: Collection<DashboardUiItem>, limit: Int = 5): String =
+        dashboardViewModel.customSortUiItemSummary(items, limit)
 
     private fun sortByCustomFolderOrder(
         notes: List<Note>,
         folder: String,
-    ): List<Note> {
-        val rawOrder = prefsManager.getFolderCustomOrder(folder)
-        val orderIndex = rawOrder
-            .map(::normalizeNotePath)
-            .filter { it.isNotBlank() }
-            .distinct()
-            .withIndex()
-            .associate { it.value to it.index }
-        logCustomSortTrace {
-            "sortByCustomFolderOrder enter folder=$folder notes=${customSortNoteSummary(notes)} order=${customSortPathSummary(rawOrder)}"
-        }
-        if (orderIndex.isEmpty()) {
-            val fallback = notes.sortedByDescending { it.lastModified.time }
-            logCustomSortTrace {
-                "sortByCustomFolderOrder fallback folder=$folder result=${customSortNoteSummary(fallback)}"
-            }
-            return fallback
-        }
-
-        val sorted = notes.sortedWith(
-            compareBy<Note> { orderIndex[normalizeNotePath(it.file.path)] ?: Int.MAX_VALUE }
-                .thenByDescending { it.lastModified.time }
-                .thenBy { it.title.lowercase() }
-                .thenBy { normalizeNotePath(it.file.path) },
-        )
-        logCustomSortTrace {
-            "sortByCustomFolderOrder result folder=$folder result=${customSortNoteSummary(sorted)}"
-        }
-        return sorted
-    }
+    ): List<Note> = dashboardViewModel.sortByCustomFolderOrder(notes, folder)
 
     private data class SearchIndex(
         val histories: List<NoteHistory>,
@@ -166,7 +130,18 @@ class MainViewModel(
         val requestId: Long,
         val noteId: String,
         val query: String,
+        val preferredStart: Int = -1,
     )
+
+    sealed interface WikilinkPrompt {
+        data class Unresolved(val target: String, val sourcePath: String) : WikilinkPrompt
+
+        data class Ambiguous(
+            val target: String,
+            val sourcePath: String,
+            val candidates: List<RoomNoteRepository.WikilinkCandidate>,
+        ) : WikilinkPrompt
+    }
 
     private data class DashboardSearchMatches(
         val query: String = "",
@@ -176,6 +151,10 @@ class MainViewModel(
     private val dashboardSearchMatches = MutableStateFlow(DashboardSearchMatches())
     private val _pendingEditorSearchJump = MutableStateFlow<EditorSearchJump?>(null)
     val pendingEditorSearchJump: StateFlow<EditorSearchJump?> = _pendingEditorSearchJump.asStateFlow()
+    private val _pendingEditorEditNoteId = MutableStateFlow<String?>(null)
+    val pendingEditorEditNoteId: StateFlow<String?> = _pendingEditorEditNoteId.asStateFlow()
+    private val _wikilinkPrompt = MutableStateFlow<WikilinkPrompt?>(null)
+    val wikilinkPrompt: StateFlow<WikilinkPrompt?> = _wikilinkPrompt.asStateFlow()
     private var editorSearchJumpRequestId = 0L
 
     private sealed interface PendingNoteUndo {
@@ -194,7 +173,9 @@ class MainViewModel(
 
         object Favorites : NoteFilter
 
-        object Drafts : NoteFilter
+        object QuickNotes : NoteFilter
+
+        data class Random(val seed: Long = System.nanoTime()) : NoteFilter
 
         data class Label(val name: String, val recursive: Boolean = false) : NoteFilter
 
@@ -228,23 +209,20 @@ class MainViewModel(
 
         object Tasks : Screen
 
+        object RelationshipGraph : Screen
+
         object Settings : Screen
     }
 
-    private val _currentScreen = MutableStateFlow<Screen>(Screen.Dashboard)
+    private val _currentScreen = dashboardViewModel.currentScreen
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
 
-    private val _openSearchRequest = MutableStateFlow(0L)
+    private val _openSearchRequest = dashboardViewModel.openSearchRequest
     val openSearchRequest: StateFlow<Long> = _openSearchRequest.asStateFlow()
 
-    fun navigateTo(screen: Screen) {
-        _currentScreen.value = screen
-    }
+    fun navigateTo(screen: Screen) = dashboardViewModel.navigateTo(screen)
 
-    fun requestOpenSearch() {
-        _currentScreen.value = Screen.Dashboard
-        _openSearchRequest.value += 1L
-    }
+    fun requestOpenSearch() = dashboardViewModel.requestOpenSearch()
 
     private val _currentFilter = MutableStateFlow<NoteFilter>(restoreLastFilter(prefsManager))
     val currentFilter: StateFlow<NoteFilter> = _currentFilter.asStateFlow()
@@ -327,6 +305,8 @@ class MainViewModel(
         combine(repository.getAllNotesWithArchive(), _hiddenFoldersVersion) { notes, _ ->
             notes.withoutHiddenFolders(hiddenFolderPaths())
         }
+    val libraryCharacterCount: StateFlow<Long?> = repository.libraryCharacterCount
+
     @OptIn(kotlinx.coroutines.FlowPreview::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val searchHistoryPreview: StateFlow<List<NoteHistory>> =
         _searchQuery
@@ -398,6 +378,21 @@ class MainViewModel(
             customSortStorageKeyFor(filter)?.let { prefsManager.getFolderSortSettings(it) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    private val _pendingDeleteIds = MutableStateFlow<Set<String>>(emptySet())
+    val pendingDeleteIds: StateFlow<Set<String>> = _pendingDeleteIds.asStateFlow()
+
+    private suspend fun releasePendingDeleteIdsAfterDatabaseUpdate(
+        requestedIds: Set<String>,
+        successIds: Set<String>,
+        deleteForever: Boolean,
+    ) {
+        if (successIds.isNotEmpty()) {
+            val updatedNotes = if (deleteForever) repository.getTrashedNotes() else repository.getAllNotesWithArchive()
+            runCatching { updatedNotes.first { notes -> notes.none { it.id in successIds } } }
+        }
+        _pendingDeleteIds.update { it - requestedIds }
+    }
+
     @OptIn(kotlinx.coroutines.FlowPreview::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val _notesRaw: StateFlow<List<Note>> =
         combine(
@@ -406,7 +401,13 @@ class MainViewModel(
                     is NoteFilter.All -> repository.getAllNotes()
                     is NoteFilter.Recent -> repository.getAllNotes()
                     is NoteFilter.Favorites -> repository.getFavoriteNotes()
-                    is NoteFilter.Drafts -> repository.getNotesByFolder(PrefsManager.DEFAULT_DRAFT_FOLDER_NAME)
+                    is NoteFilter.QuickNotes -> combine(
+                        repository.getNotesByFolder(PrefsManager.DEFAULT_QUICK_NOTE_FOLDER_NAME),
+                        repository.getNotesByFolder(PrefsManager.LEGACY_DRAFT_FOLDER_NAME),
+                    ) { quickNotes, legacyDrafts ->
+                        (quickNotes + legacyDrafts).distinctBy { it.id }
+                    }
+                    is NoteFilter.Random -> repository.getAllNotes()
                     is NoteFilter.Label ->
                         if (filter.recursive) {
                             repository.getNotesByFolderRecursive(filter.name)
@@ -429,7 +430,11 @@ class MainViewModel(
             val currentFilterValue = _currentFilter.value
             val hiddenFolders = hiddenFolderPaths()
             val visibleNotesList =
-                if (currentFilterValue is NoteFilter.Trash) notesList else notesList.withoutHiddenFolders(hiddenFolders)
+                if (currentFilterValue is NoteFilter.Trash || currentFilterValue is NoteFilter.QuickNotes) {
+                    notesList
+                } else {
+                    notesList.withoutHiddenFolders(hiddenFolders)
+                }
             val visibleAllNotesList = allNotesList.withoutHiddenFolders(hiddenFolders)
             val searchMatchesForResult: Map<String, SearchMatch>
             val searched =
@@ -476,7 +481,9 @@ class MainViewModel(
             }
 
             val sorted =
-                if (currentFilterValue is NoteFilter.Recent) {
+                if (currentFilterValue is NoteFilter.Random) {
+                    searched.shuffled(kotlin.random.Random(currentFilterValue.seed))
+                } else if (currentFilterValue is NoteFilter.Recent) {
                     searched.sortedBy { it.lastModified }
                 } else if (currentFilterValue is NoteFilter.Trash) {
                     when (sorting.trashOrder) {
@@ -494,13 +501,15 @@ class MainViewModel(
                 }
 
             val directed =
-                if (!useCustomSort && (currentFilterValue is NoteFilter.Recent || effectiveSortDirection == PrefsManager.SortDirection.DESCENDING)) {
+                if (currentFilterValue is NoteFilter.Random) {
+                    sorted
+                } else if (!useCustomSort && (currentFilterValue is NoteFilter.Recent || effectiveSortDirection == PrefsManager.SortDirection.DESCENDING)) {
                     sorted.reversed()
                 } else {
                     sorted
                 }
 
-            val result = directed.sortedByDescending { it.isPinned }
+            val result = if (currentFilterValue is NoteFilter.Random) directed else directed.sortedByDescending { it.isPinned }
             logCustomSortFlash {
                 "notesRaw result filter=$currentFilterValue useCustom=$useCustomSort sorted=${customSortNoteSummary(sorted)} directed=${customSortNoteSummary(directed)} result=${customSortNoteSummary(result)}"
             }
@@ -516,6 +525,9 @@ class MainViewModel(
             result
         }
             .flowOn(Dispatchers.Default)
+            .combine(_pendingDeleteIds) { notes, pendingIds ->
+                if (pendingIds.isEmpty()) notes else notes.filter { it.id !in pendingIds }
+            }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Public notes StateFlow; the loading flag is driven by setRootFolder/refreshNotes, not the Flow mapper.
@@ -555,7 +567,15 @@ class MainViewModel(
                 notesList.forEach {
                     addUnique(DashboardUiItem.NoteItem(it, searchMatches[it.id]))
                 }
-            } else if (filter is NoteFilter.Trash || filter is NoteFilter.Archive || filter is NoteFilter.Recent || filter is NoteFilter.Favorites || filter is NoteFilter.Drafts || filter is NoteFilter.YamlTag) {
+            } else if (
+                filter is NoteFilter.Trash ||
+                filter is NoteFilter.Archive ||
+                filter is NoteFilter.Recent ||
+                filter is NoteFilter.Favorites ||
+                filter is NoteFilter.QuickNotes ||
+                filter is NoteFilter.Random ||
+                filter is NoteFilter.YamlTag
+            ) {
                 notesList.forEach { addUnique(DashboardUiItem.NoteItem(it)) }
             } else {
                 val pinned = mutableListOf<Note>()
@@ -672,6 +692,16 @@ class MainViewModel(
     private var openNoteRequestVersion = 0
     private var lastOpenNoteShownAtMs = 0L
     private var lastOpenNoteShownPath: String? = null
+
+    suspend fun refreshLibraryCharacterCountIfDue() {
+        try {
+            repository.refreshLibraryCharacterCountIfDue()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            KardLeafLog.e("KardLeafHeatmapStats", "library character count refresh failed", error)
+        }
+    }
 
     private fun Note.looksLikeDashboardPreview(): Boolean =
         content.length >= DASHBOARD_NOTE_PREVIEW_LIMIT && content == contentPreview
@@ -848,6 +878,95 @@ class MainViewModel(
         }
     }
 
+    fun openWikilinkTarget(target: String, sourcePath: String = "") {
+        val rawTarget = target.trim()
+        if (rawTarget.isBlank()) return
+        viewModelScope.launch {
+            val resolution = runCatching {
+                repository.resolveWikilinkTarget(rawTarget, sourcePath)
+            }.getOrNull()
+            KardLeafLog.d(
+                "KardLeafWikiLinkTrace",
+                "click rawLink=$rawTarget sourcePath=$sourcePath resolutionStatus=${resolution?.status ?: "ERROR"} " +
+                    "targetPath=${resolution?.targetPath} targetRecordId=${resolution?.targetRecordId}",
+            )
+            when {
+                resolution?.status == com.kangle.kardleaf.data.database.NoteLinkResolutionStatus.RESOLVED &&
+                    !resolution.targetPath.isNullOrBlank() -> openResolvedNoteByPath(resolution.targetPath, "wikilink")
+                resolution?.status == com.kangle.kardleaf.data.database.NoteLinkResolutionStatus.AMBIGUOUS -> {
+                    KardLeafLog.w("KardLeafWikiLinkTrace", "ambiguous target=$rawTarget candidates=${resolution.candidates.size}")
+                    _wikilinkPrompt.value = WikilinkPrompt.Ambiguous(rawTarget, sourcePath, resolution.candidateDetails)
+                }
+                else -> {
+                    KardLeafLog.w("KardLeafWikiLinkTrace", "unresolved target=$rawTarget")
+                    _wikilinkPrompt.value = WikilinkPrompt.Unresolved(rawTarget, sourcePath)
+                }
+            }
+        }
+    }
+
+    fun dismissWikilinkPrompt() {
+        _wikilinkPrompt.value = null
+    }
+
+    fun openWikilinkCandidate(path: String) {
+        _wikilinkPrompt.value = null
+        openNoteByPath(path)
+    }
+
+    fun createWikilinkNote(target: String, sourcePath: String = "") {
+        val raw = target.substringBefore('|').substringBefore('#').trim()
+        val normalized = raw.replace("\\", "/").trim('/')
+        if (normalized.isBlank()) {
+            dismissWikilinkPrompt()
+            return
+        }
+        val withoutExtension = if (normalized.endsWith(".md", ignoreCase = true)) normalized.dropLast(3) else normalized
+        val parts = withoutExtension.split('/').map { it.trim() }.filter { it.isNotBlank() && it != "." && it != ".." }
+        val title = com.kangle.kardleaf.data.utils.NoteFormatUtils.sanitizeMarkdownFileBaseName(parts.lastOrNull().orEmpty())
+        if (title.isBlank()) {
+            dismissWikilinkPrompt()
+            return
+        }
+        val sourceFolder = sourcePath.replace("\\", "/").substringBeforeLast('/', "")
+        val folder = if (parts.size > 1) parts.dropLast(1).joinToString("/") else sourceFolder
+        viewModelScope.launch {
+            val existing = repository.resolveWikilinkTarget(raw, sourcePath)
+            if (existing.status != com.kangle.kardleaf.data.database.NoteLinkResolutionStatus.UNRESOLVED) {
+                dismissWikilinkPrompt()
+                openWikilinkTarget(raw, sourcePath)
+                return@launch
+            }
+            val draft = Note(
+                file = java.io.File(folder, "$title.md"),
+                title = title,
+                content = "",
+                lastModified = java.util.Date(),
+                createdAt = java.util.Date(),
+                color = 0xFFFFFFFF,
+                reminder = null,
+                isPinned = false,
+                isFavorite = false,
+                isArchived = false,
+                isTrashed = false,
+            )
+            val savedPath = repository.saveNote(draft, oldFile = null, saveHistory = false)
+            dismissWikilinkPrompt()
+            if (savedPath.isBlank()) {
+                KardLeafLog.w("KardLeafWikiLinkTrace", "create unresolved failed target=$raw folder=$folder")
+                return@launch
+            }
+            repository.refreshNotes()
+            openResolvedNoteByPath(savedPath, "wikilink-create")
+        }
+    }
+
+    fun outgoingWikilinks(notePath: String): Flow<List<NoteLinkEntity>> =
+        if (notePath.isBlank()) flowOf(emptyList()) else repository.getOutgoingWikilinks(notePath)
+
+    fun backlinks(notePath: String): Flow<List<NoteLinkEntity>> =
+        if (notePath.isBlank()) flowOf(emptyList()) else repository.getBacklinks(notePath)
+
     fun openRecordNote(recordKey: String) {
         val key = recordKey.trim()
         if (key.isBlank()) return
@@ -895,6 +1014,22 @@ class MainViewModel(
     fun openNoteAtSearchMatch(
         note: Note,
         query: String,
+        openSession: EditorOpenSession? = null,
+    ) {
+        val preferredStart = dashboardSearchMatches.value
+            .takeIf { it.query == query }
+            ?.matchesByNoteId
+            ?.get(note.id)
+            ?.startOffset
+            ?: -1
+        prepareEditorSearchJump(note, query, preferredStart)
+        openNote(note, openSession)
+    }
+
+    fun prepareEditorSearchJump(
+        note: Note,
+        query: String,
+        preferredStart: Int = -1,
     ) {
         val trimmedQuery = query.trim()
         if (trimmedQuery.isNotBlank()) {
@@ -903,9 +1038,9 @@ class MainViewModel(
                 requestId = editorSearchJumpRequestId,
                 noteId = note.id,
                 query = trimmedQuery,
+                preferredStart = preferredStart,
             )
         }
-        openNote(note)
     }
 
     fun consumeEditorSearchJump(requestId: Long) {
@@ -914,7 +1049,21 @@ class MainViewModel(
         }
     }
 
-    fun openNote(note: Note) {
+    fun openNoteForEditing(note: Note) {
+        _pendingEditorEditNoteId.value = note.id
+        openNote(note)
+    }
+
+    fun consumeEditorEditRequest(noteId: String) {
+        if (_pendingEditorEditNoteId.value == noteId) {
+            _pendingEditorEditNoteId.value = null
+        }
+    }
+
+    fun openNote(
+        note: Note,
+        openSession: EditorOpenSession? = null,
+    ) {
         val requestVersion = ++openNoteRequestVersion
         val notePath = note.file.path
         val startMs = SystemClock.elapsedRealtime()
@@ -925,7 +1074,8 @@ class MainViewModel(
         KardLeafLog.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
             "vm openNote start request=$requestVersion path=$notePath editorOpen=${_isEditorOpen.value} " +
-                "sourceContentLen=${note.content.length} sourcePreviewLen=${note.contentPreview.length} isOpening=${_isOpeningNoteContent.value}",
+                "sourceContentLen=${note.content.length} sourcePreviewLen=${note.contentPreview.length} isOpening=${_isOpeningNoteContent.value} " +
+                (openSession?.trace() ?: "sessionId=-1"),
         )
         val currentFilterValueForOpen = _currentFilter.value
         val visibleNotesForOpen = notes.value
@@ -1081,7 +1231,7 @@ class MainViewModel(
             )
             val fullNote =
                 try {
-                    repository.getNoteForEditor(notePath)
+                    repository.getNoteForEditor(notePath, openSession)
                 } catch (e: Exception) {
                     KardLeafLog.e(EDITOR_TRACE_TAG, "openNote full load failed request=$requestVersion path=$notePath", e)
                     null
@@ -1095,7 +1245,8 @@ class MainViewModel(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "vm full loaded request=$requestVersion elapsed=${SystemClock.elapsedRealtime() - startMs}ms " +
                     "fullContentLen=${fullNote?.content?.length ?: -1} fullPreviewLen=${fullNote?.contentPreview?.length ?: -1} " +
-                    "isOpening=${_isOpeningNoteContent.value}",
+                    "isOpening=${_isOpeningNoteContent.value} " +
+                    (openSession?.trace(fullNote?.content?.length) ?: "sessionId=-1"),
             )
             KardLeafLog.d(
                 OPEN_PATH_PROBE_TAG,
@@ -1324,11 +1475,11 @@ class MainViewModel(
         _externalConflict.value = null
     }
 
-    fun createTemporaryNote(source: String = "dashboard_quick_draft") {
+    fun createQuickNote(source: String = "dashboard_quick_memo") {
         createNote(
             KardLeafCustomFeatures.ExternalNoteDraft(
                 title = "",
-                folder = PrefsManager.DEFAULT_DRAFT_FOLDER_NAME,
+                folder = PrefsManager.DEFAULT_QUICK_NOTE_FOLDER_NAME,
                 isTemporary = false,
             ),
             source = source,
@@ -1488,9 +1639,20 @@ class MainViewModel(
         }
     }
 
-    fun deleteNote(note: Note) {
+    fun deleteNote(
+        note: Note,
+        onDone: (Boolean) -> Unit = {},
+    ) {
+        val id = note.id
+        _pendingDeleteIds.update { it + id }
         viewModelScope.launch {
-            repository.deleteNote(note.file.path)
+            val deleted = repository.deleteNoteWithResult(id)
+            releasePendingDeleteIdsAfterDatabaseUpdate(
+                requestedIds = setOf(id),
+                successIds = if (deleted) setOf(id) else emptySet(),
+                deleteForever = false,
+            )
+            onDone(deleted)
         }
     }
 
@@ -1827,13 +1989,33 @@ class MainViewModel(
         _selectedNotes.value = emptySet()
     }
 
-    fun deleteSelectedNotes() {
+    fun deleteSelectedNotes(
+        onDone: (RoomNoteRepository.DeleteNotesResult) -> Unit = {},
+    ) {
         val selectedIds = _selectedNotes.value.toList()
         if (selectedIds.isEmpty()) return
-        pendingNoteUndo = PendingNoteUndo.Restore(selectedIds)
+        val deleteForever = _currentFilter.value is NoteFilter.Trash
         clearSelection()
+        val pendingIds = selectedIds.toSet()
+        _pendingDeleteIds.update { it + pendingIds }
+        pendingNoteUndo = null
         pendingNoteUndoJob = viewModelScope.launch {
-            repository.deleteNotes(selectedIds)
+            val result = if (deleteForever) {
+                repository.deleteTrashedNotesPermanentlyWithResult(selectedIds)
+            } else {
+                repository.deleteNotesWithResult(selectedIds)
+            }
+            releasePendingDeleteIdsAfterDatabaseUpdate(
+                requestedIds = pendingIds,
+                successIds = result.successIds.toSet(),
+                deleteForever = deleteForever,
+            )
+            pendingNoteUndo = if (!deleteForever && result.restorableIds.isNotEmpty()) {
+                PendingNoteUndo.Restore(result.restorableIds)
+            } else {
+                null
+            }
+            onDone(result)
         }
     }
 
@@ -1965,7 +2147,8 @@ class MainViewModel(
             NoteFilter.All,
             NoteFilter.Recent -> true
             NoteFilter.Favorites -> true
-            NoteFilter.Drafts -> targetFolder == PrefsManager.DEFAULT_DRAFT_FOLDER_NAME
+            is NoteFilter.Random -> true
+            NoteFilter.QuickNotes -> targetFolder == PrefsManager.DEFAULT_QUICK_NOTE_FOLDER_NAME
             is NoteFilter.Label -> {
                 val folder = normalizeFolderPath(filter.name)
                 targetFolder == folder || (filter.recursive && targetFolder.startsWith("$folder/"))
@@ -2198,70 +2381,44 @@ class MainViewModel(
         }
     }
 
-    fun getNoteHistory(noteId: String): Flow<List<NoteHistory>> = repository.getNoteHistory(noteId)
+    fun getNoteHistory(noteId: String): Flow<List<NoteHistory>> = editorViewModel.getNoteHistory(noteId)
 
 
-    fun getNoteRemarks(noteId: String): Flow<List<NoteRemark>> = repository.getNoteRemarks(noteId)
+    fun getNoteRemarks(noteId: String): Flow<List<NoteRemark>> = editorViewModel.getNoteRemarks(noteId)
 
     suspend fun getNoteFrontMatterProperties(noteId: String): List<NoteFormatUtils.FrontMatterProperty> =
-        repository.getNoteFrontMatterProperties(noteId)
+        editorViewModel.getNoteFrontMatterProperties(noteId)
 
     suspend fun getNoteForProperties(noteId: String): Note? =
-        repository.getNote(noteId)
+        editorViewModel.getNoteForProperties(noteId)
 
     suspend fun getFullNoteForShare(noteId: String): Note? =
-        repository.getNoteForShare(noteId)
+        editorViewModel.getFullNoteForShare(noteId)
 
-    suspend fun getFullNotesForShare(notes: List<Note>): List<Note>? {
-        if (notes.isEmpty()) return emptyList()
-        val fullNotes = mutableListOf<Note>()
-        notes.forEach { note ->
-            val fullNote = getFullNoteForShare(note.id) ?: return null
-            fullNotes += fullNote
-        }
-        return fullNotes
-    }
+    suspend fun getFullNotesForShare(notes: List<Note>): List<Note>? = editorViewModel.getFullNotesForShare(notes)
 
     suspend fun getNoteTextStatsForProperties(noteId: String): NoteTextStats =
-        repository.getNoteTextStatsForProperties(noteId)
+        editorViewModel.getNoteTextStatsForProperties(noteId)
 
     fun addNoteRemark(
         noteId: String,
         content: String,
         onComplete: () -> Unit = {},
-    ) {
-        viewModelScope.launch {
-            repository.addNoteRemark(noteId, content)
-            onComplete()
-        }
-    }
+    ) = editorViewModel.addNoteRemark(noteId, content, onComplete)
 
     fun updateNoteRemark(
         remarkId: Long,
         content: String,
         onComplete: () -> Unit = {},
-    ) {
-        viewModelScope.launch {
-            repository.updateNoteRemark(remarkId, content)
-            onComplete()
-        }
-    }
+    ) = editorViewModel.updateNoteRemark(remarkId, content, onComplete)
 
-    fun deleteNoteRemark(remarkId: Long) {
-        viewModelScope.launch {
-            repository.deleteNoteRemark(remarkId)
-        }
-    }
+    fun deleteNoteRemark(remarkId: Long) = editorViewModel.deleteNoteRemark(remarkId)
 
-    suspend fun getRemarkNoteSummaries(): List<NoteRecordSummary> = repository.getRemarkNoteSummaries()
+    suspend fun getRemarkNoteSummaries(): List<NoteRecordSummary> = editorViewModel.getRemarkNoteSummaries()
 
-    suspend fun getHistoryNoteSummaries(): List<NoteRecordSummary> = repository.getHistoryNoteSummaries()
+    suspend fun getHistoryNoteSummaries(): List<NoteRecordSummary> = editorViewModel.getHistoryNoteSummaries()
 
-    fun deleteNoteHistory(historyId: Long) {
-        viewModelScope.launch {
-            repository.deleteNoteHistory(historyId)
-        }
-    }
+    fun deleteNoteHistory(historyId: Long) = editorViewModel.deleteNoteHistory(historyId)
 
     fun restoreNoteHistory(
         noteId: String,
@@ -2285,91 +2442,40 @@ class MainViewModel(
     }
 
     suspend fun getHistoryCleanupPreview(keep: Int): List<HistoryCleanupPreview> =
-        repository.getHistoryCleanupPreview(keep)
+        editorViewModel.getHistoryCleanupPreview(keep)
 
-    fun cleanupOldHistoryVersions() {
-        viewModelScope.launch {
-            try {
-                repository.cleanupOldHistoryVersions()
-            } catch (e: Exception) {
-                KardLeafLog.e("MainViewModel", "Failed to cleanup old history versions", e)
-            }
-        }
-    }
+    fun cleanupOldHistoryVersions() = editorViewModel.cleanupOldHistoryVersions()
 
     // region 隐私空间
-    val privacyNotes: StateFlow<List<com.kangle.kardleaf.data.database.PrivacyNoteEntity>> =
-        repository.getAllPrivacyNotes().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val privacyNotes = privacyViewModel.notes
 
     fun savePrivacyNote(id: Long, title: String, content: String, onDone: () -> Unit = {}) {
-        viewModelScope.launch {
-            repository.savePrivacyNote(id, title, content)
-            onDone()
-        }
+        privacyViewModel.save(id, title, content, onDone)
     }
 
     fun savePrivacyNoteAndReturnId(id: Long, title: String, content: String, onSaved: (Long) -> Unit = {}) {
-        viewModelScope.launch {
-            val savedId = repository.savePrivacyNote(id, title, content)
-            onSaved(savedId)
-        }
+        privacyViewModel.saveAndReturnId(id, title, content, onSaved)
     }
 
-    fun deletePrivacyNote(id: Long) {
-        viewModelScope.launch { repository.deletePrivacyNote(id) }
-    }
+    fun deletePrivacyNote(id: Long) = privacyViewModel.delete(id)
 
-    fun exportPrivacyNotes(onSuccess: (String) -> Unit, onError: (String) -> Unit) {
-        viewModelScope.launch {
-            try {
-                onSuccess(repository.exportPrivacyNotes())
-            } catch (e: Exception) {
-                onError(e.message ?: "导出失败")
-            }
-        }
-    }
+    fun exportPrivacyNotes(onSuccess: (String) -> Unit, onError: (String) -> Unit) =
+        privacyViewModel.export(onSuccess, onError)
 
-    fun importPrivacyNotes(json: String, onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
-        viewModelScope.launch {
-            try {
-                onSuccess(repository.importPrivacyNotes(json))
-            } catch (e: Exception) {
-                onError(e.message ?: "导入失败")
-            }
-        }
-    }
+    fun importPrivacyNotes(json: String, onSuccess: (Int) -> Unit, onError: (String) -> Unit) =
+        privacyViewModel.import(json, onSuccess, onError)
     // endregion
 
     fun exportUserDataBackup(
         onSuccess: (String) -> Unit,
         onError: (String) -> Unit,
-    ) {
-        viewModelScope.launch {
-            try {
-                onSuccess(repository.exportUserDataBackup())
-            } catch (e: Exception) {
-                KardLeafLog.e("MainViewModel", "Failed to export user data backup", e)
-                onError(e.message ?: "Export failed")
-            }
-        }
-    }
+    ) = settingsViewModel.exportUserDataBackup(onSuccess, onError)
 
     fun importUserDataBackup(
         json: String,
         onSuccess: () -> Unit,
         onError: (String) -> Unit,
-    ) {
-        viewModelScope.launch {
-            try {
-                repository.importUserDataBackup(json)
-                repository.refreshNotes()
-                onSuccess()
-            } catch (e: Exception) {
-                KardLeafLog.e("MainViewModel", "Failed to import user data backup", e)
-                onError(e.message ?: "Import failed")
-            }
-        }
-    }
+    ) = settingsViewModel.importUserDataBackup(json, onSuccess, onError)
 
     fun renameLabel(
         oldPath: String,
@@ -2448,73 +2554,73 @@ class MainViewModel(
     suspend fun preparePreviewMarkdown(
         markdown: String,
         currentFolder: String,
-    ): String {
-        val startMs = SystemClock.elapsedRealtime()
-        KardLeafLog.d(
-            OPEN_PATH_PROBE_TAG,
-            "previewPrepare start folder=$currentFolder markdownLen=${markdown.length} thread=${Thread.currentThread().name}",
-        )
-        val result = repository.resolveMarkdownImages(markdown, currentFolder)
-        KardLeafLog.d(
-            OPEN_PATH_PROBE_TAG,
-            "previewPrepare done folder=$currentFolder markdownLen=${markdown.length} resultLen=${result.length} " +
-                "elapsed=${SystemClock.elapsedRealtime() - startMs}ms thread=${Thread.currentThread().name}",
-        )
-        return result
-    }
+    ): String = editorViewModel.preparePreviewMarkdown(markdown, currentFolder)
 
     suspend fun importImage(
         uri: Uri,
         currentFolder: String,
-    ): String = repository.importImage(uri, currentFolder)
+    ): String = editorViewModel.importImage(uri, currentFolder)
 
     suspend fun getImageImportTooLargeMessage(uri: Uri): String? =
-        repository.getImageImportTooLargeMessage(uri)
+        editorViewModel.getImageImportTooLargeMessage(uri)
 
     suspend fun importDrawingImage(
         bitmap: Bitmap,
         drawingSource: String,
         currentFolder: String,
-    ): String = repository.importDrawingImage(bitmap, drawingSource, currentFolder)
+    ): String = editorViewModel.importDrawingImage(bitmap, drawingSource, currentFolder)
 
     suspend fun updateDrawingImage(
         bitmap: Bitmap,
         drawingSource: String,
         currentFolder: String,
         reference: String,
-    ): Boolean = repository.updateDrawingImage(bitmap, drawingSource, currentFolder, reference)
+    ): Boolean = editorViewModel.updateDrawingImage(bitmap, drawingSource, currentFolder, reference)
 
     suspend fun loadDrawingSource(
         currentFolder: String,
         reference: String,
-    ): String? = repository.loadDrawingSource(currentFolder, reference)
+    ): String? = editorViewModel.loadDrawingSource(currentFolder, reference)
+
+    suspend fun loadImageViewerResource(
+        currentFolder: String,
+        reference: String,
+    ): RoomNoteRepository.ImageViewerResource? = editorViewModel.loadImageViewerResource(currentFolder, reference)
+
+    suspend fun loadImageEditorResource(
+        currentFolder: String,
+        resource: RoomNoteRepository.ImageViewerResource,
+    ): RoomNoteRepository.ImageEditorResource? = editorViewModel.loadImageEditorResource(currentFolder, resource)
+
+    suspend fun saveImageAnnotation(
+        currentFolder: String,
+        resource: RoomNoteRepository.ImageEditorResource,
+        bitmap: android.graphics.Bitmap,
+        drawingSource: String,
+    ): RoomNoteRepository.ImageAnnotationSaveResult? =
+        editorViewModel.saveImageAnnotation(currentFolder, resource, bitmap, drawingSource)
 
     suspend fun resolveMarkdownImageDataUris(
         markdown: String,
         currentFolder: String,
-    ): List<RoomNoteRepository.NoteImage> = repository.resolveNoteImages(markdown, currentFolder)
+    ): List<RoomNoteRepository.NoteImage> = editorViewModel.resolveMarkdownImageDataUris(markdown, currentFolder)
 
     suspend fun resolveNoteImages(note: Note): List<RoomNoteRepository.NoteImage> =
-        repository.resolveNoteImages(note.content, note.folder)
+        editorViewModel.resolveNoteImages(note)
 
-    suspend fun resolveNoteThumbnailBitmap(note: Note): android.graphics.Bitmap? {
-        val startMs = SystemClock.elapsedRealtime()
-        KardLeafLog.d(
-            OPEN_PATH_PROBE_TAG,
-            "thumbnailVm start path=${note.file.path} folder=${note.folder} firstImageRefLen=${note.firstImageReference?.length ?: 0}",
-        )
-        val result = repository.resolveNoteThumbnailBitmap(note)
-        KardLeafLog.d(
-            OPEN_PATH_PROBE_TAG,
-            "thumbnailVm done path=${note.file.path} folder=${note.folder} ok=${result != null} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
-        )
-        return result
-    }
+    suspend fun resolveNoteThumbnailBitmap(note: Note): android.graphics.Bitmap? = editorViewModel.resolveNoteThumbnailBitmap(note)
 
     suspend fun resolveImageThumbnailBitmap(
         note: Note,
         reference: String,
-    ): android.graphics.Bitmap? = repository.resolveImageThumbnailBitmap(note, reference)
+    ): android.graphics.Bitmap? = editorViewModel.resolveImageThumbnailBitmap(note, reference)
+
+    fun peekNoteThumbnailBitmap(note: Note): android.graphics.Bitmap? = editorViewModel.peekNoteThumbnailBitmap(note)
+
+    fun peekImageThumbnailBitmap(
+        note: Note,
+        reference: String,
+    ): android.graphics.Bitmap? = editorViewModel.peekImageThumbnailBitmap(note, reference)
 
     private fun persistLastFilter(filter: NoteFilter) {
         when (filter) {
@@ -2532,7 +2638,7 @@ class MainViewModel(
             is NoteFilter.Favorites -> {
                 prefsManager.saveLastFilterType("FAVORITES")
             }
-            is NoteFilter.Drafts -> {
+            is NoteFilter.QuickNotes -> {
                 prefsManager.saveLastFilterType("DRAFTS")
             }
             is NoteFilter.Recent -> {
@@ -2557,7 +2663,7 @@ class MainViewModel(
                         if (tag.isNotBlank()) NoteFilter.YamlTag(tag) else NoteFilter.All
                     }
                     "FAVORITES" -> NoteFilter.Favorites
-                    "DRAFTS" -> NoteFilter.Drafts
+                    "DRAFTS" -> NoteFilter.QuickNotes
                     "RECENT" -> NoteFilter.Recent
                     else -> NoteFilter.All
                 }

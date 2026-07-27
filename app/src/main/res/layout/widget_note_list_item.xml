@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/note_widget_item"
+    style="@style/WidgetNoteRow">
+
+    <TextView
+        android:id="@+id/note_widget_item_title"
+        style="@style/WidgetNoteTitle" />
+
+    <TextView
+        android:id="@+id/note_widget_item_body"
+        style="@style/WidgetNoteBody" />
+</LinearLayout>

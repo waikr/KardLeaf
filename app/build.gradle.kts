@@ -3,8 +3,11 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.parcelize")
+    id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.devtools.ksp")
     id("org.jlleitschuh.gradle.ktlint")
+    id("androidx.navigation.safeargs.kotlin")
 }
 
 val localProperties = Properties().apply {
@@ -23,11 +26,41 @@ fun readGitOutput(vararg args: String): String = runCatching {
     if (process.waitFor() == 0 && output.isNotBlank()) output else "unknown"
 }.getOrDefault("unknown")
 
+fun readGitLines(vararg args: String): List<String>? = runCatching {
+    val process = ProcessBuilder("git", *args)
+        .directory(rootProject.projectDir)
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().readLines()
+    if (process.waitFor() == 0) output.filter { it.isNotBlank() } else null
+}.getOrNull()
+
 fun buildConfigString(value: String): String =
-    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    "\"" + value
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n") + "\""
 
 val currentGitCommit = readGitOutput("rev-parse", "--short", "HEAD")
 val currentGitMessage = readGitOutput("log", "-1", "--pretty=%s")
+val currentGitChangedFiles = run {
+    val trackedFiles = readGitLines("diff", "--name-only", "HEAD")
+    val untrackedFiles = readGitLines("ls-files", "--others", "--exclude-standard")
+    if (trackedFiles == null || untrackedFiles == null) {
+        "unknown"
+    } else {
+        val files = (trackedFiles + untrackedFiles)
+            .map { it.substringAfterLast('/') }
+            .distinct()
+            .sorted()
+        when {
+            files.isEmpty() -> "无未提交文件"
+            files.size <= 50 -> "${files.size} 个：" + files.joinToString(" | ")
+            else -> "${files.size} 个：" + files.take(50).joinToString(" | ") + " | ..."
+        }
+    }
+}
 
 android {
     namespace = "com.kangle.kardleaf"
@@ -38,10 +71,11 @@ android {
         applicationId = "com.kardleaf"
         minSdk = 23
         targetSdk = 34
-        versionCode = 150
-        versionName = "1.5.0"
+        versionCode = 170
+        versionName = "1.7.0"
         manifestPlaceholders["appLabel"] = "KardLeaf"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "KARDLEAF_TRIAL_GATEWAY_URL", buildConfigString("https://ai.waikrfaio.xyz"))
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -55,6 +89,7 @@ android {
             buildConfigField("boolean", "KARDLEAF_DEV_VARIANT", "false")
             buildConfigField("String", "KARDLEAF_GIT_COMMIT", buildConfigString(currentGitCommit))
             buildConfigField("String", "KARDLEAF_GIT_MESSAGE", buildConfigString(currentGitMessage))
+            buildConfigField("String", "KARDLEAF_GIT_CHANGED_FILES", buildConfigString(currentGitChangedFiles))
         }
         create("dev") {
             dimension = "distribution"
@@ -64,6 +99,7 @@ android {
             buildConfigField("boolean", "KARDLEAF_DEV_VARIANT", "true")
             buildConfigField("String", "KARDLEAF_GIT_COMMIT", buildConfigString(currentGitCommit))
             buildConfigField("String", "KARDLEAF_GIT_MESSAGE", buildConfigString(currentGitMessage))
+            buildConfigField("String", "KARDLEAF_GIT_CHANGED_FILES", buildConfigString(currentGitChangedFiles))
         }
     }
 
@@ -104,6 +140,10 @@ android {
     buildFeatures {
         buildConfig = true
         compose = true
+        viewBinding = true
+    }
+    sourceSets {
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
     }
 
     composeOptions {
@@ -125,20 +165,26 @@ ksp {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.0")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.biometric:biometric:1.1.0")
+    implementation("com.google.android.material:material:1.12.0")
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("com.google.code.gson:gson:2.10.1") // Correct group id just in case
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("net.dankito.readability4j:readability4j:1.0.8")
+    implementation("com.vladsch.flexmark:flexmark-html2md-converter:0.64.8")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.02.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
@@ -147,11 +193,27 @@ dependencies {
     implementation("sh.calvin.reorderable:reorderable:3.1.0")
     implementation("io.noties.markwon:core:4.6.2")
     implementation("io.noties.markwon:editor:4.6.2")
+    implementation("io.noties.markwon:image:4.6.2")
     implementation("io.noties.markwon:ext-strikethrough:4.6.2")
+    implementation("io.noties.markwon:ext-tables:4.6.2")
+
+    // Koin (DI for Quillpad editor: viewModel/inject)
+    implementation("io.insert-koin:koin-android:3.5.3")
+
+    // Navigation Component (Quillpad EditorFragment uses navArgs/findNavController + safe-args)
+    implementation("androidx.navigation:navigation-fragment-ktx:2.7.7")
+    implementation("androidx.navigation:navigation-ui-ktx:2.7.7")
+
+    // kotlinx.serialization (Quillpad data models use @Serializable)
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+
+    // RecyclerView (Quillpad editor attachments/tasks recyclers)
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
 
     // Room Database
     val roomVersion = "2.6.1"
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
+    androidTestImplementation("androidx.room:room-testing:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
 }

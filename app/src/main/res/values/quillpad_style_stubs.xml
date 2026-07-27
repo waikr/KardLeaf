@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      Color-scheme style stubs referenced by PreferenceEnums.kt
+      (DarkBlack / Blue / Red / Yellow / Green / Pink / Orange / Purple / System).
+      These are only used by the colour-scheme preference UI, which the sandbox
+      does not surface. They are empty so the original PreferenceEnums.kt compiles
+      unchanged; they are never applied at runtime in the sandbox.
+    -->
+    <style name="DarkBlack" />
+    <style name="Blue" />
+    <style name="Red" />
+    <style name="Yellow" />
+    <style name="Green" />
+    <style name="Pink" />
+    <style name="Orange" />
+    <style name="Purple" />
+    <style name="System" />
+
+</resources>

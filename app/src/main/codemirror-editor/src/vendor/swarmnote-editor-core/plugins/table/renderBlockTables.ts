@@ -5,24 +5,24 @@
  * 将 GFM Markdown 表格渲染为可交互的可视化表格，支持两种显示模式：
  * - **Widget 模式（默认）**：使用 `EditableTableWidget`，单元格可编辑
  * - **源码模式**：显示原始 Markdown 文本，顶部有“Table”切换 widget
- * 
+ *
  * **UI 设计：**
  * - 默认纯网格布局
  * - 悬停/聚焦时显示两个控制手柄：
  *   1. 每行左侧的 `:::` 手柄（点击切换行高亮）
  *   2. 表头上方的每列 `:::` 手柄（点击切换列高亮）
- * 
+ *
  * **上下文菜单：**
  * 所有结构性编辑（添加/删除行列、对齐方式、源码切换、复制、删除）
  * 都通过单元格右键菜单实现。右键点击任意单元格会触发
  * `EditorTableContextMenu` 事件，携带单元格坐标和操作集合。
  * 宿主 React 层（`NoteEditor`）在点击位置渲染 shadcn `DropdownMenu`；
  * 此模块本身不渲染菜单 DOM。
- * 
+ *
  * **单元格编辑：**
  * 使用 on-blur / on-Enter 提交（而非 onInput），以保持 IME 输入不间断
  * 并每次编辑产生单个 Yjs delta。
- * 
+ *
  * **主题颜色：**
  * 来自 `createTheme.ts` 中定义的 CSS 变量 `--cm-table-*`；
  * 此模块从不硬编码 rgba 颜色。
@@ -44,7 +44,7 @@ let katexModule: typeof import('katex') | null = null;
 
 /**
  * 异步加载 KaTeX 模块
- * 
+ *
  * @returns KaTeX 模块实例
  */
 function loadKaTeX(): Promise<typeof import('katex').default> {
@@ -63,12 +63,12 @@ function loadKaTeX(): Promise<typeof import('katex').default> {
 
 /**
  * 水合数学公式 span 元素
- * 
+ *
  * **功能：**
  * 将 `renderInlineMarkdown` 生成的占位符
  * `<span class="cm-table-math" data-tex="...">$x$</span>`
  * 替换为 KaTeX 渲染的内联公式。失败时回退到字面源文本。
- * 
+ *
  * @param root - 根元素（表格容器）
  */
 function hydrateMathSpans(root: HTMLElement) {
@@ -115,13 +115,13 @@ interface TableSourceRange {
 
 /**
  * 解析表格行
- * 
+ *
  * **工作原理：**
  * 1. 将转义的管道符 `\|` 替换为占位符
  * 2. 按 `|` 分割单元格
  * 3. 移除首尾空单元格
  * 4. 恢复转义的管道符并修剪空白
- * 
+ *
  * @param line - 原始行文本
  * @returns 单元格数组
  */
@@ -142,13 +142,13 @@ function parseRow(line: string): string[] {
 
 /**
  * 解析对齐方式
- * 
+ *
  * **规则：**
  * - `:---:` → center
  * - `---:` → right
  * - `:---` → left
  * - `---` → null（默认）
- * 
+ *
  * @param cell - 分隔符单元格文本
  * @returns 对齐方式
  */
@@ -164,7 +164,7 @@ function parseAlignment(cell: string): Alignment {
 
 /**
  * 检查是否为分隔符行
- * 
+ *
  * @param cells - 单元格数组
  * @returns 是否为有效的分隔符行
  */
@@ -174,14 +174,14 @@ function isSeparatorRow(cells: string[]): boolean {
 
 /**
  * 解析 Markdown 表格
- * 
+ *
  * **工作流程：**
  * 1. 分割行并过滤空行
  * 2. 解析表头行
  * 3. 验证分隔符行
  * 4. 提取对齐方式
  * 5. 解析数据行（补齐缺失单元格）
- * 
+ *
  * @param source - 表格 Markdown 源码
  * @returns 表格数据或 null（解析失败）
  */
@@ -211,7 +211,7 @@ function parseMarkdownTable(source: string): TableData | null {
 
 /**
  * 生成分隔符单元格
- * 
+ *
  * @param alignment - 对齐方式
  * @returns 分隔符字符串（如 `:---`、`---:`、`:---:`）
  */
@@ -230,7 +230,7 @@ function generateSeparator(alignment: Alignment): string {
 
 /**
  * 序列化表格数据为 Markdown 字符串
- * 
+ *
  * @param data - 表格数据
  * @returns Markdown 格式的表格字符串
  */
@@ -243,7 +243,7 @@ function serializeMarkdownTable(data: TableData): string {
 
 /**
  * 深拷贝表格数据
- * 
+ *
  * @param data - 原始表格数据
  * @returns 克隆的表格数据
  */
@@ -259,7 +259,7 @@ function cloneTableData(data: TableData): TableData {
 
 /**
  * 设置表格源码模式的 StateEffect
- * 
+ *
  * **用途：**
  * 用于在 widget 模式和源码模式之间切换。
  */
@@ -271,7 +271,7 @@ export const setTableSourceMode = StateEffect.define<{
 
 /**
  * 检查两个范围是否重叠
- * 
+ *
  * @param a - 范围 A
  * @param b - 范围 B
  * @returns 是否重叠
@@ -282,10 +282,10 @@ function rangesOverlap(a: TableSourceRange, b: TableSourceRange): boolean {
 
 /**
  * 表格源码模式状态字段
- * 
+ *
  * **功能：**
  * 持久化存储所有处于源码模式的表格范围。
- * 
+ *
  * **更新逻辑：**
  * 1. 映射现有范围的位置（适应文档变化）
  * 2. 处理 setTableSourceMode 效果：
@@ -297,7 +297,7 @@ const tableSourceModeField = StateField.define<TableSourceRange[]>({
   create: () => [],
   /**
    * 更新方法
-   * 
+   *
    * @param ranges - 当前范围数组
    * @param tr - 事务对象
    * @returns 更新后的范围数组
@@ -334,7 +334,7 @@ const tableSourceModeField = StateField.define<TableSourceRange[]>({
 
 /**
  * 检查表格是否处于源码模式
- * 
+ *
  * @param ranges - 源码模式范围数组
  * @param from - 表格起始位置
  * @param to - 表格结束位置
@@ -355,7 +355,7 @@ const SVG_PROLOGUE =
 
 /**
  * Lucide 图标 SVG 映射表
- * 
+ *
  * **包含的图标：**
  * - grip-horizontal：水平手柄（用于列控制）
  * - grip-vertical：垂直手柄（用于行控制）
@@ -371,7 +371,7 @@ const LUCIDE_ICONS: Record<IconKey, string> = {
 
 /**
  * 创建图标按钮
- * 
+ *
  * @param iconKey - 图标键名
  * @param title - 提示文本
  * @param onClick - 点击回调
@@ -404,10 +404,10 @@ function iconButton(
 
 /**
  * 待处理的表格焦点映射表
- * 
+ *
  * **用途：**
  * 在 widget 重建期间保留焦点位置，确保编辑体验流畅。
- * 
+ *
  * **键：** 表格起始位置
  * **值：** { row: 行索引, col: 列索引 }
  */
@@ -417,10 +417,10 @@ const pendingTableFocus = new Map<number, { row: number; col: number }>();
 
 /**
  * 可编辑表格 Widget 类
- * 
+ *
  * **功能：**
  * 渲染可交互的 Markdown 表格，支持单元格编辑、行列选择、上下文菜单等。
- * 
+ *
  * @param data - 表格数据
  * @param tableFrom - 表格起始位置
  * @param tableTo - 表格结束位置
@@ -439,14 +439,14 @@ class EditableTableWidget extends WidgetType {
 
   /**
    * 相等性判断
-   * 
+   *
    * **比较内容：**
    * 1. 表格范围（tableFrom, tableTo）
    * 2. 表头数量和名称
    * 3. 行数和每行的单元格数量
    * 4. 对齐方式
    * 5. 所有单元格的内容
-   * 
+   *
    * @param other - 另一个 widget 实例
    * @returns 是否相等
    */
@@ -475,6 +475,20 @@ class EditableTableWidget extends WidgetType {
     // 构建并附加表格
     container.appendChild(this.buildTable(view));
 
+    // 插入表格命令执行时 Widget 尚不存在，因此命令会把首次焦点暂存到
+    // 当前 EditorView 的 DOM；Widget 创建后在这里接管并立即消费。
+    const editorDom = view.dom as HTMLElement & {
+      kardleafPendingTableFocus?: { tableFrom: number; row: number; col: number };
+    };
+    const commandPending = editorDom.kardleafPendingTableFocus;
+    if (commandPending?.tableFrom === this.tableFrom) {
+      pendingTableFocus.set(this.tableFrom, {
+        row: commandPending.row,
+        col: commandPending.col,
+      });
+      delete editorDom.kardleafPendingTableFocus;
+    }
+
     // 检查是否有待处理的焦点（widget 重建期间保留）
     const pending = pendingTableFocus.get(this.tableFrom);
     if (pending) {
@@ -500,13 +514,13 @@ class EditableTableWidget extends WidgetType {
 
   /**
    * 事件处理策略
-   * 
+   *
    * **返回值：**
    * true — Widget 单元格是 contentEditable 并管理自己的 DOM 事件
    * （焦点 / 光标 / 输入）。返回 true 告诉 CodeMirror 不要移动
    * 其自身的选区来响应源自 widget 内部的事件 —— 否则点击单元格
    * 会将编辑器光标推到 widget 边界而不是聚焦单元格。
-   * 
+   *
    * @returns true
    */
   ignoreEvent(): boolean {
@@ -517,7 +531,7 @@ class EditableTableWidget extends WidgetType {
 
   /**
    * 构建表格 DOM 结构
-   * 
+   *
    * **DOM 层级：**
    * ```
    * table
@@ -528,7 +542,7 @@ class EditableTableWidget extends WidgetType {
    *     tr (每行)
    *       td (数据单元格 + 行手柄（仅第一列）)
    * ```
-   * 
+   *
    * @param view - 编辑器视图
    * @returns table 元素
    */
@@ -575,7 +589,7 @@ class EditableTableWidget extends WidgetType {
 
   /**
    * 构建行手柄按钮
-   * 
+   *
    * @param rowIdx - 行索引
    * @returns 图标按钮元素
    */
@@ -591,7 +605,7 @@ class EditableTableWidget extends WidgetType {
 
   /**
    * 构建列手柄按钮
-   * 
+   *
    * @param colIdx - 列索引
    * @returns 图标按钮元素
    */
@@ -609,12 +623,12 @@ class EditableTableWidget extends WidgetType {
 
   /**
    * 切换行选择状态
-   * 
+   *
    * **工作流程：**
    * 1. 查找表格 widget 元素
    * 2. 找到目标行
    * 3. 如果已选中则取消，否则清除其他选择并选中该行
-   * 
+   *
    * @param rowIdx - 行索引
    */
   private toggleRowSelection(rowIdx: number) {
@@ -689,11 +703,29 @@ class EditableTableWidget extends WidgetType {
       onCommit(nextValue);
     };
 
+    const emitTableMenu = (clientX: number, clientY: number) => {
+      const rowIdx = tag === 'th' ? -1 : Number(cell.parentElement?.dataset.rowIdx ?? -1);
+      const callback = view.state.facet(editorEventCallback);
+      callback?.({
+        kind: EditorEventType.TableContextMenu,
+        clientX,
+        clientY,
+        rowIdx,
+        colIdx,
+        alignment: this.data.alignments[colIdx],
+        rowCount: this.data.rows.length,
+        colCount: this.data.headers.length,
+        actions: this.buildContextMenuActions(view, cell, rowIdx, colIdx),
+      });
+    };
+
     cell.addEventListener('focus', () => {
       if (!editing) {
         editing = true;
         cell.textContent = cell.dataset.raw ?? '';
       }
+      const rect = cell.getBoundingClientRect();
+      emitTableMenu(rect.left + rect.width / 2, rect.bottom);
     });
 
     cell.addEventListener('blur', (e) => {
@@ -705,10 +737,12 @@ class EditableTableWidget extends WidgetType {
     });
 
     cell.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Enter') {
         e.preventDefault();
-        commitIfChanged();
-        cell.blur();
+        e.stopPropagation();
+        const rowIdx = tag === 'th' ? -1 : Number(cell.parentElement?.dataset.rowIdx ?? -1);
+        this.moveToSameColumnNextRow(view, cell, rowIdx, colIdx);
       } else if (e.key === 'Tab') {
         e.preventDefault();
         e.stopPropagation();
@@ -723,22 +757,44 @@ class EditableTableWidget extends WidgetType {
     cell.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const rowIdx = tag === 'th' ? -1 : Number(cell.parentElement?.dataset.rowIdx ?? -1);
-      const callback = view.state.facet(editorEventCallback);
-      callback?.({
-        kind: EditorEventType.TableContextMenu,
-        clientX: e.clientX,
-        clientY: e.clientY,
-        rowIdx,
-        colIdx,
-        alignment: this.data.alignments[colIdx],
-        rowCount: this.data.rows.length,
-        colCount: this.data.headers.length,
-        actions: this.buildContextMenuActions(view),
-      });
+      emitTableMenu(e.clientX, e.clientY);
     });
 
     return cell;
+  }
+
+  private moveToSameColumnNextRow(
+    view: EditorView,
+    currentCell: HTMLElement,
+    currentRowIdx: number,
+    colIdx: number,
+  ) {
+    const nextRowIdx = currentRowIdx + 1;
+    const nextValue = currentCell.textContent ?? '';
+    const raw = currentCell.dataset.raw ?? '';
+    const hasDraftChange = nextValue !== raw;
+
+    if (nextRowIdx < this.data.rows.length) {
+      if (hasDraftChange) {
+        currentCell.dataset.raw = nextValue;
+        pendingTableFocus.set(this.tableFrom, { row: nextRowIdx, col: colIdx });
+        this.dispatchTableChange(
+          view,
+          this.withActiveCellDraft(currentCell, currentRowIdx, colIdx, true),
+        );
+        return;
+      }
+
+      const container = currentCell.closest('.cm-table-widget');
+      const targetRow = container?.querySelectorAll<HTMLTableRowElement>('tbody tr')[nextRowIdx];
+      const targetCell = targetRow?.querySelectorAll<HTMLElement>('td[contenteditable]')[colIdx];
+      if (targetCell) focusCellEnd(targetCell);
+      return;
+    }
+
+    const source = this.withActiveCellDraft(currentCell, currentRowIdx, colIdx, true);
+    pendingTableFocus.set(this.tableFrom, { row: source.rows.length, col: colIdx });
+    this.addRowAt(view, currentRowIdx, 'below', source);
   }
 
   private navigateCell(view: EditorView, currentCell: HTMLElement, direction: 1 | -1) {
@@ -773,17 +829,68 @@ class EditableTableWidget extends WidgetType {
 
   // ── Context menu actions exposed to the host React layer ──
 
-  private buildContextMenuActions(view: EditorView): TableContextMenuActions {
+  private buildContextMenuActions(
+    view: EditorView,
+    activeCell: HTMLElement,
+    activeRowIdx: number,
+    activeColIdx: number,
+  ): TableContextMenuActions {
+    const dataWithDraft = (markCommitted = true) =>
+      this.withActiveCellDraft(activeCell, activeRowIdx, activeColIdx, markCommitted);
     return {
-      addRowAt: (rowIdx, position) => this.addRowAt(view, rowIdx, position),
-      deleteRow: (rowIdx) => this.deleteRow(view, rowIdx),
-      addColumnAt: (colIdx, position) => this.addColumnAt(view, colIdx, position),
-      deleteColumn: (colIdx) => this.deleteColumn(view, colIdx),
-      setAlignment: (colIdx, alignment) => this.setAlignment(view, colIdx, alignment),
-      toggleSource: () => this.toggleSource(view),
-      copyMarkdown: () => this.copyMarkdown(),
+      addRowAt: (rowIdx, position) => {
+        const insertAt = position === 'above' ? Math.max(0, rowIdx) : rowIdx + 1;
+        pendingTableFocus.set(this.tableFrom, { row: insertAt, col: activeColIdx });
+        this.addRowAt(view, rowIdx, position, dataWithDraft());
+      },
+      deleteRow: (rowIdx) => {
+        if (rowIdx < 0 || rowIdx >= this.data.rows.length) return;
+        const source = dataWithDraft();
+        const nextRow = source.rows.length > 1 ? Math.min(rowIdx, source.rows.length - 2) : -1;
+        pendingTableFocus.set(this.tableFrom, { row: nextRow, col: activeColIdx });
+        this.deleteRow(view, rowIdx, source);
+      },
+      addColumnAt: (colIdx, position) => {
+        const insertAt = position === 'left' ? colIdx : colIdx + 1;
+        pendingTableFocus.set(this.tableFrom, { row: activeRowIdx, col: insertAt });
+        this.addColumnAt(view, colIdx, position, dataWithDraft());
+      },
+      deleteColumn: (colIdx) => {
+        if (this.data.headers.length <= 1 || colIdx < 0 || colIdx >= this.data.headers.length) return;
+        const source = dataWithDraft();
+        pendingTableFocus.set(this.tableFrom, {
+          row: activeRowIdx,
+          col: Math.min(colIdx, source.headers.length - 2),
+        });
+        this.deleteColumn(view, colIdx, source);
+      },
+      setAlignment: (colIdx, alignment) => {
+        pendingTableFocus.set(this.tableFrom, { row: activeRowIdx, col: activeColIdx });
+        this.setAlignment(view, colIdx, alignment, dataWithDraft());
+      },
+      toggleSource: () => this.toggleSource(view, dataWithDraft()),
+      copyMarkdown: () => this.copyMarkdown(dataWithDraft(false)),
       deleteTable: () => this.deleteTable(view),
     };
+  }
+
+  private withActiveCellDraft(
+    activeCell: HTMLElement,
+    rowIdx: number,
+    colIdx: number,
+    markCommitted: boolean,
+  ): TableData {
+    const updated = cloneTableData(this.data);
+    const nextValue = activeCell.isConnected
+      ? activeCell.textContent ?? ''
+      : activeCell.dataset.raw ?? '';
+    if (markCommitted) activeCell.dataset.raw = nextValue;
+    if (rowIdx === -1) {
+      if (colIdx >= 0 && colIdx < updated.headers.length) updated.headers[colIdx] = nextValue;
+    } else if (rowIdx >= 0 && rowIdx < updated.rows.length && colIdx >= 0) {
+      updated.rows[rowIdx][colIdx] = nextValue;
+    }
+    return updated;
   }
 
   // ── Commit handlers ──
@@ -809,22 +916,32 @@ class EditableTableWidget extends WidgetType {
 
   // ── Structural operations ──
 
-  private addRowAt(view: EditorView, rowIdx: number, position: 'above' | 'below') {
-    const updated = cloneTableData(this.data);
-    const insertAt = position === 'above' ? rowIdx : rowIdx + 1;
-    updated.rows.splice(insertAt, 0, this.data.headers.map(() => ''));
+  private addRowAt(
+    view: EditorView,
+    rowIdx: number,
+    position: 'above' | 'below',
+    source: TableData = this.data,
+  ) {
+    const updated = cloneTableData(source);
+    const insertAt = position === 'above' ? Math.max(0, rowIdx) : rowIdx + 1;
+    updated.rows.splice(insertAt, 0, source.headers.map(() => ''));
     this.dispatchTableChange(view, updated);
   }
 
-  private deleteRow(view: EditorView, rowIdx: number) {
-    if (rowIdx < 0 || rowIdx >= this.data.rows.length) return;
-    const updated = cloneTableData(this.data);
+  private deleteRow(view: EditorView, rowIdx: number, source: TableData = this.data) {
+    if (rowIdx < 0 || rowIdx >= source.rows.length) return;
+    const updated = cloneTableData(source);
     updated.rows.splice(rowIdx, 1);
     this.dispatchTableChange(view, updated);
   }
 
-  private addColumnAt(view: EditorView, colIdx: number, position: 'left' | 'right') {
-    const updated = cloneTableData(this.data);
+  private addColumnAt(
+    view: EditorView,
+    colIdx: number,
+    position: 'left' | 'right',
+    source: TableData = this.data,
+  ) {
+    const updated = cloneTableData(source);
     const insertAt = position === 'left' ? colIdx : colIdx + 1;
     updated.headers.splice(insertAt, 0, '');
     updated.alignments.splice(insertAt, 0, null);
@@ -832,25 +949,34 @@ class EditableTableWidget extends WidgetType {
     this.dispatchTableChange(view, updated);
   }
 
-  private deleteColumn(view: EditorView, colIdx: number) {
-    if (this.data.headers.length <= 1) return;
-    if (colIdx < 0 || colIdx >= this.data.headers.length) return;
-    const updated = cloneTableData(this.data);
+  private deleteColumn(view: EditorView, colIdx: number, source: TableData = this.data) {
+    if (source.headers.length <= 1) return;
+    if (colIdx < 0 || colIdx >= source.headers.length) return;
+    const updated = cloneTableData(source);
     updated.headers.splice(colIdx, 1);
     updated.alignments.splice(colIdx, 1);
     updated.rows.forEach((row) => row.splice(colIdx, 1));
     this.dispatchTableChange(view, updated);
   }
 
-  private setAlignment(view: EditorView, colIdx: number, alignment: Alignment) {
-    if (this.data.alignments[colIdx] === alignment) return;
-    const updated = cloneTableData(this.data);
+  private setAlignment(
+    view: EditorView,
+    colIdx: number,
+    alignment: Alignment,
+    source: TableData = this.data,
+  ) {
+    const updated = cloneTableData(source);
     updated.alignments[colIdx] = alignment;
     this.dispatchTableChange(view, updated);
   }
 
-  private toggleSource(view: EditorView) {
+  private toggleSource(view: EditorView, source: TableData = this.data) {
     view.dispatch({
+      changes: {
+        from: this.tableFrom,
+        to: this.tableTo,
+        insert: serializeMarkdownTable(source),
+      },
       effects: setTableSourceMode.of({
         from: this.tableFrom,
         to: this.tableTo,
@@ -865,8 +991,8 @@ class EditableTableWidget extends WidgetType {
     });
   }
 
-  private copyMarkdown() {
-    const md = serializeMarkdownTable(this.data);
+  private copyMarkdown(source: TableData = this.data) {
+    const md = serializeMarkdownTable(source);
     const fallback = () => {
       const ta = document.createElement('textarea');
       ta.value = md;
@@ -893,12 +1019,16 @@ class EditableTableWidget extends WidgetType {
 // ─── Helpers ────────────────────────────────────────────────────
 
 function focusCellEnd(target: HTMLElement) {
-  target.focus();
+  // preventScroll：focus() 默认会让浏览器（含 WebView 原生逻辑）滚动到焦点元素，
+  // widget 重建后重新聚焦时会造成整页跳动/闪烁；改为聚焦后只做最小滚动。
+  target.focus({ preventScroll: true });
   const range = document.createRange();
   range.selectNodeContents(target);
+  range.collapse(false);
   const sel = window.getSelection();
   sel?.removeAllRanges();
   sel?.addRange(range);
+  target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 function clearTableSelection(widgetEl: HTMLElement) {

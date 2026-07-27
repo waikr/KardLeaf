@@ -1,0 +1,1642 @@
+package com.kangle.kardleaf.ui.editor.native
+
+import com.kangle.kardleaf.data.utils.KardLeafLog
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Rect
+import android.graphics.RectF
+import android.net.Uri
+import android.os.SystemClock
+import android.text.Editable
+import android.text.InputType
+import android.text.Spannable
+import android.text.TextWatcher
+import android.text.style.ReplacementSpan
+import android.text.style.BackgroundColorSpan
+import android.util.AttributeSet
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.widget.EditText
+import androidx.compose.ui.text.TextRange
+import androidx.documentfile.provider.DocumentFile
+import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.utils.NoteFormatUtils
+import com.kangle.kardleaf.ui.ImageClickSource
+import com.kangle.kardleaf.ui.KardLeafImageClickTarget
+import java.util.concurrent.Executors
+import java.util.regex.Pattern
+import java.util.regex.PatternSyntaxException
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.hypot
+
+private const val EDITOR_TRACE_TAG = "KardLeafEditorTrace"
+private const val IMAGE_TOUCH_LOG_TAG = "KardLeafImageTouch"
+private const val LIVE_MARKDOWN_MAX_CHARS = 5000
+private const val MERGE_EDIT_WINDOW_MS = 400L
+private const val MAX_HISTORY_SIZE = 200
+private const val MAX_HISTORY_OPERATION_CHARS = 200_000
+private const val IMAGE_PREVIEW_MAX_CHARS = 30000
+private const val IMAGE_PREVIEW_MAX_COUNT = 12
+private const val IMAGE_PREVIEW_DEBOUNCE_MS = 350L
+private const val IMAGE_PREVIEW_FADE_DURATION_MS = 180L
+
+private const val SEARCH_HIGHLIGHT_COLOR = 0x66FFD54F
+private val SEARCH_CURRENT_HIGHLIGHT_COLOR = 0x80FFD54F.toInt()
+private val SEARCH_CURRENT_BORDER_COLOR = 0xFFE0A800.toInt()
+
+private class KardLeafSearchHighlightSpan(color: Int) : BackgroundColorSpan(color)
+
+private class KardLeafInlineImageSpan(
+    private val bitmap: Bitmap,
+    private val widthPx: Int,
+    private val heightPx: Int,
+    private val verticalPaddingPx: Int,
+    private val horizontalShadowPaddingPx: Int,
+    private val animationStartMs: Long,
+    private val animationDurationMs: Long,
+    private val invalidateCallback: () -> Unit,
+) : ReplacementSpan() {
+    private val dst = Rect()
+    private val shadowRect = RectF()
+    private val ambientShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFFFFF.toInt()
+        setShadowLayer(2.5f, 0f, 0f, 0x16000000)
+    }
+    private val keyShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFFFFF.toInt()
+        setShadowLayer(4f, 0f, 1.5f, 0x22000000)
+    }
+
+    override fun getSize(
+        paint: Paint,
+        text: CharSequence?,
+        start: Int,
+        end: Int,
+        fm: Paint.FontMetricsInt?,
+    ): Int {
+        fm?.let { metrics ->
+            val targetHeight = heightPx + verticalPaddingPx * 2
+            val currentHeight = metrics.descent - metrics.ascent
+            if (targetHeight > currentHeight) {
+                val center = (metrics.ascent + metrics.descent) / 2
+                metrics.ascent = center - targetHeight / 2
+                metrics.descent = metrics.ascent + targetHeight
+                metrics.top = metrics.ascent
+                metrics.bottom = metrics.descent
+            }
+        }
+        return (widthPx + horizontalShadowPaddingPx * 2).coerceAtLeast(1)
+    }
+
+    override fun draw(
+        canvas: Canvas,
+        text: CharSequence?,
+        start: Int,
+        end: Int,
+        x: Float,
+        top: Int,
+        y: Int,
+        bottom: Int,
+        paint: Paint,
+    ) {
+        val imageTop = top + verticalPaddingPx
+        val imageLeft = x.toInt() + horizontalShadowPaddingPx
+        dst.set(
+            imageLeft,
+            imageTop,
+            imageLeft + widthPx,
+            imageTop + heightPx,
+        )
+        shadowRect.set(dst)
+
+        val progress = calculateAnimationProgress()
+        val alpha = (72 + (183 * progress)).toInt().coerceIn(0, 255)
+        val scale = 0.985f + 0.015f * progress
+        val centerX = dst.exactCenterX()
+        val centerY = dst.exactCenterY()
+
+        val oldAmbientAlpha = ambientShadowPaint.alpha
+        val oldKeyAlpha = keyShadowPaint.alpha
+        val oldBitmapAlpha = paint.alpha
+        ambientShadowPaint.alpha = alpha
+        keyShadowPaint.alpha = alpha
+        paint.alpha = alpha
+        canvas.save()
+        canvas.scale(scale, scale, centerX, centerY)
+        canvas.drawRoundRect(shadowRect, 8f, 8f, ambientShadowPaint)
+        canvas.drawRoundRect(shadowRect, 8f, 8f, keyShadowPaint)
+        canvas.drawBitmap(bitmap, null, dst, paint)
+        canvas.restore()
+        ambientShadowPaint.alpha = oldAmbientAlpha
+        keyShadowPaint.alpha = oldKeyAlpha
+        paint.alpha = oldBitmapAlpha
+
+        if (progress < 1f) {
+            invalidateCallback()
+        }
+    }
+
+    private fun calculateAnimationProgress(): Float {
+        if (animationDurationMs <= 0L) return 1f
+        val elapsed = (SystemClock.uptimeMillis() - animationStartMs).coerceAtLeast(0L)
+        val linear = (elapsed.toFloat() / animationDurationMs).coerceIn(0f, 1f)
+        return 1f - (1f - linear) * (1f - linear)
+    }
+}
+
+private data class KardLeafImagePreviewMatch(
+    val lineStart: Int,
+    val lineEnd: Int,
+    val reference: String,
+)
+
+private data class KardLeafImagePreviewItem(
+    val lineStart: Int,
+    val lineEnd: Int,
+    val reference: String,
+    val bitmap: Bitmap,
+    val widthPx: Int,
+    val heightPx: Int,
+)
+
+private val checkboxContinuationRegex = Regex("""^(\s*[-*+]\s+\[[ xX]\]\s*)(.*)$""")
+private val bulletContinuationRegex = Regex("""^(\s*(?:[-*+•]|\d+\.))\s+(.*)$""")
+private val quoteContinuationRegex = Regex("""^(\s*>\s+)(.*)$""")
+
+private data class EditOperation(
+    val start: Int,
+    val deletedText: String,
+    val insertedText: String,
+    val selectionBefore: TextRange,
+    val selectionAfter: TextRange,
+)
+
+private enum class EditorLineStyle {
+    BLOCKQUOTE,
+    UNORDERED_LIST,
+    ORDERED_LIST,
+    CHECK_LIST,
+}
+
+private data class EditorListPrefix(
+    val style: EditorLineStyle,
+    val indent: String,
+    val fullPrefix: String,
+)
+
+private val editorChecklistPrefixRegex = Regex("""^(\s*)[-+*]\s+\[[ xX]\]\s+""")
+private val editorUnorderedPrefixRegex = Regex("""^(\s*)[-+*]\s+""")
+private val editorOrderedPrefixRegex = Regex("""^(\s*)\d+\.\s+""")
+private val editorBlockquotePrefixRegex = Regex("""^(\s*)>\s?""")
+private val editorHeadingPrefixRegex = Regex("""^#{1,6}\s*""")
+
+class EditorEditText @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+) : EditText(context, attrs) {
+
+    var kardLeafSelectionCallback: ((Int, Int) -> Unit)? = null
+    var kardLeafContentCallback: (() -> Unit)? = null
+    var kardLeafUndoRedoCallback: (() -> Unit)? = null
+    var kardLeafInlineImageClickCallback: ((KardLeafImageClickTarget) -> Unit)? = null
+
+    var smartContinuationEnabled: Boolean = true
+
+    private val imagePreviewExecutor = Executors.newSingleThreadExecutor()
+    private val imagePreviewToken = AtomicInteger(0)
+    private var imagePreviewReleased = false
+    private val imagePreviewResolver = KardLeafInlineImagePreviewResolver(context)
+    private val imagePreviewRefreshRunnable = Runnable { refreshInlineImagePreviewsNow() }
+    private var imagePreviewFolder: String = ""
+    private var imagePreviewItems: List<KardLeafImagePreviewItem> = emptyList()
+    private var inlineImagePreviewEnabled = true
+
+    private val undoStack = ArrayDeque<EditOperation>()
+    private val redoStack = ArrayDeque<EditOperation>()
+
+    private var programmaticChange = false
+    private var isApplyingHistory = false
+    private var isHandlingContinuation = false
+
+    private var pendingStart = 0
+    private var pendingDeletedText = ""
+    private var pendingSelectionBefore = TextRange(0, 0)
+
+    private var lastOp: EditOperation? = null
+    private var lastOpTimeMs = 0L
+    private var lastInsertedText = ""
+    private var lastInsertStart = -1
+
+    private var debugImageInsertUntilMs = 0L
+    private var debugImageExpectedCursor = -1
+
+    private var markdownWatcher: TextWatcher? = null
+    private var markdownWatcherAttached = false
+
+    private val currentSearchPath = Path()
+    private val currentSearchBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = SEARCH_CURRENT_BORDER_COLOR
+        style = Paint.Style.STROKE
+        strokeWidth = resources.displayMetrics.density * 1.5f
+    }
+    private var currentSearchStart = -1
+    private var currentSearchEnd = -1
+    private var inlineImageTouchStartX = -1f
+    private var inlineImageTouchStartY = -1f
+    private var inlineImageGestureId = 0L
+    private var inlineImageTouchCandidate: KardLeafImagePreviewItem? = null
+    private var inlineImageSelectionBefore = TextRange.Zero
+
+    private val internalWatcher = object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+            if (isApplyingHistory || programmaticChange) return
+            pendingStart = start
+            pendingDeletedText = if (count > 0) {
+                s?.subSequence(start, start + count)?.toString().orEmpty()
+            } else {
+                ""
+            }
+            pendingSelectionBefore = TextRange(
+                selectionStart.coerceAtLeast(0),
+                selectionEnd.coerceAtLeast(0),
+            )
+        }
+
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+            if (isApplyingHistory || programmaticChange) return
+            val insertedText = if (count > 0) {
+                s?.subSequence(start, start + count)?.toString().orEmpty()
+            } else {
+                ""
+            }
+            val deletedText = pendingDeletedText
+            lastInsertedText = insertedText
+            lastInsertStart = start
+
+            if (deletedText.isEmpty() && insertedText.isEmpty()) return
+
+            if (insertedText.length > 200 || deletedText.length > 200) {
+                KardLeafLog.d(
+                    EDITOR_TRACE_TAG,
+                    "editor large change start=$start deletedLen=${deletedText.length} insertedLen=${insertedText.length} " +
+                        "textLen=${s?.length ?: -1} selection=$selectionStart..$selectionEnd " +
+                        "viewHeight=$height lineCount=$lineCount scrollY=$scrollY hasFocus=${hasFocus()}",
+                )
+            }
+
+            val now = SystemClock.elapsedRealtime()
+            val op = EditOperation(
+                start = pendingStart,
+                deletedText = deletedText,
+                insertedText = insertedText,
+                selectionBefore = pendingSelectionBefore,
+                selectionAfter = TextRange(
+                    selectionStart.coerceAtLeast(0),
+                    selectionEnd.coerceAtLeast(0),
+                ),
+            )
+            if (operationHistoryChars(op) > MAX_HISTORY_OPERATION_CHARS) {
+                flushPendingOp()
+                pushUndoOperation(op, "typing")
+                lastOpTimeMs = 0L
+                redoStack.clear()
+                notifyUndoRedoChanged()
+                return
+            }
+
+            if (shouldMergeWithLast(op, now)) {
+                val merged = mergeOps(lastOp!!, op)
+                if (operationHistoryChars(merged) > MAX_HISTORY_OPERATION_CHARS) {
+                    pushUndoOperation(merged, "typing-merge")
+                    lastOpTimeMs = 0L
+                    redoStack.clear()
+                    notifyUndoRedoChanged()
+                    return
+                }
+                lastOp = merged
+            } else {
+                flushPendingOp()
+                lastOp = op
+            }
+            lastOpTimeMs = now
+            redoStack.clear()
+            notifyUndoRedoChanged()
+        }
+
+        override fun afterTextChanged(s: Editable?) {
+            if (programmaticChange) return
+            if (smartContinuationEnabled &&
+                !isHandlingContinuation &&
+                !isApplyingHistory &&
+                lastInsertedText == "\n"
+            ) {
+                isHandlingContinuation = true
+                try {
+                    handleEnterKey(lastInsertStart)
+                } finally {
+                    isHandlingContinuation = false
+                }
+                lastInsertedText = ""
+            }
+            kardLeafContentCallback?.invoke()
+            post { refreshMarkdownWatcher() }
+            scheduleInlineImagePreviewRefresh()
+        }
+    }
+
+    init {
+        addTextChangedListener(internalWatcher)
+    }
+
+    /**
+     * Avoid Android TextView/IME focus traversal walking the surrounding Compose Lazy layouts
+     * when a new note or draft requests the keyboard. Returning this keeps input connection
+     * creation local to the editor instead of searching beyond the surrounding Compose tree.
+     */
+    override fun focusSearch(direction: Int): View? = this
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        drawCurrentSearchBorder(canvas)
+    }
+
+    private fun drawCurrentSearchBorder(canvas: Canvas) {
+        val layout = layout ?: return
+        val start = currentSearchStart
+        val end = currentSearchEnd
+        val length = text?.length ?: 0
+        if (start < 0 || end <= start || end > length) return
+        currentSearchPath.reset()
+        layout.getSelectionPath(start, end, currentSearchPath)
+        canvas.save()
+        canvas.translate(totalPaddingLeft.toFloat(), totalPaddingTop.toFloat())
+        canvas.drawPath(currentSearchPath, currentSearchBorderPaint)
+        canvas.restore()
+    }
+
+    fun configureInlineImagePreviewFolder(currentFolder: String) {
+        val normalized = currentFolder.trim().trim('/')
+        if (imagePreviewFolder == normalized) return
+        imagePreviewFolder = normalized
+        scheduleInlineImagePreviewRefresh()
+    }
+
+    fun configureInlineImagePreviewEnabled(enabled: Boolean) {
+        if (inlineImagePreviewEnabled == enabled) return
+        inlineImagePreviewEnabled = enabled
+        scheduleInlineImagePreviewRefresh()
+    }
+
+    fun refreshInlineImagePreviews() {
+        scheduleInlineImagePreviewRefresh()
+    }
+
+    fun releaseInlineImagePreviews() {
+        if (imagePreviewReleased) return
+        imagePreviewReleased = true
+        removeCallbacks(imagePreviewRefreshRunnable)
+        imagePreviewToken.incrementAndGet()
+        clearInlineImagePreviewSpans()
+        imagePreviewExecutor.shutdownNow()
+    }
+
+    private fun scheduleInlineImagePreviewRefresh() {
+        removeCallbacks(imagePreviewRefreshRunnable)
+        if (imagePreviewReleased) return
+        if (!inlineImagePreviewEnabled) {
+            clearInlineImagePreviewSpans()
+            return
+        }
+        if (length() > IMAGE_PREVIEW_MAX_CHARS) {
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "inline image preview skipped schedule textLen=${length()} max=$IMAGE_PREVIEW_MAX_CHARS",
+            )
+            return
+        }
+        postDelayed(imagePreviewRefreshRunnable, IMAGE_PREVIEW_DEBOUNCE_MS)
+    }
+
+    private fun refreshInlineImagePreviewsNow() {
+        if (imagePreviewReleased) return
+        if (!inlineImagePreviewEnabled) {
+            clearInlineImagePreviewSpans()
+            return
+        }
+        val startMs = SystemClock.elapsedRealtime()
+        val editable = text ?: return
+        val source = editable.toString()
+        if (source.length > IMAGE_PREVIEW_MAX_CHARS || width <= 0) {
+            clearInlineImagePreviewSpans()
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "inline image preview skipped now textLen=${source.length} width=$width elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            return
+        }
+        val matchStartMs = SystemClock.elapsedRealtime()
+        val matches = findInlineImagePreviewMatches(source)
+        KardLeafLog.d(
+            EDITOR_TRACE_TAG,
+            "inline image preview scan done textLen=${source.length} matches=${matches.size} " +
+                "scanElapsed=${SystemClock.elapsedRealtime() - matchStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        if (matches.isEmpty()) {
+            clearInlineImagePreviewSpans()
+            return
+        }
+
+        val token = imagePreviewToken.incrementAndGet()
+        val folder = imagePreviewFolder
+        val horizontalShadowPadding = dp(4)
+        val availableWidth =
+            (width - totalPaddingLeft - totalPaddingRight - horizontalShadowPadding * 2).coerceAtLeast(dp(160))
+        val maxPreviewHeight = dp(220)
+        try {
+            imagePreviewExecutor.execute {
+                if (imagePreviewReleased) return@execute
+                val previews = matches.take(IMAGE_PREVIEW_MAX_COUNT).mapNotNull { match ->
+                    val bitmap = imagePreviewResolver.resolveBitmap(
+                        currentFolder = folder,
+                        reference = match.reference,
+                        maxWidthPx = availableWidth,
+                        maxHeightPx = maxPreviewHeight,
+                    ) ?: return@mapNotNull null
+                    val scale = minOf(
+                        availableWidth.toFloat() / bitmap.width.coerceAtLeast(1),
+                        maxPreviewHeight.toFloat() / bitmap.height.coerceAtLeast(1),
+                        1f,
+                    )
+                    val previewWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                    val previewHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                    KardLeafImagePreviewItem(
+                        lineStart = match.lineStart,
+                        lineEnd = match.lineEnd,
+                        reference = match.reference,
+                        bitmap = bitmap,
+                        widthPx = previewWidth,
+                        heightPx = previewHeight,
+                    )
+                }
+                post {
+                    if (imagePreviewReleased) return@post
+                    if (token != imagePreviewToken.get()) return@post
+                    if (source != text?.toString().orEmpty()) return@post
+                    applyInlineImagePreviewSpans(previews)
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            // The editor view may already be released while a delayed image preview refresh is running.
+        }
+    }
+
+    private fun applyInlineImagePreviewSpans(previews: List<KardLeafImagePreviewItem>) {
+        clearInlineImagePreviewSpans(requestRelayout = false)
+        if (previews.isEmpty()) {
+            requestLayout()
+            invalidate()
+            return
+        }
+        val editable = text ?: return
+        val extraPadding = dp(12)
+        val animationStartMs = SystemClock.uptimeMillis()
+        previews.forEach { preview ->
+            val start = preview.lineStart.coerceIn(0, editable.length)
+            val end = preview.lineEnd.coerceIn(start, editable.length)
+            if (start < end) {
+                editable.setSpan(
+                    KardLeafInlineImageSpan(
+                        bitmap = preview.bitmap,
+                        widthPx = preview.widthPx,
+                        heightPx = preview.heightPx,
+                        verticalPaddingPx = extraPadding / 2,
+                        horizontalShadowPaddingPx = dp(4),
+                        animationStartMs = animationStartMs,
+                        animationDurationMs = IMAGE_PREVIEW_FADE_DURATION_MS,
+                        invalidateCallback = { postInvalidateOnAnimation() },
+                    ),
+                    start,
+                    end,
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+        }
+        imagePreviewItems = previews
+        requestLayout()
+        invalidate()
+    }
+
+    private fun clearInlineImagePreviewSpans(requestRelayout: Boolean = true) {
+        val editable = text ?: return
+        val spans = editable.getSpans(0, editable.length, KardLeafInlineImageSpan::class.java)
+        spans.forEach { editable.removeSpan(it) }
+        if (imagePreviewItems.isNotEmpty() || spans.isNotEmpty()) {
+            imagePreviewItems = emptyList()
+            if (requestRelayout) requestLayout()
+            invalidate()
+        }
+    }
+
+
+    override fun onSizeChanged(
+        w: Int,
+        h: Int,
+        oldw: Int,
+        oldh: Int,
+    ) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w != oldw) {
+            scheduleInlineImagePreviewRefresh()
+        }
+    }
+
+    private fun findInlineImagePreviewMatches(source: String): List<KardLeafImagePreviewMatch> {
+        val result = mutableListOf<KardLeafImagePreviewMatch>()
+        var lineStart = 0
+        while (lineStart <= source.length && result.size < IMAGE_PREVIEW_MAX_COUNT) {
+            val newline = source.indexOf('\n', lineStart)
+            val lineEnd = if (newline >= 0) newline else source.length
+            val line = source.substring(lineStart, lineEnd)
+            val reference = NoteFormatUtils.obsidianImageReferenceRegex
+                .find(line)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                ?: NoteFormatUtils.localMarkdownImageReferenceRegex
+                    .find(line)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.trim()
+                    ?.trim('"', '\'')
+            if (!reference.isNullOrBlank()) {
+                result.add(
+                    KardLeafImagePreviewMatch(
+                        lineStart = lineStart,
+                        lineEnd = lineEnd,
+                        reference = reference,
+                    ),
+                )
+            }
+            if (newline < 0) break
+            lineStart = newline + 1
+        }
+        return result
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    fun configureMarkdownWatcher(watcher: TextWatcher?) {
+        if (markdownWatcher === watcher) {
+            refreshMarkdownWatcher()
+            return
+        }
+        if (markdownWatcherAttached && markdownWatcher != null) {
+            removeTextChangedListener(markdownWatcher)
+        }
+        markdownWatcher = watcher
+        markdownWatcherAttached = false
+        refreshMarkdownWatcher()
+    }
+
+    private fun refreshMarkdownWatcher() {
+        val watcher = markdownWatcher ?: return
+        val shouldAttach = length() <= LIVE_MARKDOWN_MAX_CHARS
+        when {
+            shouldAttach && !markdownWatcherAttached -> {
+                addTextChangedListener(watcher)
+                markdownWatcherAttached = true
+                KardLeafLog.d(EDITOR_TRACE_TAG, "live markdown watcher attached textLen=${length()}")
+            }
+            !shouldAttach && markdownWatcherAttached -> {
+                removeTextChangedListener(watcher)
+                markdownWatcherAttached = false
+                KardLeafLog.d(EDITOR_TRACE_TAG, "live markdown watcher detached textLen=${length()}")
+            }
+        }
+    }
+
+    private fun shouldMergeWithLast(op: EditOperation, now: Long): Boolean {
+        val last = lastOp ?: return false
+        if (now - lastOpTimeMs > MERGE_EDIT_WINDOW_MS) return false
+        if (last.deletedText.isEmpty() && op.deletedText.isEmpty() &&
+            last.start + last.insertedText.length == op.start
+        ) {
+            return true
+        }
+        if (last.insertedText.isEmpty() && op.insertedText.isEmpty() &&
+            op.start + op.deletedText.length == last.start
+        ) {
+            return true
+        }
+        return false
+    }
+
+    private fun mergeOps(a: EditOperation, b: EditOperation): EditOperation =
+        if (a.deletedText.isEmpty() && b.deletedText.isEmpty()) {
+            a.copy(insertedText = a.insertedText + b.insertedText, selectionAfter = b.selectionAfter)
+        } else {
+            a.copy(
+                start = b.start,
+                deletedText = b.deletedText + a.deletedText,
+                selectionAfter = b.selectionAfter,
+            )
+        }
+
+    private fun flushPendingOp() {
+        lastOp?.let {
+            pushUndoOperation(it, "typing")
+        }
+        lastOp = null
+    }
+
+    private fun operationHistoryChars(op: EditOperation): Int =
+        op.deletedText.length + op.insertedText.length
+
+    private fun pushUndoOperation(
+        op: EditOperation,
+        source: String,
+    ): Boolean {
+        val chars = operationHistoryChars(op)
+        if (chars > MAX_HISTORY_OPERATION_CHARS) {
+            undoStack.clear()
+            redoStack.clear()
+            lastOp = null
+            KardLeafLog.w(
+                EDITOR_TRACE_TAG,
+                "editor skip large undo op source=$source chars=$chars deletedLen=${op.deletedText.length} " +
+                    "insertedLen=${op.insertedText.length} max=$MAX_HISTORY_OPERATION_CHARS",
+            )
+            return false
+        }
+        undoStack.add(op)
+        while (undoStack.size > MAX_HISTORY_SIZE) undoStack.removeFirst()
+        return true
+    }
+
+    private fun notifyUndoRedoChanged() {
+        kardLeafUndoRedoCallback?.invoke()
+    }
+
+    fun canUndo(): Boolean = undoStack.isNotEmpty() || lastOp != null
+
+    fun canRedo(): Boolean = redoStack.isNotEmpty()
+
+    fun undo() {
+        flushPendingOp()
+        if (undoStack.isEmpty()) return
+        val op = undoStack.removeLast()
+        isApplyingHistory = true
+        try {
+            val editable = text ?: return
+            val start = op.start
+            val end = start + op.insertedText.length
+            if (start in 0..end && end <= editable.length) {
+                editable.replace(start, end, op.deletedText)
+            }
+            val len = editable.length
+            setSelection(
+                op.selectionBefore.start.coerceIn(0, len),
+                op.selectionBefore.end.coerceIn(0, len),
+            )
+            redoStack.add(op)
+        } finally {
+            isApplyingHistory = false
+        }
+        kardLeafContentCallback?.invoke()
+        notifyUndoRedoChanged()
+        scheduleInlineImagePreviewRefresh()
+    }
+
+    fun redo() {
+        if (redoStack.isEmpty()) return
+        val op = redoStack.removeLast()
+        isApplyingHistory = true
+        try {
+            val editable = text ?: return
+            val start = op.start
+            val end = start + op.deletedText.length
+            if (start in 0..end && end <= editable.length) {
+                editable.replace(start, end, op.insertedText)
+            }
+            val len = editable.length
+            setSelection(
+                op.selectionAfter.start.coerceIn(0, len),
+                op.selectionAfter.end.coerceIn(0, len),
+            )
+            undoStack.add(op)
+        } finally {
+            isApplyingHistory = false
+        }
+        kardLeafContentCallback?.invoke()
+        notifyUndoRedoChanged()
+        scheduleInlineImagePreviewRefresh()
+    }
+
+    fun clearHistory() {
+        undoStack.clear()
+        redoStack.clear()
+        lastOp = null
+        notifyUndoRedoChanged()
+    }
+
+    fun clearTextForDispose() {
+        removeCallbacks(imagePreviewRefreshRunnable)
+        programmaticChange = true
+        try {
+            setText("")
+        } finally {
+            programmaticChange = false
+        }
+        clearHistory()
+        clearSearchHighlights()
+        imagePreviewItems = emptyList()
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                inlineImageGestureId++
+                inlineImageTouchStartX = event.x
+                inlineImageTouchStartY = event.y
+                val offset = getOffsetForPosition(event.x, event.y).coerceIn(0, length())
+                inlineImageTouchCandidate = imagePreviewItems.firstOrNull { item -> offset in item.lineStart..item.lineEnd }
+                inlineImageSelectionBefore = TextRange(selectionStart.coerceAtLeast(0), selectionEnd.coerceAtLeast(0))
+                KardLeafLog.d(
+                    IMAGE_TOUCH_LOG_TAG,
+                    "gesture=$inlineImageGestureId down candidate=${inlineImageTouchCandidate != null} start=${event.x.toInt()},${event.y.toInt()} selection=${inlineImageSelectionBefore.start}..${inlineImageSelectionBefore.end}",
+                )
+                if (inlineImageTouchCandidate != null) {
+                    super.onTouchEvent(event)
+                    setSelection(
+                        inlineImageSelectionBefore.start.coerceIn(0, length()),
+                        inlineImageSelectionBefore.end.coerceIn(0, length()),
+                    )
+                    return true
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (inlineImageTouchCandidate != null) {
+                    super.onTouchEvent(event)
+                    setSelection(
+                        inlineImageSelectionBefore.start.coerceIn(0, length()),
+                        inlineImageSelectionBefore.end.coerceIn(0, length()),
+                    )
+                    return true
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                val moved =
+                    hypot(
+                        (event.x - inlineImageTouchStartX).toDouble(),
+                        (event.y - inlineImageTouchStartY).toDouble(),
+                    )
+                inlineImageTouchStartX = -1f
+                inlineImageTouchStartY = -1f
+                val clicked = inlineImageTouchCandidate
+                inlineImageTouchCandidate = null
+                if (clicked != null) {
+                    setSelection(
+                        inlineImageSelectionBefore.start.coerceIn(0, length()),
+                        inlineImageSelectionBefore.end.coerceIn(0, length()),
+                    )
+                }
+                if (moved <= dp(12).toDouble() && clicked != null) {
+                    if (clicked.reference.isNotBlank()) {
+                        val occurrence =
+                            imagePreviewItems
+                                .takeWhile { it !== clicked }
+                                .count { it.reference == clicked.reference }
+                        KardLeafLog.d(
+                            "KardLeafImageTrace",
+                            "native image touch reference=${clicked.reference} range=${clicked.lineStart}..${clicked.lineEnd} occurrence=$occurrence",
+                        )
+                        KardLeafLog.d(IMAGE_TOUCH_LOG_TAG, "gesture=$inlineImageGestureId up click=true distance=${moved.toInt()} threshold=${dp(12)}")
+                        kardLeafInlineImageClickCallback?.invoke(
+                            KardLeafImageClickTarget(
+                                reference = clicked.reference,
+                                markdownStart = clicked.lineStart,
+                                markdownEndExclusive = clicked.lineEnd,
+                                occurrenceIndex = occurrence,
+                                source = ImageClickSource.NativeEditor,
+                            ),
+                        )
+                        return true
+                    }
+                }
+                KardLeafLog.d(IMAGE_TOUCH_LOG_TAG, "gesture=$inlineImageGestureId up click=false distance=${moved.toInt()} threshold=${dp(12)} candidate=${clicked != null}")
+                if (clicked != null) return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                KardLeafLog.d(IMAGE_TOUCH_LOG_TAG, "gesture=$inlineImageGestureId cancel candidate=${inlineImageTouchCandidate != null}")
+                inlineImageTouchStartX = -1f
+                inlineImageTouchStartY = -1f
+                if (inlineImageTouchCandidate != null) {
+                    setSelection(
+                        inlineImageSelectionBefore.start.coerceIn(0, length()),
+                        inlineImageSelectionBefore.end.coerceIn(0, length()),
+                    )
+                }
+                inlineImageTouchCandidate = null
+            }
+        }
+        return super.onTouchEvent(event)
+    }
+
+    override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+        super.onSelectionChanged(selStart, selEnd)
+        if (SystemClock.elapsedRealtime() <= debugImageInsertUntilMs) {
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "imageInsert selectionChanged selection=$selStart..$selEnd expectedCursor=$debugImageExpectedCursor " +
+                    "programmatic=$programmaticChange textLen=${length()} hasFocus=${hasFocus()} layoutReady=${layout != null}",
+            )
+        }
+        if (!programmaticChange) {
+            kardLeafSelectionCallback?.invoke(selStart, selEnd)
+        }
+    }
+
+    fun setInitialText(text: String, selection: TextRange? = null) {
+        val startMs = SystemClock.elapsedRealtime()
+        KardLeafLog.d(
+            EDITOR_TRACE_TAG,
+            "editor setInitialText start textLen=${text.length} selection=$selection watcherAttached=$markdownWatcherAttached",
+        )
+        if (text.length > LIVE_MARKDOWN_MAX_CHARS && markdownWatcherAttached && markdownWatcher != null) {
+            removeTextChangedListener(markdownWatcher)
+            markdownWatcherAttached = false
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "editor setInitialText detached live markdown before large setText textLen=${text.length}",
+            )
+        }
+        programmaticChange = true
+        try {
+            val setTextStartMs = SystemClock.elapsedRealtime()
+            setText(text)
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "editor setInitialText setText done textLen=${text.length} viewLen=${length()} " +
+                    "setTextElapsed=${SystemClock.elapsedRealtime() - setTextStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+            val len = text.length
+            val target = selection ?: TextRange(len, len)
+            val selectionStartMs = SystemClock.elapsedRealtime()
+            setSelection(
+                target.start.coerceIn(0, len),
+                target.end.coerceIn(0, len),
+            )
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "editor setInitialText selection done selection=${selectionStart}..${selectionEnd} " +
+                    "selectionElapsed=${SystemClock.elapsedRealtime() - selectionStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+            )
+        } finally {
+            programmaticChange = false
+        }
+        val clearHistoryStartMs = SystemClock.elapsedRealtime()
+        clearHistory()
+        KardLeafLog.d(
+            EDITOR_TRACE_TAG,
+            "editor setInitialText clearHistory done elapsed=${SystemClock.elapsedRealtime() - clearHistoryStartMs}ms totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+        if (text.length <= LIVE_MARKDOWN_MAX_CHARS) {
+            post {
+                val markdownStartMs = SystemClock.elapsedRealtime()
+                refreshMarkdownWatcher()
+                KardLeafLog.d(
+                    EDITOR_TRACE_TAG,
+                    "editor setInitialText refreshMarkdownWatcher posted done textLen=${length()} watcherAttached=$markdownWatcherAttached " +
+                        "elapsed=${SystemClock.elapsedRealtime() - markdownStartMs}ms elapsedFromStart=${SystemClock.elapsedRealtime() - startMs}ms",
+                )
+            }
+        } else {
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "editor setInitialText skipped live markdown refresh for large text textLen=${text.length} max=$LIVE_MARKDOWN_MAX_CHARS",
+            )
+        }
+        scheduleInlineImagePreviewRefresh()
+        KardLeafLog.d(
+            EDITOR_TRACE_TAG,
+            "editor setInitialText end textLen=${text.length} totalElapsed=${SystemClock.elapsedRealtime() - startMs}ms",
+        )
+    }
+
+    fun replaceAll(newText: String, selection: TextRange? = null) {
+        flushPendingOp()
+        val editable = text
+        val oldLength = editable?.length ?: 0
+        val beforeSelection = TextRange(
+            selectionStart.coerceAtLeast(0),
+            selectionEnd.coerceAtLeast(0),
+        )
+        val afterSelection = selection ?: TextRange(newText.length, newText.length)
+
+        fun applyNewText() {
+            programmaticChange = true
+            try {
+                setText(newText)
+                val len = newText.length
+                setSelection(
+                    afterSelection.start.coerceIn(0, len),
+                    afterSelection.end.coerceIn(0, len),
+                )
+            } finally {
+                programmaticChange = false
+            }
+        }
+
+        if (oldLength + newText.length > MAX_HISTORY_OPERATION_CHARS) {
+            val changed = editable?.contentEquals(newText) != true
+            applyNewText()
+            if (changed) {
+                clearHistory()
+                KardLeafLog.w(
+                    EDITOR_TRACE_TAG,
+                    "editor replaceAll skipped undo for large text oldLen=$oldLength newLen=${newText.length} max=$MAX_HISTORY_OPERATION_CHARS",
+                )
+            }
+            kardLeafSelectionCallback?.invoke(selectionStart, selectionEnd)
+            kardLeafContentCallback?.invoke()
+            notifyUndoRedoChanged()
+            post { refreshMarkdownWatcher() }
+            scheduleInlineImagePreviewRefresh()
+            return
+        }
+
+        val oldText = editable?.toString().orEmpty()
+        applyNewText()
+        if (oldText != newText) {
+            val len = newText.length
+            pushUndoOperation(
+                EditOperation(
+                    start = 0,
+                    deletedText = oldText,
+                    insertedText = newText,
+                    selectionBefore = beforeSelection,
+                    selectionAfter = TextRange(
+                        afterSelection.start.coerceIn(0, len),
+                        afterSelection.end.coerceIn(0, len),
+                    ),
+                ),
+                "replaceAll",
+            )
+            redoStack.clear()
+        }
+        kardLeafSelectionCallback?.invoke(selectionStart, selectionEnd)
+        kardLeafContentCallback?.invoke()
+        notifyUndoRedoChanged()
+        post { refreshMarkdownWatcher() }
+        scheduleInlineImagePreviewRefresh()
+    }
+
+    fun insertAtCursor(prefix: String, suffix: String = "") {
+        flushPendingOp()
+        val editable = text ?: return
+        val start = selectionStart.coerceIn(0, editable.length)
+        val end = selectionEnd.coerceIn(0, editable.length)
+        val selectedText = editable.substring(start, end)
+        val insertion = prefix + selectedText + suffix
+        val newCursor = start + prefix.length + selectedText.length
+        val isImageInsertion = insertion.contains("attachments/") || insertion.contains("![[") || insertion.contains("![")
+        programmaticChange = true
+        try {
+            editable.replace(start, end, insertion)
+            setSelection(newCursor, newCursor)
+        } finally {
+            programmaticChange = false
+        }
+        if (isImageInsertion) {
+            val afterSelection = getSelectionRange()
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "imageInsert editText replace after len=${editable.length} selection=${afterSelection.start}..${afterSelection.end} " +
+                    "expectedCursor=$newCursor lineCount=$lineCount layoutReady=${layout != null} hasFocus=${hasFocus()}",
+            )
+            post {
+                val cursor = selectionStart.coerceIn(0, length())
+                val layoutInfo = layout?.let { currentLayout ->
+                    val line = currentLayout.getLineForOffset(cursor)
+                    "line=$line lineTop=${currentLayout.getLineTop(line)} lineBottom=${currentLayout.getLineBottom(line)}"
+                } ?: "layout=null"
+                KardLeafLog.d(
+                    EDITOR_TRACE_TAG,
+                    "imageInsert editText post len=${length()} selection=$selectionStart..$selectionEnd " +
+                        "expectedCursor=$newCursor $layoutInfo lineCount=$lineCount viewHeight=$height scrollY=$scrollY hasFocus=${hasFocus()}",
+                )
+            }
+        }
+        pushUndoOperation(
+            EditOperation(
+                start = start,
+                deletedText = selectedText,
+                insertedText = insertion,
+                selectionBefore = TextRange(start, end),
+                selectionAfter = TextRange(newCursor, newCursor),
+            ),
+            "insertAtCursor",
+        )
+        redoStack.clear()
+        kardLeafSelectionCallback?.invoke(newCursor, newCursor)
+        kardLeafContentCallback?.invoke()
+        notifyUndoRedoChanged()
+        post { refreshMarkdownWatcher() }
+        scheduleInlineImagePreviewRefresh()
+    }
+
+    fun toggleInlineAtCursor(prefix: String, suffix: String = prefix): Boolean {
+        flushPendingOp()
+        val editable = text ?: return false
+        val start = selectionStart.coerceIn(0, editable.length)
+        val end = selectionEnd.coerceIn(start, editable.length)
+        val selectionBefore = TextRange(start, end)
+        val hasMarkers =
+            start >= prefix.length &&
+                end + suffix.length <= editable.length &&
+                editable.substring(start - prefix.length, start) == prefix &&
+                editable.substring(end, end + suffix.length) == suffix
+
+        val replaceStart = if (hasMarkers) start - prefix.length else start
+        val replaceEnd = if (hasMarkers) end + suffix.length else end
+        val selectedText = editable.substring(start, end)
+        val insertedText = if (hasMarkers) selectedText else prefix + selectedText + suffix
+        val selectionAfter = if (hasMarkers) {
+            TextRange(start - prefix.length, end - prefix.length)
+        } else {
+            TextRange(start + prefix.length, end + prefix.length)
+        }
+        return replaceToolbarRange(
+            editable = editable,
+            start = replaceStart,
+            end = replaceEnd,
+            insertedText = insertedText,
+            selectionBefore = selectionBefore,
+            selectionAfter = selectionAfter,
+            operationName = "toggleInlineAtCursor",
+        )
+    }
+
+    fun toggleHeadingAtCursor(level: Int): Boolean {
+        flushPendingOp()
+        val editable = text ?: return false
+        val selectionBefore = getSelectionRange()
+        val anchor = minOf(selectionBefore.start, selectionBefore.end).coerceIn(0, editable.length)
+        val lineStart = if (anchor == 0) 0 else editable.lastIndexOf('\n', anchor - 1) + 1
+        val lineEnd = editable.indexOf('\n', anchor).takeIf { it >= 0 } ?: editable.length
+        val line = editable.substring(lineStart, lineEnd)
+        val oldPrefix = editorHeadingPrefixRegex.find(line)?.value.orEmpty()
+        val targetLevel = level.coerceIn(1, 6)
+        val oldLevel = oldPrefix.takeWhile { it == '#' }.length
+        val insertedText = if (oldLevel == targetLevel) "" else "${"#".repeat(targetLevel)} "
+        return replaceLinePrefix(
+            editable = editable,
+            replaceStart = lineStart,
+            replaceEnd = lineStart + oldPrefix.length,
+            insertedText = insertedText,
+            selectionBefore = selectionBefore,
+            operationName = "toggleHeadingAtCursor",
+        )
+    }
+
+    fun toggleBlockquoteAtCursor(): Boolean = toggleLineStyleAtCursor(EditorLineStyle.BLOCKQUOTE)
+
+    fun toggleUnorderedListAtCursor(): Boolean = toggleLineStyleAtCursor(EditorLineStyle.UNORDERED_LIST)
+
+    fun toggleOrderedListAtCursor(): Boolean = toggleLineStyleAtCursor(EditorLineStyle.ORDERED_LIST)
+
+    fun toggleCheckListAtCursor(): Boolean = toggleLineStyleAtCursor(EditorLineStyle.CHECK_LIST)
+
+    fun indentCurrentLine(): Boolean = changeCurrentLineIndent(increase = true)
+
+    fun outdentCurrentLine(): Boolean = changeCurrentLineIndent(increase = false)
+
+    private fun changeCurrentLineIndent(increase: Boolean): Boolean {
+        flushPendingOp()
+        val editable = text ?: return false
+        val rawStart = selectionStart.coerceIn(0, editable.length)
+        val rawEnd = selectionEnd.coerceIn(0, editable.length)
+        val anchor = minOf(rawStart, rawEnd)
+        val lineStart = if (anchor == 0) 0 else editable.lastIndexOf('\n', anchor - 1) + 1
+        val removedLength = if (increase) {
+            0
+        } else {
+            when {
+                editable.getOrNull(lineStart) == '\t' -> 1
+                else -> {
+                    var spaces = 0
+                    while (spaces < 4 && editable.getOrNull(lineStart + spaces) == ' ') spaces++
+                    spaces
+                }
+            }
+        }
+        if (!increase && removedLength == 0) return false
+
+        val removedText = editable.substring(lineStart, lineStart + removedLength)
+        val insertedText = if (increase) "    " else ""
+        val selectionBefore = TextRange(rawStart, rawEnd)
+
+        fun mapSelection(position: Int): Int = when {
+            increase && position >= lineStart -> position + insertedText.length
+            increase -> position
+            position <= lineStart -> position
+            position <= lineStart + removedLength -> lineStart
+            else -> position - removedLength
+        }
+
+        val mappedStart = mapSelection(rawStart)
+        val mappedEnd = mapSelection(rawEnd)
+        programmaticChange = true
+        try {
+            editable.replace(lineStart, lineStart + removedLength, insertedText)
+            setSelection(mappedStart, mappedEnd)
+        } finally {
+            programmaticChange = false
+        }
+        pushUndoOperation(
+            EditOperation(
+                start = lineStart,
+                deletedText = removedText,
+                insertedText = insertedText,
+                selectionBefore = selectionBefore,
+                selectionAfter = TextRange(mappedStart, mappedEnd),
+            ),
+            if (increase) "indentCurrentLine" else "outdentCurrentLine",
+        )
+        redoStack.clear()
+        kardLeafSelectionCallback?.invoke(mappedStart, mappedEnd)
+        kardLeafContentCallback?.invoke()
+        notifyUndoRedoChanged()
+        post { refreshMarkdownWatcher() }
+        scheduleInlineImagePreviewRefresh()
+        return true
+    }
+
+    private fun toggleLineStyleAtCursor(targetStyle: EditorLineStyle): Boolean {
+        flushPendingOp()
+        val editable = text ?: return false
+        val selectionBefore = getSelectionRange()
+        val anchor = minOf(selectionBefore.start, selectionBefore.end).coerceIn(0, editable.length)
+        val lineStart = if (anchor == 0) 0 else editable.lastIndexOf('\n', anchor - 1) + 1
+        val lineEnd = editable.indexOf('\n', anchor).takeIf { it >= 0 } ?: editable.length
+        val line = editable.substring(lineStart, lineEnd)
+
+        if (targetStyle == EditorLineStyle.BLOCKQUOTE) {
+            val match = editorBlockquotePrefixRegex.find(line)
+            val indent = match?.groupValues?.get(1) ?: line.takeWhile { it.isWhitespace() }
+            return replaceLinePrefix(
+                editable = editable,
+                replaceStart = lineStart + indent.length,
+                replaceEnd = lineStart + (match?.value?.length ?: indent.length),
+                insertedText = if (match == null) "> " else "",
+                selectionBefore = selectionBefore,
+                operationName = "toggleBlockquoteAtCursor",
+            )
+        }
+
+        val detected = detectEditorListPrefix(line)
+        val indent = detected?.indent ?: line.takeWhile { it.isWhitespace() }
+        val insertedText = when {
+            detected?.style == targetStyle -> ""
+            targetStyle == EditorLineStyle.UNORDERED_LIST -> "- "
+            targetStyle == EditorLineStyle.ORDERED_LIST -> "1. "
+            else -> "- [ ] "
+        }
+        return replaceLinePrefix(
+            editable = editable,
+            replaceStart = lineStart + indent.length,
+            replaceEnd = lineStart + (detected?.fullPrefix?.length ?: indent.length),
+            insertedText = insertedText,
+            selectionBefore = selectionBefore,
+            operationName = "toggleListAtCursor",
+        )
+    }
+
+    private fun detectEditorListPrefix(line: String): EditorListPrefix? {
+        editorChecklistPrefixRegex.find(line)?.let {
+            return EditorListPrefix(EditorLineStyle.CHECK_LIST, it.groupValues[1], it.value)
+        }
+        editorUnorderedPrefixRegex.find(line)?.let {
+            return EditorListPrefix(EditorLineStyle.UNORDERED_LIST, it.groupValues[1], it.value)
+        }
+        editorOrderedPrefixRegex.find(line)?.let {
+            return EditorListPrefix(EditorLineStyle.ORDERED_LIST, it.groupValues[1], it.value)
+        }
+        return null
+    }
+
+    private fun replaceLinePrefix(
+        editable: Editable,
+        replaceStart: Int,
+        replaceEnd: Int,
+        insertedText: String,
+        selectionBefore: TextRange,
+        operationName: String,
+    ): Boolean {
+        val delta = insertedText.length - (replaceEnd - replaceStart)
+        fun mapSelection(position: Int): Int = when {
+            position < replaceStart -> position
+            position <= replaceEnd -> replaceStart + insertedText.length
+            else -> position + delta
+        }
+        return replaceToolbarRange(
+            editable = editable,
+            start = replaceStart,
+            end = replaceEnd,
+            insertedText = insertedText,
+            selectionBefore = selectionBefore,
+            selectionAfter = TextRange(
+                mapSelection(selectionBefore.start),
+                mapSelection(selectionBefore.end),
+            ),
+            operationName = operationName,
+        )
+    }
+
+    private fun replaceToolbarRange(
+        editable: Editable,
+        start: Int,
+        end: Int,
+        insertedText: String,
+        selectionBefore: TextRange,
+        selectionAfter: TextRange,
+        operationName: String,
+    ): Boolean {
+        val deletedText = editable.substring(start, end)
+        if (deletedText == insertedText) return false
+        val targetLength = editable.length - deletedText.length + insertedText.length
+        val mappedSelection = TextRange(
+            selectionAfter.start.coerceIn(0, targetLength),
+            selectionAfter.end.coerceIn(0, targetLength),
+        )
+        programmaticChange = true
+        try {
+            editable.replace(start, end, insertedText)
+            setSelection(mappedSelection.start, mappedSelection.end)
+        } finally {
+            programmaticChange = false
+        }
+        pushUndoOperation(
+            EditOperation(
+                start = start,
+                deletedText = deletedText,
+                insertedText = insertedText,
+                selectionBefore = selectionBefore,
+                selectionAfter = mappedSelection,
+            ),
+            operationName,
+        )
+        redoStack.clear()
+        kardLeafSelectionCallback?.invoke(mappedSelection.start, mappedSelection.end)
+        kardLeafContentCallback?.invoke()
+        notifyUndoRedoChanged()
+        post { refreshMarkdownWatcher() }
+        scheduleInlineImagePreviewRefresh()
+        return true
+    }
+
+    fun replaceSelection(insertion: String) {
+        flushPendingOp()
+        val editable = text ?: return
+        val rawStart = selectionStart.coerceIn(0, editable.length)
+        val rawEnd = selectionEnd.coerceIn(0, editable.length)
+        val start = minOf(rawStart, rawEnd)
+        val end = maxOf(rawStart, rawEnd)
+        val selectedText = editable.substring(start, end)
+        val newCursor = start + insertion.length
+        val isImageInsertion = insertion.contains("attachments/") || insertion.contains("![[") || insertion.contains("![")
+        if (isImageInsertion) {
+            debugImageExpectedCursor = newCursor
+            debugImageInsertUntilMs = SystemClock.elapsedRealtime() + 2500L
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "imageInsert editText replace before len=${editable.length} selection=$rawStart..$rawEnd " +
+                    "replace=$start..$end insertionLen=${insertion.length} newCursor=$newCursor hasFocus=${hasFocus()} " +
+                    "insertion=${insertion.replace("\n", "\\n")}",
+            )
+        }
+        programmaticChange = true
+        try {
+            editable.replace(start, end, insertion)
+            setSelection(newCursor, newCursor)
+        } finally {
+            programmaticChange = false
+        }
+        if (isImageInsertion) {
+            val afterSelection = getSelectionRange()
+            KardLeafLog.d(
+                EDITOR_TRACE_TAG,
+                "imageInsert editText replace after len=${editable.length} selection=${afterSelection.start}..${afterSelection.end} " +
+                    "expectedCursor=$newCursor lineCount=$lineCount layoutReady=${layout != null} hasFocus=${hasFocus()}",
+            )
+            post {
+                val cursor = selectionStart.coerceIn(0, length())
+                val layoutInfo = layout?.let { currentLayout ->
+                    val line = currentLayout.getLineForOffset(cursor)
+                    "line=$line lineTop=${currentLayout.getLineTop(line)} lineBottom=${currentLayout.getLineBottom(line)}"
+                } ?: "layout=null"
+                KardLeafLog.d(
+                    EDITOR_TRACE_TAG,
+                    "imageInsert editText post len=${length()} selection=$selectionStart..$selectionEnd " +
+                        "expectedCursor=$newCursor $layoutInfo lineCount=$lineCount viewHeight=$height scrollY=$scrollY hasFocus=${hasFocus()}",
+                )
+            }
+        }
+        pushUndoOperation(
+            EditOperation(
+                start = start,
+                deletedText = selectedText,
+                insertedText = insertion,
+                selectionBefore = TextRange(rawStart, rawEnd),
+                selectionAfter = TextRange(newCursor, newCursor),
+            ),
+            "replaceSelection",
+        )
+        redoStack.clear()
+        kardLeafSelectionCallback?.invoke(newCursor, newCursor)
+        kardLeafContentCallback?.invoke()
+        notifyUndoRedoChanged()
+        post { refreshMarkdownWatcher() }
+        scheduleInlineImagePreviewRefresh()
+    }
+
+    fun highlightSearch(
+        query: String,
+        currentStart: Int = -1,
+        useRegex: Boolean = false,
+        matchCase: Boolean = false,
+    ): Int {
+        clearSearchHighlights()
+        if (query.isBlank()) return 0
+        val editable = text ?: return 0
+        val source = editable.toString()
+        var count = 0
+
+        fun addHighlight(start: Int, end: Int) {
+            if (end <= start) return
+            editable.setSpan(
+                KardLeafSearchHighlightSpan(
+                    if (start == currentStart) SEARCH_CURRENT_HIGHLIGHT_COLOR else SEARCH_HIGHLIGHT_COLOR,
+                ),
+                start,
+                end,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+            if (start == currentStart) {
+                currentSearchStart = start
+                currentSearchEnd = end
+            }
+            count++
+        }
+
+        if (useRegex) {
+            val pattern = createSearchHighlightPattern(query, matchCase) ?: return 0
+            val matcher = pattern.matcher(source)
+            while (matcher.find()) {
+                addHighlight(matcher.start().coerceIn(0, source.length), matcher.end().coerceIn(0, source.length))
+            }
+        } else {
+            var searchFrom = 0
+            while (searchFrom <= source.length - query.length) {
+                val index = source.indexOf(query, startIndex = searchFrom, ignoreCase = !matchCase)
+                if (index < 0) break
+                val end = index + query.length
+                addHighlight(index, end)
+                searchFrom = end.coerceAtLeast(index + 1)
+            }
+        }
+
+        invalidate()
+        KardLeafLog.d(
+            EDITOR_TRACE_TAG,
+            "search highlight queryLen=${query.length} regex=$useRegex matchCase=$matchCase count=$count " +
+                "current=${currentSearchStart}..${currentSearchEnd} textLen=${source.length} selection=$selectionStart..$selectionEnd",
+        )
+        return count
+    }
+
+    fun clearSearchHighlights() {
+        val editable = text ?: return
+        val normalSpans = editable.getSpans(0, editable.length, KardLeafSearchHighlightSpan::class.java)
+        normalSpans.forEach { editable.removeSpan(it) }
+        currentSearchStart = -1
+        currentSearchEnd = -1
+        val removedCount = normalSpans.size
+        if (removedCount > 0) {
+            invalidate()
+            KardLeafLog.d(EDITOR_TRACE_TAG, "search highlight cleared count=$removedCount textLen=${editable.length}")
+        }
+    }
+
+    private fun createSearchHighlightPattern(
+        query: String,
+        matchCase: Boolean,
+    ): Pattern? =
+        try {
+            val caseFlags = if (matchCase) {
+                0
+            } else {
+                Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
+            }
+            Pattern.compile(query, Pattern.MULTILINE or caseFlags)
+        } catch (_: PatternSyntaxException) {
+            null
+        }
+
+    fun getTextString(): String = text?.toString().orEmpty()
+
+    fun getSelectionRange(): TextRange {
+        val len = text?.length ?: 0
+        return TextRange(
+            selectionStart.coerceIn(0, len),
+            selectionEnd.coerceIn(0, len),
+        )
+    }
+
+    fun setSelectionRange(start: Int, end: Int = start) {
+        val len = text?.length ?: 0
+        runCatching { setSelection(start.coerceIn(0, len), end.coerceIn(0, len)) }
+    }
+
+    private fun handleEnterKey(newlinePos: Int) {
+        val editable = text ?: return
+        val fullText = editable.toString()
+        val cursor = selectionStart
+        if (newlinePos < 0 || cursor != newlinePos + 1) return
+
+        val beforeNewline = fullText.substring(0, newlinePos)
+        val afterInsertedNewline = fullText.substring(newlinePos + 1)
+
+        val syntaxSuffixes = listOf("**", "_", "~~", "</u>", "`", "$")
+        val jumpSuffix = syntaxSuffixes.firstOrNull { afterInsertedNewline.startsWith(it) }
+        if (jumpSuffix != null) {
+            val replaceEnd = newlinePos + 1 + jumpSuffix.length
+            if (replaceEnd <= fullText.length) {
+                editable.replace(newlinePos, replaceEnd, jumpSuffix + "\n")
+                val newSel = newlinePos + jumpSuffix.length + 1
+                setSelection(newSel, newSel)
+                return
+            }
+        }
+
+        val lastLineStart = beforeNewline.lastIndexOf('\n') + 1
+        val lastLine = beforeNewline.substring(lastLineStart)
+        val trimmedLastLine = lastLine.trimEnd()
+
+        val checkboxMatch = checkboxContinuationRegex.find(trimmedLastLine)
+        val bulletMatch = bulletContinuationRegex.find(trimmedLastLine)
+        val quoteMatch = quoteContinuationRegex.find(trimmedLastLine)
+
+        when {
+            checkboxMatch != null -> {
+                val prefix = checkboxMatch.groups[1]!!.value
+                val lineContent = checkboxMatch.groups[2]!!.value
+                if (lineContent.trim().isEmpty()) {
+                    editable.delete(lastLineStart, cursor)
+                } else {
+                    editable.insert(cursor, prefix)
+                    setSelection(cursor + prefix.length, cursor + prefix.length)
+                }
+            }
+            bulletMatch != null -> {
+                val prefixPart = bulletMatch.groups[1]!!.value
+                val lineContent = bulletMatch.groups[2]!!.value
+                if (lineContent.trim().isEmpty()) {
+                    editable.delete(lastLineStart, cursor)
+                } else {
+                    val nextPrefix = if (prefixPart.trim().firstOrNull()?.isDigit() == true) {
+                        val num = prefixPart.filter { it.isDigit() }.toIntOrNull() ?: 0
+                        "${num + 1}. "
+                    } else {
+                        if (prefixPart.endsWith(" ")) prefixPart else "$prefixPart "
+                    }
+                    editable.insert(cursor, nextPrefix)
+                    setSelection(cursor + nextPrefix.length, cursor + nextPrefix.length)
+                }
+            }
+            quoteMatch != null -> {
+                val prefix = quoteMatch.groups[1]!!.value
+                val lineContent = quoteMatch.groups[2]!!.value
+                if (lineContent.trim().isEmpty()) {
+                    editable.delete(lastLineStart, cursor)
+                } else {
+                    editable.insert(cursor, prefix)
+                    setSelection(cursor + prefix.length, cursor + prefix.length)
+                }
+            }
+        }
+    }
+}
+
+internal class KardLeafInlineImagePreviewResolver(
+    private val context: Context,
+) {
+    private val prefsManager = PrefsManager(context.applicationContext)
+
+    fun resolveBitmap(
+        currentFolder: String,
+        reference: String,
+        maxWidthPx: Int,
+        maxHeightPx: Int,
+    ): Bitmap? = runCatching {
+        val rootUri = prefsManager.getRootUri()?.takeIf { it.isNotBlank() } ?: return@runCatching null
+        val root = DocumentFile.fromTreeUri(context, Uri.parse(rootUri)) ?: return@runCatching null
+        val cleanRef = normalizePath(Uri.decode(reference).substringBefore("#"))
+        if (cleanRef.isBlank()) return@runCatching null
+
+        val current = normalizePath(currentFolder)
+        val candidates = listOf(
+            joinPath(current, cleanRef),
+            cleanRef,
+            joinPath(current, "attachments/$cleanRef"),
+            joinPath(current, "附件/$cleanRef"),
+            "attachments/$cleanRef",
+            "附件/$cleanRef",
+        )
+            .map(::normalizePath)
+            .distinct()
+
+        val imageFile = candidates.firstNotNullOfOrNull { path ->
+            val parent = path.substringBeforeLast("/", missingDelimiterValue = "")
+            val name = path.substringAfterLast("/")
+            findFolder(root, parent)?.findFile(name)?.takeIf { it.isFile }
+        } ?: return@runCatching null
+
+        decodeSampledBitmap(imageFile, maxWidthPx, maxHeightPx)
+    }.getOrNull()
+
+    private fun decodeSampledBitmap(
+        imageFile: DocumentFile,
+        maxWidthPx: Int,
+        maxHeightPx: Int,
+    ): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(imageFile.uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, bounds)
+        }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, maxWidthPx, maxHeightPx)
+        }
+        return context.contentResolver.openInputStream(imageFile.uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, options)
+        }
+    }
+
+    private fun calculateInSampleSize(
+        width: Int,
+        height: Int,
+        reqWidth: Int,
+        reqHeight: Int,
+    ): Int {
+        var inSampleSize = 1
+        var halfWidth = width / 2
+        var halfHeight = height / 2
+        while (halfWidth / inSampleSize >= reqWidth || halfHeight / inSampleSize >= reqHeight) {
+            inSampleSize *= 2
+        }
+        return inSampleSize.coerceAtLeast(1)
+    }
+
+    private fun findFolder(
+        root: DocumentFile,
+        folderPath: String,
+    ): DocumentFile? {
+        var current = root
+        normalizePath(folderPath)
+            .split("/")
+            .filter { it.isNotBlank() }
+            .forEach { part ->
+                current = current.findFile(part)?.takeIf { it.isDirectory } ?: return null
+            }
+        return current
+    }
+
+    private fun joinPath(
+        parent: String,
+        child: String,
+    ): String = when {
+        parent.isBlank() -> child
+        child.isBlank() -> parent
+        else -> "${parent.trimEnd('/')}/${child.trimStart('/')}"
+    }
+
+    private fun normalizePath(path: String): String {
+        val parts = path.replace('\\', '/').split('/').filter { it.isNotBlank() }
+        val stack = mutableListOf<String>()
+        parts.forEach { part ->
+            when (part) {
+                "." -> Unit
+                ".." -> if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex)
+                else -> stack.add(part)
+            }
+        }
+        return stack.joinToString("/")
+    }
+}

@@ -16,3 +16,6 @@ object AppLocaleManager {
         return ContextWrapper(context.createConfigurationContext(config))
     }
 }
+
+fun localizedText(zh: String, en: String): String =
+    if (Locale.getDefault().language == "en") en else zh

@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      Theme adapter for the KardLeaf Quillpad editor.
+
+      Extends KardLeaf's existing Theme.KardLeaf.Quillpad and assigns the
+      Quillpad custom attrs (?attr/colorBackground, ?attr/colorBottomAppBarBackground,
+      ?attr/colorOutline, ?attr/colorTaskSwipe, ?attr/colorNote*, ?attr/colorDrawerBackground,
+      ?attr/colorHighlightMask, ...) to the same values Quillpad's BaseAppTheme uses,
+      so the original fragment_editor.xml / EditorFragment resolve them exactly as in
+      the retained Quillpad editor.
+    -->
+    <style name="Theme.KardLeaf.QuillpadEditor" parent="Theme.KardLeaf.Quillpad">
+        <item name="colorBackground">#FFFFFF</item>
+        <item name="colorBottomAppBarBackground">#FFFFFF</item>
+        <item name="colorOutline">#1E000000</item>
+        <item name="colorShadow">#24000000</item>
+        <item name="colorTextOverlay">#99000000</item>
+        <item name="colorHighlightMask">#1F000000</item>
+
+        <item name="colorDrawerBackground">#FFFFFF</item>
+        <item name="colorDrawerItemRipple">#59000000</item>
+
+        <item name="colorNoteText">#000000</item>
+        <item name="colorNoteIndicator">#B3000000</item>
+        <item name="colorAttachmentIndicator">#89000000</item>
+        <item name="colorTaskDone">#80000000</item>
+        <item name="colorMarkdownTask">#80000000</item>
+        <item name="colorMediaControlsBackground">#CC000000</item>
+
+        <item name="colorTaskSwipe">#CCF44336</item>
+
+        <item name="colorNoteDefault">#FFFFFF</item>
+        <item name="colorNoteRed">#EF9A9A</item>
+        <item name="colorNoteOrange">#F29F75</item>
+        <item name="colorNoteYellow">#FFF59D</item>
+        <item name="colorNoteGreen">#C5E1A5</item>
+        <item name="colorNoteTeal">#B4DED3</item>
+        <item name="colorNoteCyan">#A5DCEB</item>
+        <item name="colorNoteBlue">#AACCF5</item>
+        <item name="colorNotePurple">#C8AED2</item>
+        <item name="colorNotePink">#FAAFC8</item>
+        <item name="colorNoteBrown">#D2C3B4</item>
+        <item name="colorNoteGray">#C8C8D2</item>
+
+        <item name="colorNoteTextHighlight">#96FFFF00</item>
+    </style>
+
+    <style name="Theme.KardLeaf.QuillpadBottomSheet" parent="Theme.MaterialComponents.DayNight.BottomSheetDialog">
+        <item name="colorPrimary">#2563EB</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSurface">#FFFFFF</item>
+        <item name="colorOnSurface">#0F172A</item>
+    </style>
+
+    <!-- Editor styles retained from Quillpad styles.xml. -->
+
+    <style name="TextAppearance.Custom.Title" parent="TextAppearance.AppCompat.Title">
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">20sp</item>
+    </style>
+
+    <style name="Widget.Custom.FloatingActionButton" parent="Widget.MaterialComponents.FloatingActionButton">
+        <item name="backgroundTint">?attr/colorPrimary</item>
+        <item name="tint">?attr/colorOnPrimary</item>
+    </style>
+
+    <style name="TagChip">
+        <item name="android:ellipsize">end</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:textColor">?attr/colorNoteText</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:background">@drawable/background_note_tag</item>
+        <item name="android:paddingTop">4dp</item>
+        <item name="android:paddingBottom">4dp</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingEnd">10dp</item>
+    </style>
+
+    <style name="NotebookChip">
+        <item name="android:ellipsize">end</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:textColor">?attr/colorNoteText</item>
+        <item name="android:background">@drawable/background_notebook_chip</item>
+        <item name="android:paddingTop">4dp</item>
+        <item name="android:paddingBottom">4dp</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingEnd">10dp</item>
+    </style>
+
+    <style name="BottomSheetHeader">
+        <item name="android:textColor">?attr/colorControlNormal</item>
+        <item name="android:padding">16dp</item>
+    </style>
+
+    <style name="BottomSheetAction">
+        <item name="android:background">?attr/selectableItemBackground</item>
+        <item name="android:textViewStyle">@style/TextAppearance.MaterialComponents.Subtitle2</item>
+        <item name="android:drawablePadding">16dp</item>
+        <item name="android:padding">12dp</item>
+        <item name="android:gravity">center|start</item>
+    </style>
+
+</resources>

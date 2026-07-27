@@ -23,7 +23,7 @@ export const inlineRenderingTheme = EditorView.theme({
     marginRight: '6px',
     width: '15px',
     height: '15px',
-    accentColor: 'hsl(40, 72%, 46%)',
+    accentColor: '#9a9a9a',
   },
   '.cm-bullet-widget': {
     display: 'inline-block',

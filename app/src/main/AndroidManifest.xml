@@ -15,6 +15,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="true"
@@ -40,18 +42,6 @@
         </provider>
 
         <receiver
-            android:name=".widget.QuickNoteWidgetProvider"
-            android:exported="true"
-            android:label="@string/widget_quick_note_label">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/widget_quick_note_info" />
-        </receiver>
-
-        <receiver
             android:name=".widget.TaskListWidgetProvider"
             android:exported="true"
             android:label="@string/widget_task_list_label">
@@ -68,6 +58,11 @@
             android:exported="false"
             android:permission="android.permission.BIND_REMOTEVIEWS" />
 
+        <service
+            android:name=".widget.NoteListWidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
+
         <receiver
             android:name=".widget.NoteListWidgetProvider"
             android:exported="true"
@@ -80,9 +75,94 @@
                 android:resource="@xml/widget_note_list_info" />
         </receiver>
 
+        <service
+            android:name=".widget.QuickAddTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_quick_add_tile"
+            android:label="@string/shortcut_quick_note_short"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".widget.QuickMemoTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_quick_memo_tile"
+            android:label="@string/quick_memo_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <activity
+            android:name=".widget.ShareToQuickMemoActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:finishOnTaskLaunch="true"
+            android:label="@string/shortcut_quick_memo_long"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="text/*" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".widget.NoteWidgetQuickAddActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:finishOnTaskLaunch="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.KardLeaf.WidgetOverlay"
+            android:windowSoftInputMode="adjustResize|stateAlwaysVisible" />
+
+        <activity
+            android:name=".widget.NoteWidgetFolderPickerActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:finishOnTaskLaunch="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.KardLeaf.WidgetOverlay" />
+        <activity
+            android:name=".widget.WidgetPickerActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:finishOnTaskLaunch="true"
+            android:launchMode="singleTop"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.KardLeaf.WidgetOverlay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="widgets"
+                    android:scheme="kardleaf" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".data.receiver.TaskReminderReceiver"
             android:exported="false" />
+
+        <service
+            android:name=".data.task.TaskReminderService"
+            android:exported="false"
+            android:foregroundServiceType="shortService"
+            tools:targetApi="34" />
 
         <activity
             android:name=".data.task.TaskReminderAlertActivity"
@@ -98,8 +178,20 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:finishOnTaskLaunch="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.KardLeaf.WidgetOverlay"
+            android:windowSoftInputMode="adjustResize|stateAlwaysVisible" />
+
+        <activity
+            android:name="org.qosp.notes.ui.QuillpadSandboxActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:finishOnTaskLaunch="true"
             android:launchMode="singleTop"
-            android:theme="@style/Theme.KardLeaf.TaskReminderAlert" />
+            android:taskAffinity=""
+            android:theme="@style/Theme.KardLeaf.QuillpadEditor"
+            android:windowSoftInputMode="adjustResize" />
 
         <receiver
             android:name=".data.receiver.TaskBootReceiver"
@@ -115,9 +207,6 @@
             android:exported="true"
             android:theme="@style/Theme.KardLeaf"
             android:windowSoftInputMode="adjustResize">
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
 
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -148,6 +237,10 @@
             android:label="${appLabel}"
             android:roundIcon="@mipmap/ic_app_icon_default_round"
             android:targetActivity=".MainActivity">
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -162,6 +255,10 @@
             android:label="${appLabel}"
             android:roundIcon="@mipmap/ic_app_icon_leaf_round"
             android:targetActivity=".MainActivity">
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -176,6 +273,10 @@
             android:label="${appLabel}"
             android:roundIcon="@mipmap/ic_app_icon_minimal_round"
             android:targetActivity=".MainActivity">
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

@@ -1,7 +1,27 @@
-package com.kangle.kardleaf.ui
+﻿package com.kangle.kardleaf.ui
 
+import com.kangle.kardleaf.data.utils.EditorOpenSession
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.ui.editor.*
+import com.kangle.kardleaf.ui.editor.api.EditorFastScrollMetrics
+import com.kangle.kardleaf.ui.editor.codemirror.CodeMirrorWebViewScrollController
+import com.kangle.kardleaf.ui.editor.codemirror.KardLeafCodeMirrorEditor
+import com.kangle.kardleaf.ui.editor.codemirror.KardLeafCodeMirrorImage
+import com.kangle.kardleaf.ui.editor.host.EditorFastScrollEdgeView
+import com.kangle.kardleaf.ui.editor.host.EditorFastScrollSignal
+import com.kangle.kardleaf.ui.editor.host.NoteOutlineSidePanel
+import com.kangle.kardleaf.ui.editor.host.NoteRemarkSidePanel
+import com.kangle.kardleaf.ui.editor.host.PreviewWebView
+import com.kangle.kardleaf.ui.editor.host.PreviewWebViewController
+import com.kangle.kardleaf.ui.editor.host.ToolbarIconButton
+import com.kangle.kardleaf.ui.editor.host.toggleTask
+import com.kangle.kardleaf.ui.editor.native.KardLeafEditorController
+import com.kangle.kardleaf.ui.editor.native.KardLeafEditorSnapshot
+import com.kangle.kardleaf.ui.editor.native.KardLeafNativeEditor
+import com.kangle.kardleaf.ui.editor.quillpad.KardLeafQuillpadEditor
+import com.kangle.kardleaf.ui.editor.history.NoteInfoDialog
 import com.kangle.kardleaf.data.utils.KardLeafContentLimits
+import com.kangle.kardleaf.data.repository.RoomNoteRepository
 import android.net.Uri
 import android.os.SystemClock
 import android.view.KeyEvent as AndroidKeyEvent
@@ -14,10 +34,8 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -32,59 +50,56 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.outlined.AccountTree
-import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Code
-import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.FormatListBulleted
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Palette
-import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Redo
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -99,13 +114,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -119,11 +132,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -135,23 +144,28 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.kangle.kardleaf.R
+import com.kangle.kardleaf.localizedText
+import com.kangle.kardleaf.data.ai.KardLeafAiAction
+import com.kangle.kardleaf.data.ai.KardLeafAiClient
+import com.kangle.kardleaf.data.ai.KardLeafAiPreferences
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.model.NoteHistory
 import com.kangle.kardleaf.data.model.NoteRemark
+import com.kangle.kardleaf.data.database.NoteLinkEntity
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeMode
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import com.kangle.kardleaf.data.utils.NoteTextStats
 import java.io.File
-import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.Locale
-import java.util.regex.Pattern
-import java.util.regex.PatternSyntaxException
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -169,290 +183,173 @@ private const val SEARCH_TRACE_TAG = "KardLeafSearchTrace"
 private const val SAVE_PATH_TRACE_TAG = "KardLeafSavePath"
 private const val TITLE_TRACE_TAG = "KardLeafTitleTrace"
 private const val CODEMIRROR_IME_TRACE_TAG = "KardLeafCM6ImeTrace"
+private const val NATIVE_EDITOR_LAYOUT_TAG = "KardLeafEditorLayout"
+private const val EDIT_ENTER_TRACE_TAG = "KardLeafEditEnterTrace"
+private const val EDITOR_FRAME_TAG = "KardLeafEditorFrame"
 private val CODEMIRROR_IME_OUTER_TRACE_ENABLED: Boolean
     get() = KardLeafLog.isEnabled(CODEMIRROR_IME_TRACE_TAG)
 private const val MENU_REOPEN_GUARD_MS = 250L
+private const val OPENING_PROGRESS_DELAY_MS = 220L
 private const val DIRECT_EDIT_MAX_CHARS = 600_000
 private const val WEBVIEW_PREVIEW_MAX_CHARS = 50_000
 private const val USER_PERF_LARGE_NOTE_MIN_CHARS = 50_000
 private const val LARGE_TEXT_PREVIEW_CHUNK_CHARS = 300
 
-private fun editorMemorySummary(): String {
-    val runtime = Runtime.getRuntime()
-    val usedMb = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024
-    val totalMb = runtime.totalMemory() / 1024 / 1024
-    val maxMb = runtime.maxMemory() / 1024 / 1024
-    return "mem=${usedMb}MB/${totalMb}MB max=${maxMb}MB"
+private fun KardLeafAiAction.localizedTitle(): String =
+    when (this) {
+        KardLeafAiAction.SUMMARIZE -> localizedText("AI 摘要", "AI summary")
+        KardLeafAiAction.POLISH -> localizedText("AI 润色", "AI polish")
+        KardLeafAiAction.EXPAND -> localizedText("AI 扩写", "AI expand")
+        KardLeafAiAction.CONTINUE -> localizedText("AI 续写", "AI continue")
+        KardLeafAiAction.SHORTEN -> localizedText("缩短内容", "Shorten")
+        KardLeafAiAction.FIX_WRITING -> localizedText("纠错与语病修复", "Proofread")
+        KardLeafAiAction.TRANSLATE -> localizedText("翻译", "Translate")
+        KardLeafAiAction.EXPLAIN -> localizedText("解释内容", "Explain")
+        KardLeafAiAction.KEY_POINTS -> localizedText("提取要点", "Extract key points")
+        KardLeafAiAction.ACTION_ITEMS -> localizedText("提取待办", "Extract action items")
+        KardLeafAiAction.GENERATE_TITLE -> localizedText("生成标题", "Generate title")
+        KardLeafAiAction.CUSTOM -> localizedText("自定义指令", "Custom instruction")
+    }
+
+private enum class KardLeafAiTextScope {
+    SELECTION,
+    PARAGRAPH,
+    SECTION,
+    WHOLE_NOTE,
 }
 
-private fun userPerfNoteSizeTier(length: Int): String = when {
-    length < 10_000 -> "lt_1w"
-    length < 50_000 -> "1w_5w"
-    length < 100_000 -> "5w_10w"
-    length < 1_000_000 -> "10w_100w"
-    else -> "gte_100w"
+private data class KardLeafAiTextRange(val start: Int, val end: Int) {
+    val length: Int get() = (end - start).coerceAtLeast(0)
 }
 
-private fun Iterable<PrefsManager.EditorTopToolbarItemId>.toEditorTopBarLogText(): String =
-    joinToString(prefix = "[", postfix = "]") { it.name }
+private data class KardLeafAiDiffPreview(
+    val removed: String,
+    val added: String,
+    val unchangedPrefixChars: Int,
+    val unchangedSuffixChars: Int,
+)
 
-@Composable
-private fun NoteSearchTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    focused: Boolean,
-    focusRequester: FocusRequester,
-    onFocusChanged: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-        cursorBrush = SolidColor(if (focused) MaterialTheme.colorScheme.primary else Color.Transparent),
-        modifier = modifier
-            .height(42.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f))
-            .padding(horizontal = 12.dp)
-            .focusRequester(focusRequester)
-            .onFocusChanged { onFocusChanged(it.isFocused) },
-        decorationBox = { innerTextField ->
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                if (value.isEmpty()) {
-                    Text(
-                        placeholder,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                innerTextField()
-            }
-        },
+private fun KardLeafAiTextScope.localizedTitle(): String = when (this) {
+    KardLeafAiTextScope.SELECTION -> localizedText("选中文字", "Selection")
+    KardLeafAiTextScope.PARAGRAPH -> localizedText("当前段落", "Paragraph")
+    KardLeafAiTextScope.SECTION -> localizedText("当前章节", "Section")
+    KardLeafAiTextScope.WHOLE_NOTE -> localizedText("整篇笔记", "Whole note")
+}
+
+private fun KardLeafAiAction.showsDiffPreview(): Boolean = when (this) {
+    KardLeafAiAction.POLISH,
+    KardLeafAiAction.EXPAND,
+    KardLeafAiAction.SHORTEN,
+    KardLeafAiAction.FIX_WRITING,
+    KardLeafAiAction.TRANSLATE,
+    KardLeafAiAction.CUSTOM -> true
+    else -> false
+}
+
+private fun findParagraphRange(content: String, cursor: Int): KardLeafAiTextRange {
+    if (content.isEmpty()) return KardLeafAiTextRange(0, 0)
+    val safeCursor = cursor.coerceIn(0, content.length)
+    val start = content.lastIndexOf("\n\n", (safeCursor - 1).coerceAtLeast(0))
+        .let { if (it < 0) 0 else it + 2 }
+    val end = content.indexOf("\n\n", safeCursor)
+        .let { if (it < 0) content.length else it }
+    return KardLeafAiTextRange(start.coerceAtMost(end), end)
+}
+
+private fun markdownHeadingLevel(line: String): Int? {
+    val level = line.takeWhile { it == '#' }.length
+    return level.takeIf { it in 1..6 && line.getOrNull(it)?.isWhitespace() == true }
+}
+
+private fun findMarkdownSectionRange(content: String, cursor: Int): KardLeafAiTextRange {
+    if (content.isEmpty()) return KardLeafAiTextRange(0, 0)
+    val safeCursor = cursor.coerceIn(0, content.length)
+    var lineStart = if (safeCursor == 0) 0 else content.lastIndexOf('\n', (safeCursor - 1).coerceAtLeast(0)) + 1
+    var headingStart = -1
+    var headingLevel = -1
+    while (true) {
+        val lineEnd = content.indexOf('\n', lineStart).let { if (it < 0) content.length else it }
+        val level = markdownHeadingLevel(content.substring(lineStart, lineEnd))
+        if (level != null) {
+            headingStart = lineStart
+            headingLevel = level
+            break
+        }
+        if (lineStart == 0) break
+        lineStart = content.lastIndexOf('\n', (lineStart - 2).coerceAtLeast(0)) + 1
+    }
+    if (headingStart < 0) return findParagraphRange(content, safeCursor)
+
+    var nextLineStart = content.indexOf('\n', headingStart).let { if (it < 0) content.length else it + 1 }
+    while (nextLineStart < content.length) {
+        val lineEnd = content.indexOf('\n', nextLineStart).let { if (it < 0) content.length else it }
+        val level = markdownHeadingLevel(content.substring(nextLineStart, lineEnd))
+        if (level != null && level <= headingLevel) {
+            return KardLeafAiTextRange(headingStart, nextLineStart)
+        }
+        nextLineStart = if (lineEnd >= content.length) content.length else lineEnd + 1
+    }
+    return KardLeafAiTextRange(headingStart, content.length)
+}
+
+private fun findAiTextRange(snapshot: KardLeafEditorSnapshot, scope: KardLeafAiTextScope): KardLeafAiTextRange {
+    val content = snapshot.content
+    val selectionStart = minOf(snapshot.selection.start, snapshot.selection.end).coerceIn(0, content.length)
+    val selectionEnd = maxOf(snapshot.selection.start, snapshot.selection.end).coerceIn(selectionStart, content.length)
+    val cursor = snapshot.selection.end.coerceIn(0, content.length)
+    return when (scope) {
+        KardLeafAiTextScope.SELECTION -> KardLeafAiTextRange(selectionStart, selectionEnd)
+        KardLeafAiTextScope.PARAGRAPH -> findParagraphRange(content, cursor)
+        KardLeafAiTextScope.SECTION -> findMarkdownSectionRange(content, cursor)
+        KardLeafAiTextScope.WHOLE_NOTE -> KardLeafAiTextRange(0, content.length)
+    }
+}
+
+private fun buildAiDiffPreview(original: String, revised: String): KardLeafAiDiffPreview {
+    var prefix = 0
+    val sharedLength = minOf(original.length, revised.length)
+    while (prefix < sharedLength && original[prefix] == revised[prefix]) prefix++
+    var suffix = 0
+    while (
+        suffix < original.length - prefix &&
+        suffix < revised.length - prefix &&
+        original[original.length - 1 - suffix] == revised[revised.length - 1 - suffix]
+    ) {
+        suffix++
+    }
+    return KardLeafAiDiffPreview(
+        removed = original.substring(prefix, original.length - suffix),
+        added = revised.substring(prefix, revised.length - suffix),
+        unchangedPrefixChars = prefix,
+        unchangedSuffixChars = suffix,
     )
 }
 
+private fun aiPreviewText(text: String, maxChars: Int = 2400): String =
+    if (text.length <= maxChars) text else text.take(maxChars) + localizedText("\n……内容过长，已省略预览", "\n… Preview truncated")
+
 @Composable
-private fun NoteSearchChip(
-    text: String,
-    selected: Boolean = false,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
+private fun EditorFileInfoText(
+    date: Date,
+    charCount: androidx.compose.runtime.State<Int>,
+    folder: String,
 ) {
-    val backgroundColor = when {
-        selected -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
-    }
-    val contentColor = when {
-        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
-        selected -> MaterialTheme.colorScheme.onPrimaryContainer
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Box(
-        modifier = Modifier
-            .height(42.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(backgroundColor)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelLarge,
-            color = contentColor,
-            maxLines = 1,
+    val text = remember(date.time, charCount.value, folder) {
+        formatEditorFileInfoText(
+            date = date,
+            charCount = charCount.value,
+            folder = folder,
         )
     }
-}
-
-
-@Composable
-private fun LargePlainTextPreview(
-    title: String,
-    content: String,
-    listState: LazyListState,
-    modifier: Modifier = Modifier,
-    searchCurrentStart: Int = -1,
-    searchCurrentEnd: Int = -1,
-    onUserInteraction: () -> Unit = {},
-    onFastScrollSourceScrolled: () -> Unit = {},
-    onFirstContentLaidOut: () -> Unit = {},
-    contentTextSizeSp: Float = 16f,
-    contentLineHeightMultiplier: Float = 1.55f,
-    contentLetterSpacingSp: Float = 0f,
-    contentParagraphSpacingDp: Float = 8f,
-    contentFontFamily: String = "system",
-) {
-    val chunkCount = largePlainTextPreviewChunkCount(content.length)
-    val searchHighlightColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
-    var scrollPerfInitialized by remember(content.length) { mutableStateOf(false) }
-    var scrollPerfStartMs by remember(content.length) { mutableStateOf(0L) }
-    var scrollPerfLastMs by remember(content.length) { mutableStateOf(0L) }
-    var scrollPerfFrames by remember(content.length) { mutableStateOf(0) }
-    var scrollPerfSlowFrames by remember(content.length) { mutableStateOf(0) }
-    var scrollPerfMaxFrameMs by remember(content.length) { mutableStateOf(0L) }
-    LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) {
-        if (!scrollPerfInitialized) {
-            scrollPerfInitialized = true
-            return@LaunchedEffect
-        }
-        val now = SystemClock.elapsedRealtime()
-        if (scrollPerfStartMs <= 0L) {
-            scrollPerfStartMs = now
-            scrollPerfLastMs = now
-            scrollPerfFrames = 0
-            scrollPerfSlowFrames = 0
-            scrollPerfMaxFrameMs = 0L
-            KardLeafLog.d(
-                USER_PERF_TRACE_TAG,
-                "editorScroll humanStart mode=largePlainPreview contentLen=${content.length} " +
-                    "sizeTier=${userPerfNoteSizeTier(content.length)} firstIndex=${listState.firstVisibleItemIndex} " +
-                    "offset=${listState.firstVisibleItemScrollOffset}",
-            )
-        } else {
-            val frameMs = now - scrollPerfLastMs
-            if (frameMs > 0L) {
-                scrollPerfFrames++
-                scrollPerfMaxFrameMs = maxOf(scrollPerfMaxFrameMs, frameMs)
-                if (frameMs > 32L) scrollPerfSlowFrames++
-            }
-            scrollPerfLastMs = now
-        }
-        onFastScrollSourceScrolled()
-        delay(180L)
-        if (scrollPerfLastMs == now && scrollPerfStartMs > 0L) {
-            val elapsed = (scrollPerfLastMs - scrollPerfStartMs).coerceAtLeast(0L)
-            val avgFrame = if (scrollPerfFrames > 0) elapsed.toFloat() / scrollPerfFrames else 0f
-            val smooth = scrollPerfSlowFrames == 0 && scrollPerfMaxFrameMs <= 32L
-            KardLeafLog.d(
-                USER_PERF_TRACE_TAG,
-                "editorScroll humanSettled mode=largePlainPreview elapsed=${elapsed}ms " +
-                    "frames=$scrollPerfFrames slowFrames=$scrollPerfSlowFrames " +
-                    "maxFrame=${scrollPerfMaxFrameMs}ms avgFrame=${String.format("%.1f", avgFrame)}ms " +
-                    "smooth=$smooth contentLen=${content.length} sizeTier=${userPerfNoteSizeTier(content.length)} " +
-                    "firstIndex=${listState.firstVisibleItemIndex} offset=${listState.firstVisibleItemScrollOffset}",
-            )
-            scrollPerfStartMs = 0L
-            scrollPerfLastMs = 0L
-            scrollPerfFrames = 0
-            scrollPerfSlowFrames = 0
-            scrollPerfMaxFrameMs = 0L
-        }
-    }
-
-    LazyColumn(
-        state = listState,
-        modifier = modifier
-            .background(MaterialTheme.colorScheme.background)
-            .pointerInput(content.length) {
-                awaitPointerEventScope {
-                    while (true) {
-                        awaitPointerEvent(PointerEventPass.Initial)
-                        onUserInteraction()
-                    }
-                }
-            },
-    ) {
-        item(key = "large_plain_text_preview_header") {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    text = title.ifBlank { "未命名" },
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                Text(
-                    text = "当前笔记过大，已切换为纯文本快速预览，正文会按需分块显示。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        items(
-            count = chunkCount,
-            key = { index -> "large_plain_text_chunk_$index" },
-        ) { index ->
-            val start = index * LARGE_TEXT_PREVIEW_CHUNK_CHARS
-            val end = minOf(start + LARGE_TEXT_PREVIEW_CHUNK_CHARS, content.length)
-            val chunkText = content.substring(start, end)
-            val highlightStart = maxOf(searchCurrentStart, start)
-            val highlightEnd = minOf(searchCurrentEnd, end)
-            val chunkDisplayText: AnnotatedString = if (
-                searchCurrentStart >= 0 &&
-                searchCurrentEnd > searchCurrentStart &&
-                highlightStart < highlightEnd
-            ) {
-                buildAnnotatedString {
-                    append(chunkText)
-                    addStyle(
-                        style = SpanStyle(background = searchHighlightColor),
-                        start = highlightStart - start,
-                        end = highlightEnd - start,
-                    )
-                }
-            } else {
-                AnnotatedString(chunkText)
-            }
-            Text(
-                text = chunkDisplayText,
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    fontSize = contentTextSizeSp.sp,
-                    lineHeight = (contentTextSizeSp * contentLineHeightMultiplier).sp,
-                    letterSpacing = contentLetterSpacingSp.sp,
-                    fontFamily = editorComposeFontFamily(contentFontFamily),
-                ),
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(
-                        if (index == 0) {
-                            Modifier.onGloballyPositioned { onFirstContentLaidOut() }
-                        } else {
-                            Modifier
-                        },
-                    )
-                    .padding(horizontal = 18.dp, vertical = (contentParagraphSpacingDp / 4f).dp),
-            )
-        }
-    }
-}
-
-private fun editorComposeFontFamily(fontFamily: String): FontFamily? =
-    when (fontFamily.trim().lowercase(Locale.ROOT)) {
-        "", "system" -> null
-        "sans-serif" -> FontFamily.SansSerif
-        "serif" -> FontFamily.Serif
-        "monospace" -> FontFamily.Monospace
-        else -> null
-    }
-
-private fun largePlainTextPreviewChunkCount(textLength: Int): Int =
-    if (textLength <= 0) 0 else ((textLength - 1) / LARGE_TEXT_PREVIEW_CHUNK_CHARS) + 1
-
-private fun largePlainTextPreviewFastScrollMetrics(
-    listState: LazyListState,
-    chunkCount: Int,
-): EditorFastScrollMetrics {
-    val totalItems = chunkCount + 1
-    if (totalItems <= 1) return EditorFastScrollMetrics()
-    val visibleItems = listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-    val maxFirstIndex = (totalItems - visibleItems).coerceAtLeast(1)
-    return EditorFastScrollMetrics(
-        canScroll = true,
-        ratio = (listState.firstVisibleItemIndex.toFloat() / maxFirstIndex).coerceIn(0f, 1f),
-        thumbFraction = (visibleItems.toFloat() / totalItems).coerceIn(0f, 1f),
+    Text(
+        text = text,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+        style = MaterialTheme.typography.bodyLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
     )
 }
 
@@ -462,7 +359,8 @@ fun EditorScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit,
     onLeavingEditorStart: () -> Unit = {},
-    editorOpenStartRealtimeMs: Long? = null,
+    editorOpenSession: EditorOpenSession? = null,
+    onEditorFrameCommitted: (Long) -> Unit = {},
     initialLabel: String = "",
     privacyNoteId: Long? = null,
     privacyInitialTitle: String? = null,
@@ -475,13 +373,23 @@ fun EditorScreen(
     onDrawingPadStartConsumed: () -> Unit = {},
 ) {
     val currentNote by viewModel.currentNote.collectAsState()
+    val wikilinkPrompt by viewModel.wikilinkPrompt.collectAsState()
     val pendingEditorSearchJump by viewModel.pendingEditorSearchJump.collectAsState()
+    val pendingEditorEditNoteId by viewModel.pendingEditorEditNoteId.collectAsState()
     val allNotes by viewModel.allNotes.collectAsState(initial = emptyList())
+    val noteLinkPath = currentNote?.file?.path.orEmpty()
+    val outgoingWikilinks by remember(noteLinkPath) {
+        if (noteLinkPath.isBlank()) flowOf(emptyList<NoteLinkEntity>()) else viewModel.outgoingWikilinks(noteLinkPath)
+    }.collectAsState(initial = emptyList())
+    val backlinks by remember(noteLinkPath) {
+        if (noteLinkPath.isBlank()) flowOf(emptyList<NoteLinkEntity>()) else viewModel.backlinks(noteLinkPath)
+    }.collectAsState(initial = emptyList())
     val externalDraft by viewModel.externalNoteDraft.collectAsState()
     val isEditorOpen by viewModel.isEditorOpen.collectAsState()
     val isOpeningNoteContent by viewModel.isOpeningNoteContent.collectAsState()
     val isShowingPartialLargeNote by viewModel.isShowingPartialLargeNote.collectAsState()
     val isPrivacyEditor = privacyDocumentKey != null
+    val isNewRegularNote = !isPrivacyEditor && currentNote == null
     val effectiveEditorOpen = isPrivacyEditor || isEditorOpen
     val labels by viewModel.labels.collectAsState()
     val externalConflict by viewModel.externalConflict.collectAsState()
@@ -504,14 +412,16 @@ fun EditorScreen(
         KardLeafCustomFeatures.getToolbarOrder(context)
     }
     val notePrefsManager = remember { PrefsManager(context) }
-    val savedEditorKernel = notePrefsManager.getEditorKernel()
+    var editorKernel by remember { mutableStateOf(notePrefsManager.getEditorKernel()) }
     val autoCodeMirrorThresholdChars = notePrefsManager.getAutoCodeMirrorThresholdChars()
     val codeMirrorLivePreviewEnabled = notePrefsManager.isCodeMirrorLivePreviewEnabled()
+    val editingImagePreviewEnabled = notePrefsManager.isEditingImagePreviewEnabled()
     val editorFontSizeSp = notePrefsManager.getEditorFontSizeSp()
     val editorLineHeightMultiplier = notePrefsManager.getEditorLineHeightMultiplier()
     val editorLetterSpacingSp = notePrefsManager.getEditorLetterSpacingSp()
     val editorParagraphSpacingDp = notePrefsManager.getEditorParagraphSpacingDp()
     val editorFontFamily = notePrefsManager.getEditorFontFamily()
+    val previewThemeId = notePrefsManager.getPreviewTheme().name.lowercase()
     val editorBottomToolbarAlwaysVisible = notePrefsManager.isEditorBottomToolbarAlwaysVisible()
     var editorTopToolbarOrder by remember { mutableStateOf(notePrefsManager.getEditorTopToolbarItemOrder()) }
     var editorTopToolbarMoreItems by remember { mutableStateOf(notePrefsManager.getEditorTopToolbarMoreItems()) }
@@ -523,10 +433,13 @@ fun EditorScreen(
     val showNoteDetailFileInfo = remember { notePrefsManager.isNoteDetailFileInfoVisible() }
     val editorHiddenFilenamePatterns = remember { notePrefsManager.getCustomHiddenFilenamePatterns() }
     val editorUnnamedNoteDateFormat = remember { KardLeafCustomFeatures.getUnnamedNoteDateFormat(context) }
-    val hideDraftTitleInEditor = !isPrivacyEditor && (
-        currentNote?.folder == PrefsManager.DEFAULT_DRAFT_FOLDER_NAME ||
-            externalDraft?.folder == PrefsManager.DEFAULT_DRAFT_FOLDER_NAME ||
-            (currentNote == null && externalDraft == null && initialLabel == PrefsManager.DEFAULT_DRAFT_FOLDER_NAME)
+    fun isQuickNoteFolder(folder: String?): Boolean =
+        folder == PrefsManager.DEFAULT_QUICK_NOTE_FOLDER_NAME ||
+            folder == PrefsManager.LEGACY_DRAFT_FOLDER_NAME
+    val hideQuickNoteTitleInEditor = !isPrivacyEditor && (
+        isQuickNoteFolder(currentNote?.folder) ||
+            isQuickNoteFolder(externalDraft?.folder) ||
+            (currentNote == null && externalDraft == null && isQuickNoteFolder(initialLabel))
     )
 
     val rawInitialTitle = if (isPrivacyEditor) privacyInitialTitle.orEmpty() else currentNote?.title ?: externalDraft?.title.orEmpty()
@@ -545,7 +458,7 @@ fun EditorScreen(
                 hiddenFilenamePatterns = editorHiddenFilenamePatterns,
             )
     }
-    val initialTitle = if (hideDraftTitleInEditor || hideInitialTitleInEditor) "" else rawInitialTitle
+    val initialTitle = if (hideQuickNoteTitleInEditor || hideInitialTitleInEditor) "" else rawInitialTitle
     val rawInitialContent = if (isPrivacyEditor) privacyInitialContent.orEmpty() else currentNote?.content ?: externalDraft?.content.orEmpty()
     val initialFrontMatter = remember(rawInitialContent) { NoteFormatUtils.parseFrontMatter(rawInitialContent) }
     val initialContent = initialFrontMatter.cleanContent
@@ -589,30 +502,34 @@ fun EditorScreen(
     } else {
         null
     }
-    var temporaryEditorKernel by remember(editorDocumentKey) { mutableStateOf<PrefsManager.EditorKernel?>(null) }
-    var temporaryEditorSnapshot by remember(editorDocumentKey) { mutableStateOf<KardLeafEditorSnapshot?>(null) }
-    val editorKernel = temporaryEditorKernel ?: savedEditorKernel
-    val editorSurfaceTitle = temporaryEditorSnapshot?.title ?: displayInitialTitle
-    val editorSurfaceContent = temporaryEditorSnapshot?.content ?: initialContent
-    val editorSurfaceSelection = temporaryEditorSnapshot?.selection ?: defaultEditOpenSelection
+    var switchedEditorSnapshot by remember(editorDocumentKey) { mutableStateOf<KardLeafEditorSnapshot?>(null) }
+    val editorSurfaceTitle = switchedEditorSnapshot?.title ?: displayInitialTitle
+    val editorSurfaceContent = switchedEditorSnapshot?.content ?: initialContent
+    val editorSurfaceSelection = switchedEditorSnapshot?.selection ?: defaultEditOpenSelection
+    val editorContentLength = remember(editorDocumentKey, editorSurfaceContent.length) {
+        mutableStateOf(editorSurfaceContent.length)
+    }
     val hasMarkdownImages = remember(editorSurfaceContent) { containsMarkdownImageReferences(editorSurfaceContent) }
     val isManualCodeMirrorKernel = editorKernel == PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW
+    val usesQuillpadStyleEditor = !isPrivacyEditor && editorKernel == PrefsManager.EditorKernel.QUILLPAD_STYLE
     val allowsCodeMirrorForThisNote = isManualCodeMirrorKernel || !hasMarkdownImages
     val usesCodeMirrorLikeEditor =
         !isPrivacyEditor &&
             allowsCodeMirrorForThisNote &&
             isManualCodeMirrorKernel
-    LaunchedEffect(editorKernel, isPrivacyEditor, hasMarkdownImages, editorSurfaceContent.length, temporaryEditorKernel) {
+    val usesExternalEditorSnapshot = usesCodeMirrorLikeEditor
+    LaunchedEffect(editorKernel, isPrivacyEditor, hasMarkdownImages, editorSurfaceContent.length) {
         KardLeafLog.d(
             "KardLeafCodeMirror",
-            "screen editor kernel=$editorKernel temporary=$temporaryEditorKernel useCodeMirror=$usesCodeMirrorLikeEditor " +
+            "screen editor kernel=$editorKernel useCodeMirror=$usesCodeMirrorLikeEditor " +
+                "useQuillpadStyle=$usesQuillpadStyleEditor " +
                 "autoSwitch=false hasImages=$hasMarkdownImages threshold=$autoCodeMirrorThresholdChars " +
                 "contentLen=${editorSurfaceContent.length} privacy=$isPrivacyEditor",
         )
     }
     editorController.acceptInitialSnapshot(
         editorDocumentKey,
-        temporaryEditorSnapshot?.title ?: initialTitle,
+        switchedEditorSnapshot?.title ?: initialTitle,
         editorSurfaceContent,
         editorSurfaceSelection,
     )
@@ -631,14 +548,15 @@ fun EditorScreen(
             },
         )
     }
-    val noteFileInfoText = remember(currentNote?.createdAt?.time, initialContent.length, folder, fileInfoFallbackDate.time) {
-        formatEditorFileInfoText(
-            date = currentNote?.createdAt ?: fileInfoFallbackDate,
-            charCount = initialContent.length,
-            folder = folder,
+    var renderedPreview by remember(editorDocumentKey) {
+        mutableStateOf(
+            when {
+                initialContent.length > WEBVIEW_PREVIEW_MAX_CHARS -> ""
+                initialTitle.isBlank() -> initialContent
+                else -> "# $initialTitle\n\n$initialContent"
+            },
         )
     }
-    var renderedPreview by remember(editorDocumentKey) { mutableStateOf("") }
     var largePlainPreviewSnapshot by remember(editorDocumentKey) { mutableStateOf<KardLeafEditorSnapshot?>(null) }
     var previewRenderToken by remember(editorDocumentKey) { mutableStateOf(0) }
     var previewScrollRatio by remember(editorDocumentKey) { mutableStateOf(0f) }
@@ -670,12 +588,23 @@ fun EditorScreen(
     val userPerfSizeTier = userPerfNoteSizeTier(userPerfContentLen)
     val isUserPerfLargeNote = !isNewPrivacyNote && userPerfContentLen >= USER_PERF_LARGE_NOTE_MIN_CHARS
     val isUserPerfTrackedNote = !isNewPrivacyNote && userPerfContentLen > 0
-    val userPerfOpenStartMs = editorOpenStartRealtimeMs ?: SystemClock.elapsedRealtime()
+    val fallbackUserPerfOpenStartMs = remember(editorDocumentKey) { SystemClock.elapsedRealtime() }
+    val userPerfOpenStartMs = editorOpenSession?.humanStartRealtimeMs ?: fallbackUserPerfOpenStartMs
     var userPerfScreenComposedLogged by remember(editorDocumentKey) { mutableStateOf(false) }
     var userPerfContentReadyLogged by remember(editorDocumentKey) { mutableStateOf(false) }
     var userPerfAreaFirstFrameLogged by remember(editorDocumentKey) { mutableStateOf(false) }
     var userPerfFirstContentLaidOutLogged by remember(editorDocumentKey) { mutableStateOf(false) }
     var userPerfRenderedLogged by remember(editorDocumentKey) { mutableStateOf(false) }
+    val quillpadRecomposeCount = remember(editorDocumentKey) { AtomicInteger() }
+    if (effectiveEditorOpen && usesQuillpadStyleEditor) {
+        SideEffect {
+            KardLeafLog.d(
+                "KardLeafQuillpadIme",
+                "composeRecomposition count=${quillpadRecomposeCount.incrementAndGet()} contentLen=$userPerfContentLen " +
+                    (editorOpenSession?.trace(userPerfContentLen) ?: "sessionId=-1 documentKey=${editorDocumentKey.hashCode()}"),
+            )
+        }
+    }
     val largePlainTextPreviewListState = rememberLazyListState()
     var isEditing by remember(
         editorDocumentKey,
@@ -695,6 +624,40 @@ fun EditorScreen(
                     (isNewPrivacyNote ||
                         (!isPrivacyEditor && currentNote == null) ||
                         defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT)),
+        )
+    }
+    var editEnterTraceStartMs by remember(editorDocumentKey) { mutableStateOf(0L) }
+    var editEnterTraceRun by remember(editorDocumentKey) { mutableStateOf(0) }
+    var editEntrySelection by remember(editorDocumentKey) { mutableStateOf<TextRange?>(null) }
+    LaunchedEffect(editEnterTraceRun) {
+        if (editEnterTraceRun <= 0 || editEnterTraceStartMs <= 0L) return@LaunchedEffect
+        val run = editEnterTraceRun
+        val start = editEnterTraceStartMs
+        val engine = if (usesCodeMirrorLikeEditor) "CODEMIRROR" else if (usesQuillpadStyleEditor) "QUILLPAD" else "NATIVE"
+        KardLeafLog.d(
+            EDIT_ENTER_TRACE_TAG,
+            "stateObserved run=$run engine=$engine elapsed=${SystemClock.elapsedRealtime() - start}ms contentLen=$userPerfContentLen",
+        )
+        var previousFrame = withFrameNanos { it }
+        KardLeafLog.d(
+            EDIT_ENTER_TRACE_TAG,
+            "firstEditFrame run=$run engine=$engine elapsed=${SystemClock.elapsedRealtime() - start}ms",
+        )
+        var frameCount = 0
+        var slowFrameCount = 0
+        var maxFrameMs = 0L
+        while (SystemClock.elapsedRealtime() - start < 2_500L) {
+            val frame = withFrameNanos { it }
+            val frameMs = ((frame - previousFrame) / 1_000_000L).coerceAtLeast(0L)
+            previousFrame = frame
+            frameCount += 1
+            if (frameMs > 24L) slowFrameCount += 1
+            maxFrameMs = maxOf(maxFrameMs, frameMs)
+        }
+        KardLeafLog.d(
+            EDITOR_FRAME_TAG,
+            "summary run=$run engine=$engine elapsed=${SystemClock.elapsedRealtime() - start}ms frames=$frameCount " +
+                "slowFrames=$slowFrameCount maxFrame=${maxFrameMs}ms contentLen=$userPerfContentLen",
         )
     }
     LaunchedEffect(
@@ -721,18 +684,33 @@ fun EditorScreen(
     var lastRenderedPreviewSignature by remember(editorDocumentKey) { mutableStateOf<Pair<Int, Int>?>(null) }
     val visiblePreviewContent = renderedPreview
     val visiblePreviewSignature = visiblePreviewContent.length to visiblePreviewContent.hashCode()
-    val showOpeningContentProgress =
+    val openingContentProgressPending =
         isOpeningNoteContent ||
             (!isEditing &&
                 openingPreviewRenderPending &&
                 visiblePreviewContent.isNotEmpty() &&
                 lastRenderedPreviewSignature != visiblePreviewSignature)
+    var showOpeningContentProgress by remember(editorDocumentKey) { mutableStateOf(false) }
+    LaunchedEffect(editorDocumentKey, openingContentProgressPending) {
+        showOpeningContentProgress = false
+        if (openingContentProgressPending) {
+            delay(OPENING_PROGRESS_DELAY_MS)
+            showOpeningContentProgress = true
+        }
+    }
 
     fun userPerfModeName(): String = when {
         isEditing && usesCodeMirrorLikeEditor -> "codeMirror"
+        isEditing && usesQuillpadStyleEditor -> "quillpadStyle"
         isEditing && !blocksDirectEditForLargeNote -> "nativeEditor"
         showsLargePlainTextPreview -> "largePlainPreview"
         else -> "markdownPreview"
+    }
+
+    fun userPerfEngineName(): String = when {
+        usesCodeMirrorLikeEditor -> "CODEMIRROR"
+        usesQuillpadStyleEditor -> "QUILLPAD_STYLE"
+        else -> "NATIVE"
     }
 
     fun logUserPerfOpenStep(step: String, mode: String = userPerfModeName()) {
@@ -740,11 +718,12 @@ fun EditorScreen(
         KardLeafLog.d(
             USER_PERF_TRACE_TAG,
             "editorOpen $step elapsed=${SystemClock.elapsedRealtime() - userPerfOpenStartMs}ms " +
-                "engine=${if (usesCodeMirrorLikeEditor) "CODEMIRROR" else "NATIVE"} mode=$mode " +
+                "engine=${userPerfEngineName()} mode=$mode " +
                 "contentLen=$userPerfContentLen sizeTier=$userPerfSizeTier " +
                 "isLarge=$isUserPerfLargeNote isOpening=$isOpeningNoteContent partialLarge=$isShowingPartialLargeNote " +
                 "largeBlocked=$blocksDirectEditForLargeNote plainLargePreview=$usesLargePlainTextPreview " +
-                "path=${currentNote?.file?.path}",
+                "path=${currentNote?.file?.path} " +
+                (editorOpenSession?.trace(userPerfContentLen) ?: "sessionId=-1"),
         )
     }
 
@@ -755,7 +734,7 @@ fun EditorScreen(
             Modifier.onGloballyPositioned {
                 if (!userPerfAreaFirstFrameLogged) {
                     userPerfAreaFirstFrameLogged = true
-                    logUserPerfOpenStep("visualAreaFirstFrame", mode)
+                    logUserPerfOpenStep("layoutPositioned", mode)
                 }
             }
         }
@@ -763,6 +742,28 @@ fun EditorScreen(
     var editorFocusRequestToken by remember { mutableStateOf(0) }
 
     // UI state
+    val aiPreferences = remember { KardLeafAiPreferences(context) }
+    val aiClient = remember { KardLeafAiClient() }
+    val aiSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var showAiPanel by remember { mutableStateOf(false) }
+    var aiRequestSnapshot by remember(editorDocumentKey) { mutableStateOf<KardLeafEditorSnapshot?>(null) }
+    var aiRequestRange by remember(editorDocumentKey) { mutableStateOf<KardLeafAiTextRange?>(null) }
+    var aiTextScope by remember(editorDocumentKey) { mutableStateOf(KardLeafAiTextScope.PARAGRAPH) }
+    var aiCustomInstruction by remember { mutableStateOf("") }
+    var aiFollowUpInstruction by remember { mutableStateOf("") }
+    var aiRunning by remember { mutableStateOf(false) }
+    var aiResult by remember { mutableStateOf<String?>(null) }
+    var aiOriginalInput by remember { mutableStateOf("") }
+    var aiError by remember { mutableStateOf<String?>(null) }
+    var aiResultAction by remember { mutableStateOf<KardLeafAiAction?>(null) }
+    var aiLastCustomInstruction by remember { mutableStateOf("") }
+    var aiJob by remember { mutableStateOf<Job?>(null) }
+    DisposableEffect(editorDocumentKey) {
+        onDispose {
+            aiJob?.cancel()
+            aiClient.cancelActiveRequest()
+        }
+    }
     var showLabelMenu by remember { mutableStateOf(false) }
     var lastLabelMenuDismissAt by remember { mutableStateOf(0L) }
     var showCreateLabelDialog by remember { mutableStateOf(false) }
@@ -776,9 +777,18 @@ fun EditorScreen(
     var lastMathMenuDismissAt by remember { mutableStateOf(0L) }
     var showNoteSearch by remember { mutableStateOf(false) }
     var showDrawingPad by remember { mutableStateOf(false) }
+    var isDownloadingWebImages by remember(editorDocumentKey) { mutableStateOf(false) }
+    var showDownloadWebImagesAction by remember(editorDocumentKey) { mutableStateOf(false) }
+    var showWebClipImportDialog by remember(editorDocumentKey) { mutableStateOf(false) }
+    var webImageProgress by remember(editorDocumentKey) { mutableStateOf<WebClipImageProgress?>(null) }
     var editingDrawingReference by remember(editorDocumentKey) { mutableStateOf<String?>(null) }
     var editingDrawingSource by remember(editorDocumentKey) { mutableStateOf<String?>(null) }
-    var previewImageReferences by remember(editorDocumentKey) { mutableStateOf(emptyList<String?>()) }
+    var previewImageTargets by remember(editorDocumentKey) { mutableStateOf(emptyList<KardLeafImageClickTarget>()) }
+    var viewingImageTarget by remember(editorDocumentKey) { mutableStateOf<KardLeafImageClickTarget?>(null) }
+    var viewerResource by remember(editorDocumentKey) { mutableStateOf<RoomNoteRepository.ImageViewerResource?>(null) }
+    var viewerLoading by remember(editorDocumentKey) { mutableStateOf(false) }
+    var editingImageResource by remember(editorDocumentKey) { mutableStateOf<RoomNoteRepository.ImageEditorResource?>(null) }
+    var editingImageTarget by remember(editorDocumentKey) { mutableStateOf<KardLeafImageClickTarget?>(null) }
     var closeEditorWhenDashboardDrawingDismissed by remember { mutableStateOf(false) }
     var noteSearchQuery by remember { mutableStateOf("") }
     var noteReplaceText by remember(editorDocumentKey) { mutableStateOf("") }
@@ -824,6 +834,13 @@ fun EditorScreen(
         (abs(noteSidePanelOffsetPx) / noteSidePanelWidthPx).coerceIn(0f, 1f)
     val noteSidePanelsActive = noteSidePanelsEnabled && noteSidePanelsReady && !isClosingEditor
     val noteSidePanelEdgeWidth = 28.dp
+    val editorFastScrollEdgeWidth = 16.dp
+    val editorFastScrollBottomPadding = with(density) {
+        (
+            imeInsets.getBottom(density) -
+                navigationBarsInsets.getBottom(density)
+        ).coerceAtLeast(0).toDp()
+    }
     val noteSidePanelEditorReserveRadiusPx = with(density) { 48.dp.toPx() }
     var noteSidePanelGestureRootX by remember { mutableStateOf(0f) }
     var noteSidePanelGestureRootY by remember { mutableStateOf(0f) }
@@ -887,8 +904,44 @@ fun EditorScreen(
         val trackerDensity = LocalDensity.current
         val imeBottomPx = imeInsets.getBottom(trackerDensity)
         val imeVisible = imeBottomPx > 0
+        var quillpadImeFirstVisibleLogged by remember(editorDocumentKey) { mutableStateOf(false) }
+        var quillpadImeStableBottom by remember(editorDocumentKey) { mutableStateOf(-1) }
         LaunchedEffect(imeVisible) {
             isKeyboardVisible = imeVisible
+        }
+        LaunchedEffect(
+            imeBottomPx,
+            effectiveEditorOpen,
+            usesQuillpadStyleEditor,
+        ) {
+            if (!effectiveEditorOpen || !usesQuillpadStyleEditor) return@LaunchedEffect
+            val trace =
+                editorOpenSession?.trace(userPerfContentLen)
+                    ?: "sessionId=-1 documentKey=${editorDocumentKey.hashCode()} actualLength=$userPerfContentLen"
+            if (imeBottomPx > 0 && !quillpadImeFirstVisibleLogged) {
+                quillpadImeFirstVisibleLogged = true
+                KardLeafLog.d(
+                    "KardLeafQuillpadIme",
+                    "imeAnimationStart source=compose imeBottom=$imeBottomPx $trace",
+                )
+                KardLeafLog.d(
+                    "KardLeafQuillpadIme",
+                    "imeFirstVisible source=compose imeBottom=$imeBottomPx $trace",
+                )
+            }
+            KardLeafLog.d(
+                "KardLeafQuillpadIme",
+                "imeInsetProgress source=compose imeBottom=$imeBottomPx visible=${imeBottomPx > 0} $trace",
+            )
+            delay(160L)
+            if (quillpadImeStableBottom != imeBottomPx) {
+                quillpadImeStableBottom = imeBottomPx
+                KardLeafLog.d(
+                    "KardLeafQuillpadIme",
+                    "imeStable source=compose imeBottom=$imeBottomPx visible=${imeBottomPx > 0} $trace",
+                )
+            }
+            if (imeBottomPx == 0) quillpadImeFirstVisibleLogged = false
         }
         SideEffect {
             if (CODEMIRROR_IME_OUTER_TRACE_ENABLED && effectiveEditorOpen && usesCodeMirrorLikeEditor) {
@@ -915,6 +968,14 @@ fun EditorScreen(
             usesCodeMirrorLikeEditor,
             effectiveEditorOpen,
         ) {
+            if (effectiveEditorOpen && !usesCodeMirrorLikeEditor) {
+                KardLeafLog.d(
+                    NATIVE_EDITOR_LAYOUT_TAG,
+                    "compose insets reason=imeChanged imeBottom=$imeBottomPx imeVisible=$imeVisible " +
+                        "editing=$isEditing showBars=$showBars bottomToolbar=$shouldShowBottomToolbar " +
+                        "expanded=$isBottomToolbarExpanded toolbarDrag=$toolbarDragFraction key=$editorDocumentKey",
+                )
+            }
             if (CODEMIRROR_IME_OUTER_TRACE_ENABLED && effectiveEditorOpen && usesCodeMirrorLikeEditor) {
                 KardLeafLog.d(
                     CODEMIRROR_IME_TRACE_TAG,
@@ -946,7 +1007,7 @@ fun EditorScreen(
                 "rawInitialTitle=$rawInitialTitle rawInitialTitleLen=${rawInitialTitle.length} initialTitle=$initialTitle initialTitleLen=${initialTitle.length} " +
                 "displayInitialTitle=$displayInitialTitle displayInitialTitleLen=${displayInitialTitle.length} " +
                 "keepLastTitleForEmptyExternal=$keepLastTitleForEmptyExternal lastValidTitleLen=${lastValidEditorDisplayTitle.length} " +
-                "hideDraftTitle=$hideDraftTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
+                "hideQuickNoteTitle=$hideQuickNoteTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
                 "folder=$folder currentFolder=${currentNote?.folder} draftFolder=${externalDraft?.folder} initialLabel=$initialLabel " +
                 "hiddenRules=${editorHiddenFilenamePatterns.size} dateFormat=$editorUnnamedNoteDateFormat",
         )
@@ -1251,7 +1312,7 @@ fun EditorScreen(
     /** Builds a [Note] from the current editor snapshot. */
     fun buildCurrentNote(snapshot: KardLeafEditorSnapshot = editorController.getSnapshot()): Note {
         val snapshotTitleForSave = when {
-            hideDraftTitleInEditor && snapshot.title.isBlank() -> currentNote?.title.orEmpty()
+            hideQuickNoteTitleInEditor && snapshot.title.isBlank() -> currentNote?.title.orEmpty()
             hideInitialTitleInEditor && snapshot.title.isBlank() -> rawInitialTitle
             else -> snapshot.title
         }
@@ -1277,7 +1338,7 @@ fun EditorScreen(
             "buildCurrentNote key=$editorDocumentKey currentPath=${currentNote?.file?.path} " +
                 "fileName=$fileName folder=$parentPath rawInitialTitleLen=${rawInitialTitle.length} " +
                 "snapshotTitleLen=${snapshot.title.length} snapshotContentLen=${snapshot.content.length} " +
-                "hideDraftTitle=$hideDraftTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
+                "hideQuickNoteTitle=$hideQuickNoteTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
                 "snapshotTitleForSaveLen=${snapshotTitleForSave.length} autoTitle=$autoTitle generated=${snapshotTitleForSave.isEmpty()}",
         )
         return Note(
@@ -1292,6 +1353,8 @@ fun EditorScreen(
             isFavorite = currentNote?.isFavorite ?: false,
             isArchived = currentNote?.isArchived ?: false,
             isTrashed = currentNote?.isTrashed ?: false,
+            sourceType = currentNote?.sourceType ?: externalDraft?.sourceType,
+            sourceUrl = currentNote?.sourceUrl ?: externalDraft?.sourceUrl,
         )
     }
 
@@ -1303,15 +1366,11 @@ fun EditorScreen(
         val privacyTitle = snapshot.title.ifBlank { note.title.ifBlank { note.file.nameWithoutExtension } }
         val privacyContent = snapshot.content.ifBlank { note.content }
         if (privacyTitle.isBlank() && privacyContent.isBlank()) {
-            Toast.makeText(context, "当前笔记为空，无法添加到隐私库", Toast.LENGTH_SHORT).show()
+            context.showToast(localizedText("当前笔记为空，无法添加到隐私库", "This note is empty and cannot be protected"))
             return
         }
         viewModel.moveNoteToPrivacy(note, privacyTitle, privacyContent) { moved ->
-            Toast.makeText(
-                context,
-                if (moved) "已移动到隐私库" else "移动到隐私库失败",
-                Toast.LENGTH_SHORT,
-            ).show()
+            context.showToast(if (moved) localizedText("已移动到隐私库", "Moved to protected notes") else localizedText("移动到隐私库失败", "Could not move to protected notes"))
             if (moved) {
                 onMoved()
             }
@@ -1355,13 +1414,13 @@ fun EditorScreen(
                             effectivePrivacyNoteId = savedId
                         }
                         privacyEditorDirty = false
-                        if (showToast) Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+                        if (showToast) context.showToast(localizedText("已保存", "Saved"))
                         KardLeafLog.d(
                             EDITOR_TRACE_TAG,
                             "savePrivacyNote dispatched key=$editorDocumentKey id=$effectivePrivacyNoteId elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
                         )
                     } else {
-                        if (showToast) Toast.makeText(context, "没有需要保存的修改", Toast.LENGTH_SHORT).show()
+                        if (showToast) context.showToast(localizedText("没有需要保存的修改", "No changes to save"))
                         KardLeafLog.d(EDITOR_TRACE_TAG, "savePrivacyNote skipped unchanged key=$editorDocumentKey elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
                     }
                     finishSave()
@@ -1370,7 +1429,7 @@ fun EditorScreen(
 
                 val note = buildCurrentNote(snapshot)
                 val savedTitle = when {
-                    hideDraftTitleInEditor && snapshot.title.isBlank() -> currentNote?.title.orEmpty()
+                    hideQuickNoteTitleInEditor && snapshot.title.isBlank() -> currentNote?.title.orEmpty()
                     hideInitialTitleInEditor && snapshot.title.isBlank() -> rawInitialTitle
                     else -> snapshot.title
                 }
@@ -1394,28 +1453,28 @@ fun EditorScreen(
                 )
                 if (isChanged) {
                     viewModel.saveNote(note, currentNote?.file, saveHistory = saveHistory)
-                    if (showToast) Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+                    if (showToast) context.showToast(localizedText("已保存", "Saved"))
                     KardLeafLog.d(
                         EDITOR_TRACE_TAG,
                         "saveNote dispatched key=$editorDocumentKey source=$source changed=true elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
                     )
                 } else {
-                    if (showToast) Toast.makeText(context, "没有需要保存的修改", Toast.LENGTH_SHORT).show()
+                    if (showToast) context.showToast(localizedText("没有需要保存的修改", "No changes to save"))
                     KardLeafLog.d(EDITOR_TRACE_TAG, "saveNote skipped unchanged key=$editorDocumentKey source=$source elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
                 }
                 finishSave()
             } else {
-                if (showToast) Toast.makeText(context, "当前笔记为空，未保存", Toast.LENGTH_SHORT).show()
+                if (showToast) context.showToast(localizedText("当前笔记为空，未保存", "The note is empty and was not saved"))
                 KardLeafLog.w(EDITOR_TRACE_TAG, "saveNote skipped empty snapshot key=$editorDocumentKey source=$source elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
                 finishSave()
             }
         }
 
-        if (usesCodeMirrorLikeEditor && editorController.requestExternalSnapshot { snapshot ->
-                saveSnapshot(snapshot, "codemirror")
+        if (usesExternalEditorSnapshot && editorController.requestExternalSnapshot { snapshot ->
+                saveSnapshot(snapshot, if (usesCodeMirrorLikeEditor) "codemirror" else "quillpad-style")
             }
         ) {
-            KardLeafLog.d(EDITOR_TRACE_TAG, "saveNote requested CodeMirror snapshot key=$editorDocumentKey saveHistory=$saveHistory")
+            KardLeafLog.d(EDITOR_TRACE_TAG, "saveNote requested external editor snapshot key=$editorDocumentKey kernel=$editorKernel saveHistory=$saveHistory")
             return
         }
 
@@ -1430,27 +1489,204 @@ fun EditorScreen(
         }
     }
 
-    fun switchEditorKernelTemporarily(targetKernel: PrefsManager.EditorKernel) {
+    fun openAiAssistant(snapshot: KardLeafEditorSnapshot) {
+        if (isPrivacyEditor) {
+            context.showToast(localizedText("隐私笔记不会发送到外部 AI", "Protected notes are not sent to external AI"))
+            return
+        }
+        val config = aiPreferences.load()
+        if (!config.isConfigured) {
+            context.showToast(localizedText("请先在设置中配置 AI 助手", "Configure the AI assistant in Settings first"))
+            return
+        }
+        if (snapshot.content.isBlank()) {
+            context.showToast(localizedText("当前没有可处理的文本", "There is no text to process"))
+            return
+        }
+        val hasSelection = snapshot.selection.start != snapshot.selection.end
+        aiRequestSnapshot = snapshot
+        aiTextScope = if (hasSelection) KardLeafAiTextScope.SELECTION else KardLeafAiTextScope.PARAGRAPH
+        aiRequestRange = null
+        aiCustomInstruction = ""
+        aiFollowUpInstruction = ""
+        aiError = null
+        aiResult = null
+        aiOriginalInput = ""
+        aiResultAction = null
+        showAiPanel = true
+    }
+
+    fun requestAiSnapshot() {
+        if (usesExternalEditorSnapshot && editorController.requestExternalSnapshot { snapshot -> openAiAssistant(snapshot) }) {
+            KardLeafLog.d(EDITOR_TRACE_TAG, "AI requested external snapshot key=$editorDocumentKey kernel=$editorKernel")
+        } else {
+            openAiAssistant(editorController.getSnapshot())
+        }
+    }
+
+    fun startAiRequest(
+        action: KardLeafAiAction,
+        customInstruction: String,
+        sourceText: String,
+        sourceRange: KardLeafAiTextRange,
+        revisionResult: String? = null,
+        revisionInstruction: String = "",
+    ) {
+        aiJob?.cancel()
+        aiClient.cancelActiveRequest()
+        aiRequestRange = sourceRange
+        aiRunning = true
+        aiError = null
+        aiResult = null
+        aiResultAction = action
+        if (revisionResult == null) {
+            aiOriginalInput = sourceText
+            aiLastCustomInstruction = customInstruction
+        }
+        aiJob = coroutineScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    if (revisionResult == null) {
+                        aiClient.execute(
+                            config = aiPreferences.load(),
+                            action = action,
+                            input = sourceText,
+                            customInstruction = customInstruction,
+                        )
+                    } else {
+                        aiClient.revise(
+                            config = aiPreferences.load(),
+                            originalInput = sourceText,
+                            currentResult = revisionResult,
+                            instruction = revisionInstruction,
+                        )
+                    }
+                }
+                if (result.isBlank()) {
+                    aiError = localizedText("AI 返回了空内容", "AI returned empty content")
+                } else {
+                    aiResult = result
+                }
+            } catch (error: Throwable) {
+                if (isActive) {
+                    aiError = error.message ?: localizedText("AI 请求失败", "AI request failed")
+                }
+            } finally {
+                aiRunning = false
+            }
+        }
+    }
+
+    fun runAiAction(action: KardLeafAiAction, customInstruction: String = "") {
+        val snapshot = aiRequestSnapshot ?: return
+        val range = findAiTextRange(snapshot, aiTextScope)
+        if (range.length <= 0) {
+            context.showToast(localizedText("当前范围没有可处理的文本", "The selected scope has no text"))
+            return
+        }
+        val sourceText = snapshot.content.substring(range.start, range.end)
+        if (sourceText.isBlank()) {
+            context.showToast(localizedText("当前范围没有可处理的文本", "The selected scope has no text"))
+            return
+        }
+        startAiRequest(action, customInstruction, sourceText, range)
+    }
+
+    fun rerunAiAction() {
+        val snapshot = aiRequestSnapshot ?: return
+        val range = aiRequestRange ?: return
+        val action = aiResultAction ?: return
+        if (range.end > snapshot.content.length) return
+        startAiRequest(
+            action = action,
+            customInstruction = aiLastCustomInstruction,
+            sourceText = snapshot.content.substring(range.start, range.end),
+            sourceRange = range,
+        )
+    }
+
+    fun continueEditingAiResult() {
+        val currentResult = aiResult?.takeIf { it.isNotBlank() } ?: return
+        val range = aiRequestRange ?: return
+        val action = aiResultAction ?: return
+        val instruction = aiFollowUpInstruction.trim()
+        if (instruction.isBlank()) return
+        aiFollowUpInstruction = ""
+        startAiRequest(
+            action = action,
+            customInstruction = aiLastCustomInstruction,
+            sourceText = aiOriginalInput,
+            sourceRange = range,
+            revisionResult = currentResult,
+            revisionInstruction = instruction,
+        )
+    }
+
+    fun stopAiRequest() {
+        aiJob?.cancel()
+        aiClient.cancelActiveRequest()
+        aiRunning = false
+    }
+
+    fun copyAiResult() {
+        val result = aiResult?.takeIf { it.isNotBlank() } ?: return
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("KardLeaf AI", result))
+        context.showToast(localizedText("AI 结果已复制", "AI result copied"))
+    }
+
+    fun applyAiResult(replaceOriginal: Boolean) {
+        val source = aiRequestSnapshot ?: return
+        val sourceRange = aiRequestRange ?: return
+        val result = aiResult?.takeIf { it.isNotBlank() } ?: return
+        if (!isEditing) {
+            context.showToast(localizedText("请先进入编辑模式", "Enter edit mode first"))
+            return
+        }
+        if (editorController.getText() != source.content) {
+            context.showToast(localizedText("AI 处理期间正文已变化，请复制结果后手动粘贴", "The note changed while AI was running. Copy and paste the result manually."))
+            return
+        }
+        if (replaceOriginal) {
+            editorController.setSelection(sourceRange.start, sourceRange.end)
+            editorController.replaceSelection(result)
+        } else {
+            val insertAt = sourceRange.end.coerceIn(0, source.content.length)
+            val prefix = if (insertAt > 0 && source.content.getOrNull(insertAt - 1) != '\n') "\n\n" else ""
+            editorController.setSelection(insertAt)
+            editorController.replaceSelection(prefix + result)
+        }
+        markEditorDirty()
+        aiResult = null
+        aiRequestSnapshot = null
+        aiRequestRange = null
+        showAiPanel = false
+        editorController.focus()
+    }
+
+    fun switchEditorKernel(targetKernel: PrefsManager.EditorKernel) {
         showMoreMenu = false
         showLabelMenu = false
         showHeadingMenu = false
         showMathMenu = false
+        if (targetKernel == editorKernel) return
         fun applySnapshot(snapshot: KardLeafEditorSnapshot) {
             editorController.updateExternalTitle(snapshot.title)
             editorController.updateExternalContentSnapshot(snapshot.content, snapshot.selection)
-            temporaryEditorSnapshot = snapshot
-            temporaryEditorKernel = targetKernel
+            switchedEditorSnapshot = snapshot
+            notePrefsManager.saveEditorKernel(targetKernel)
+            editorKernel = targetKernel
             KardLeafLog.d(
                 "KardLeafCodeMirror",
-                "temporary editor kernel switched target=$targetKernel key=$editorDocumentKey " +
+                "editor kernel switched and saved target=$targetKernel key=$editorDocumentKey " +
                     "titleLen=${snapshot.title.length} contentLen=${snapshot.content.length} selection=${snapshot.selection}",
             )
         }
-        if (usesCodeMirrorLikeEditor && editorController.requestExternalSnapshot { snapshot ->
+        if (usesExternalEditorSnapshot && editorController.requestExternalSnapshot { snapshot ->
                 applySnapshot(snapshot)
             }
         ) {
-            KardLeafLog.d("KardLeafCodeMirror", "temporary editor kernel switch requested CodeMirror snapshot target=$targetKernel key=$editorDocumentKey")
+            KardLeafLog.d("KardLeafCodeMirror", "editor kernel switch requested external snapshot target=$targetKernel key=$editorDocumentKey kernel=$editorKernel")
         } else {
             applySnapshot(editorController.getSnapshot())
         }
@@ -1478,12 +1714,11 @@ fun EditorScreen(
         markEditorDirty()
     }
 
-    fun runCodeMirrorCommand(
+    fun runEditorCommand(
         command: String,
         vararg args: Any,
     ): Boolean {
-        if (!usesCodeMirrorLikeEditor) return false
-        val handled = editorController.executeExternalCommand(command, *args)
+        val handled = editorController.executeCommand(command, *args)
         if (handled) markEditorDirty()
         return handled
     }
@@ -1494,13 +1729,21 @@ fun EditorScreen(
         command: String? = null,
         vararg args: Any,
     ) {
-        if (command != null && runCodeMirrorCommand(command, *args)) return
+        if (command != null && runEditorCommand(command, *args)) return
         insertAtCursor(prefix, suffix)
     }
 
     fun applyHeadingAtCursor(level: Int) {
-        if (runCodeMirrorCommand("toggleHeading", level)) return
+        if (runEditorCommand("toggleHeading", level)) return
         insertAtCursor("#".repeat(level.coerceIn(1, 6)) + " ")
+    }
+
+    fun changeIndent(increase: Boolean) {
+        val command = when {
+            usesCodeMirrorLikeEditor -> if (increase) "indentMore" else "indentLess"
+            else -> if (increase) "indent" else "outdent"
+        }
+        if (editorController.executeCommand(command)) markEditorDirty()
     }
 
     fun insertImageMarkdown(
@@ -1543,7 +1786,7 @@ fun EditorScreen(
     fun launchImagePicker() {
         val picker = onPickImage
         if (picker == null) {
-            Toast.makeText(context, "当前页面暂不支持选择图片", Toast.LENGTH_SHORT).show()
+            context.showToast("当前页面暂不支持选择图片")
             return
         }
         val lockedSelection = editorController.getSelection()
@@ -1570,7 +1813,7 @@ fun EditorScreen(
                 )
                 val importBlockMessage = viewModel.getImageImportTooLargeMessage(uri)
                 if (importBlockMessage != null) {
-                    Toast.makeText(context, importBlockMessage, Toast.LENGTH_LONG).show()
+                    context.showToast(importBlockMessage, Toast.LENGTH_LONG)
                     return@launch
                 }
                 val markdown = viewModel.importImage(uri, folder)
@@ -1591,6 +1834,8 @@ fun EditorScreen(
     fun openDrawingPad() {
         editingDrawingReference = null
         editingDrawingSource = null
+        editingImageResource = null
+        editingImageTarget = null
         requestKeyboardOnEdit = false
         noteSearchFocused = false
         noteReplaceFocused = false
@@ -1608,12 +1853,14 @@ fun EditorScreen(
             val source = viewModel.loadDrawingSource(folder, reference)
             if (source.isNullOrBlank()) {
                 if (reference.substringAfterLast("/").startsWith("drawing_")) {
-                    Toast.makeText(context, "这张绘图没有可编辑数据", Toast.LENGTH_SHORT).show()
+                    context.showToast("这张绘图没有可编辑数据")
                 }
                 return@launch
             }
             editingDrawingReference = reference
             editingDrawingSource = source
+            editingImageResource = null
+            editingImageTarget = null
             requestKeyboardOnEdit = false
             noteSearchFocused = false
             noteReplaceFocused = false
@@ -1627,6 +1874,73 @@ fun EditorScreen(
         }
     }
 
+    fun handleImageClicked(target: KardLeafImageClickTarget) {
+        KardLeafLog.d(
+            "KardLeafImageTrace",
+            "image click source=${target.source} reference=${target.reference} " +
+                "range=${target.markdownStart ?: -1}..${target.markdownEndExclusive ?: -1} occurrence=${target.occurrenceIndex}",
+        )
+        requestKeyboardOnEdit = false
+        noteSearchFocused = false
+        noteReplaceFocused = false
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+        viewerResource = null
+        viewerLoading = true
+        viewingImageTarget = target
+        showLabelMenu = false
+        showMoreMenu = false
+        showHeadingMenu = false
+        showMathMenu = false
+    }
+
+    LaunchedEffect(viewingImageTarget, folder) {
+        val target = viewingImageTarget ?: return@LaunchedEffect
+        viewerLoading = true
+        val loaded = viewModel.loadImageViewerResource(folder, target.reference)
+        if (viewingImageTarget == target) {
+            viewerResource = loaded ?: RoomNoteRepository.ImageViewerResource(
+                reference = target.reference,
+                bitmap = null,
+                mimeType = null,
+                sourceWidth = 0,
+                sourceHeight = 0,
+                exifOrientation = 0,
+                documentType = "missing",
+                drawingSource = null,
+                editable = false,
+                errorMessage = "找不到图片",
+            )
+            viewerLoading = false
+        }
+    }
+
+    fun openImageEditor(
+        target: KardLeafImageClickTarget,
+        resource: RoomNoteRepository.ImageViewerResource,
+    ) {
+        coroutineScope.launch {
+            val editorResource = viewModel.loadImageEditorResource(folder, resource)
+            if (editorResource == null) {
+                context.showToast("无法打开图片标注")
+                return@launch
+            }
+            editingImageTarget = target
+            editingImageResource = editorResource.takeUnless { it.mode == "drawing" }
+            editingDrawingReference = editorResource.openedReference.takeIf { editorResource.mode == "drawing" }
+            editingDrawingSource = editorResource.drawingSource
+            viewingImageTarget = null
+            viewerResource = null
+            viewerLoading = false
+            requestKeyboardOnEdit = false
+            noteSearchFocused = false
+            noteReplaceFocused = false
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+            showDrawingPad = true
+        }
+    }
+
     fun renderPreviewSnapshot(snapshot: KardLeafEditorSnapshot) {
         val contentLength = maxOf(initialContent.length, snapshot.content.length)
         if (!isNewPrivacyNote && contentLength > WEBVIEW_PREVIEW_MAX_CHARS) {
@@ -1634,7 +1948,7 @@ fun EditorScreen(
             previewRenderToken = token
             renderedPreview = ""
             largePlainPreviewSnapshot = snapshot
-            previewImageReferences = emptyList()
+            previewImageTargets = emptyList()
             KardLeafLog.d(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "screen preview use large plain text key=$editorDocumentKey titleLen=${snapshot.title.length} " +
@@ -1646,7 +1960,7 @@ fun EditorScreen(
         largePlainPreviewSnapshot = null
         val startMs = SystemClock.elapsedRealtime()
         val markdown = if (snapshot.title.isBlank()) snapshot.content else "# ${snapshot.title}\n\n${snapshot.content}"
-        previewImageReferences = extractMarkdownImageReferences(markdown)
+        previewImageTargets = extractPreviewImageClickTargets(snapshot.content)
         val token = previewRenderToken + 1
         previewRenderToken = token
         renderedPreview = markdown
@@ -1657,7 +1971,7 @@ fun EditorScreen(
         KardLeafLog.d(
             OPEN_PATH_PROBE_TAG,
             "previewRender start token=$token key=$editorDocumentKey folder=$folder titleLen=${snapshot.title.length} " +
-                "contentLen=${snapshot.content.length} markdownLen=${markdown.length} images=${previewImageReferences.size}",
+                "contentLen=${snapshot.content.length} markdownLen=${markdown.length} images=${previewImageTargets.size}",
         )
         KardLeafLog.d(
             LARGE_NOTE_OPEN_TRACE_TAG,
@@ -1693,8 +2007,157 @@ fun EditorScreen(
         }
     }
 
+    fun downloadWebImages(note: Note) {
+        if (isDownloadingWebImages) return
+        showMoreMenu = false
+
+        fun startDownload(snapshot: KardLeafEditorSnapshot) {
+            KardLeafLog.i(
+                WEB_CLIP_LOG_TAG,
+                "late image backup start notePath=${note.file.path} contentLen=${snapshot.content.length}",
+            )
+            isDownloadingWebImages = true
+            webImageProgress = null
+            coroutineScope.launch {
+                try {
+                    val result =
+                        localizeRemoteMarkdownImages(
+                            context = context,
+                            markdown = snapshot.content,
+                            targetFolder = folder,
+                            importImage = viewModel::importImage,
+                            onImageProgress = { progress ->
+                                withContext(Dispatchers.Main.immediate) {
+                                    webImageProgress = progress
+                                }
+                            },
+                        )
+                    if (result.totalImages == 0) {
+                        showDownloadWebImagesAction = false
+                        context.showToast("当前笔记没有可下载的网络图片")
+                        return@launch
+                    }
+                    if (result.savedImages == 0) {
+                        context.showToast("网页图片下载失败，正文中的网络链接未修改")
+                        return@launch
+                    }
+
+                    val updatedSelection =
+                        TextRange(
+                            snapshot.selection.start.coerceIn(0, result.markdown.length),
+                            snapshot.selection.end.coerceIn(0, result.markdown.length),
+                        )
+                    val updatedSnapshot =
+                        snapshot.copy(
+                            content = result.markdown,
+                            selection = updatedSelection,
+                        )
+                    editorController.replaceAll(updatedSnapshot.content, updatedSnapshot.selection)
+                    showDownloadWebImagesAction = NoteFormatUtils.hasRemoteMarkdownImage(updatedSnapshot.content)
+                    markEditorDirty()
+                    if (!isEditing) {
+                        renderPreviewSnapshot(updatedSnapshot)
+                    }
+                    viewModel.saveNote(
+                        buildCurrentNote(updatedSnapshot),
+                        note.file,
+                        saveHistory = true,
+                    )
+                    val message =
+                        if (result.failedImages > 0) {
+                            "已下载 ${result.savedImages} 张，${result.failedImages} 张仍保留网络链接"
+                        } else {
+                            "已下载 ${result.savedImages} 张网页图片"
+                        }
+                    context.showToast(message)
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    KardLeafLog.e(
+                        WEB_CLIP_LOG_TAG,
+                        "late image backup failed notePath=${note.file.path}",
+                        error,
+                    )
+                    context.showToast("网页图片下载失败")
+                } finally {
+                    isDownloadingWebImages = false
+                    webImageProgress = null
+                }
+            }
+        }
+
+        if (usesExternalEditorSnapshot && editorController.requestExternalSnapshot { snapshot ->
+                startDownload(snapshot)
+            }
+        ) {
+            KardLeafLog.d(
+                WEB_CLIP_LOG_TAG,
+                "late image backup requested external snapshot key=$editorDocumentKey kernel=$editorKernel",
+            )
+        } else {
+            startDownload(editorController.getSnapshot())
+        }
+    }
+
     fun saveDrawingImage(bitmap: android.graphics.Bitmap, drawingSource: String) {
         coroutineScope.launch {
+            val imageResource = editingImageResource
+            if (imageResource != null) {
+                val result = viewModel.saveImageAnnotation(folder, imageResource, bitmap, drawingSource)
+                if (result == null) {
+                    context.showToast("图片标注保存失败")
+                    return@launch
+                }
+                if (result.newlyCreated) {
+                    val target = editingImageTarget
+                    val snapshot = editorController.getSnapshot()
+                    val replacement =
+                        target?.let {
+                            replaceClickedMarkdownImageReference(snapshot.content, it, result.reference)
+                        }
+                    if (replacement == null) {
+                        KardLeafLog.w(
+                            "KardLeafImageTrace",
+                            "markdown reference replace failed occurrence=${target?.occurrenceIndex ?: -1} orphan=true",
+                        )
+                        context.showToast("标注已保存，但原图片位置已变化，未替换正文引用", Toast.LENGTH_LONG)
+                    } else {
+                        val previousSelection = snapshot.selection
+                        editorController.setSelection(replacement.replaceStart, replacement.replaceEndExclusive)
+                        editorController.replaceSelection(result.reference)
+                        val delta =
+                            result.reference.length - (replacement.replaceEndExclusive - replacement.replaceStart)
+
+                        fun adjusted(position: Int): Int =
+                            when {
+                                position <= replacement.replaceStart -> position
+                                position >= replacement.replaceEndExclusive -> position + delta
+                                else -> replacement.replaceStart + result.reference.length
+                            }
+                        editorController.setSelection(
+                            adjusted(previousSelection.start),
+                            adjusted(previousSelection.end),
+                        )
+                        switchedEditorSnapshot = editorController.getSnapshot()
+                        markEditorDirty()
+                        syncUndoRedoState()
+                        KardLeafLog.d(
+                            "KardLeafImageTrace",
+                            "markdown reference replace expected=${target.markdownStart ?: -1}..${target.markdownEndExclusive ?: -1} " +
+                                "resolved=${replacement.replaceStart}..${replacement.replaceEndExclusive} " +
+                                "occurrence=${target.occurrenceIndex} success=true",
+                        )
+                    }
+                }
+                editingImageResource = null
+                editingImageTarget = null
+                editingDrawingReference = null
+                editingDrawingSource = null
+                showDrawingPad = false
+                editorController.refreshInlineImagePreviews()
+                renderPreviewSnapshot(editorController.getSnapshot())
+                return@launch
+            }
             val editingReference = editingDrawingReference
             if (editingReference != null) {
                 val saved = viewModel.updateDrawingImage(bitmap, drawingSource, folder, editingReference)
@@ -1702,11 +2165,12 @@ fun EditorScreen(
                     closeEditorWhenDashboardDrawingDismissed = false
                     editingDrawingReference = null
                     editingDrawingSource = null
+                    editingImageTarget = null
                     showDrawingPad = false
                     editorController.refreshInlineImagePreviews()
                     renderPreviewSnapshot(editorController.getSnapshot())
                 } else {
-                    Toast.makeText(context, "画图保存失败", Toast.LENGTH_SHORT).show()
+                    context.showToast("画图保存失败")
                 }
                 return@launch
             }
@@ -1717,7 +2181,7 @@ fun EditorScreen(
                 insertImageMarkdown(markdown)
                 showDrawingPad = false
             } else {
-                Toast.makeText(context, "画图保存失败", Toast.LENGTH_SHORT).show()
+                context.showToast("画图保存失败")
             }
         }
     }
@@ -1904,11 +2368,11 @@ fun EditorScreen(
         }
         if (usesCodeMirrorLikeEditor) {
             editorController.updateExternalSelection(summary.currentStart, summary.currentEnd)
-            editorController.executeExternalCommand("selectRange", summary.currentStart, summary.currentEnd)
+            editorController.executeCommand("selectRange", summary.currentStart, summary.currentEnd)
             coroutineScope.launch {
                 withFrameNanos { }
                 delay(60)
-                editorController.executeExternalCommand("selectRange", summary.currentStart, summary.currentEnd)
+                editorController.executeCommand("selectRange", summary.currentStart, summary.currentEnd)
                 runCatching { searchFocusRequester.requestFocus() }
             }
             return
@@ -2028,11 +2492,11 @@ fun EditorScreen(
     fun replaceCurrentSearchMatch() {
         val query = noteSearchQuery
         if (query.isBlank()) {
-            Toast.makeText(context, "请输入要查找的文本", Toast.LENGTH_SHORT).show()
+            context.showToast("请输入要查找的文本")
             return
         }
         if (!isEditing) {
-            Toast.makeText(context, "请先切换到编辑状态再替换", Toast.LENGTH_SHORT).show()
+            context.showToast("请先切换到编辑状态再替换")
             return
         }
         val snapshot = editorController.getSnapshot()
@@ -2040,7 +2504,7 @@ fun EditorScreen(
         val result = buildNoteSearchMatches(text, query, noteSearchUseRegex, noteSearchMatchCase)
         if (result.errorMessage != null) {
             updateSearchState(query, -1, text)
-            Toast.makeText(context, result.errorMessage, Toast.LENGTH_SHORT).show()
+            context.showToast(result.errorMessage)
             return
         }
         val rawStart = minOf(snapshot.selection.start, snapshot.selection.end).coerceIn(0, text.length)
@@ -2050,7 +2514,7 @@ fun EditorScreen(
             ?: result.matches.firstOrNull { it.start >= rawStart }
             ?: result.matches.firstOrNull()
         if (replaceMatch == null) {
-            Toast.makeText(context, "没有找到要替换的文本", Toast.LENGTH_SHORT).show()
+            context.showToast("没有找到要替换的文本")
             noteSearchError = null
             noteSearchMatchCount = 0
             noteSearchCurrentStart = -1
@@ -2068,7 +2532,7 @@ fun EditorScreen(
             matchCase = noteSearchMatchCase,
         )
         if (replacement.errorMessage != null) {
-            Toast.makeText(context, replacement.errorMessage, Toast.LENGTH_SHORT).show()
+            context.showToast(replacement.errorMessage)
             return
         }
         val replacementText = replacement.text ?: noteReplaceText
@@ -2091,11 +2555,11 @@ fun EditorScreen(
     fun replaceAllSearchMatches() {
         val query = noteSearchQuery
         if (query.isBlank()) {
-            Toast.makeText(context, "请输入要查找的文本", Toast.LENGTH_SHORT).show()
+            context.showToast("请输入要查找的文本")
             return
         }
         if (!isEditing) {
-            Toast.makeText(context, "请先切换到编辑状态再替换", Toast.LENGTH_SHORT).show()
+            context.showToast("请先切换到编辑状态再替换")
             return
         }
         val snapshot = editorController.getSnapshot()
@@ -2108,12 +2572,12 @@ fun EditorScreen(
         )
         if (replacement.errorMessage != null) {
             updateSearchState(query, -1, snapshot.content)
-            Toast.makeText(context, replacement.errorMessage, Toast.LENGTH_SHORT).show()
+            context.showToast(replacement.errorMessage)
             return
         }
         val newText = replacement.text ?: snapshot.content
         if (replacement.count <= 0) {
-            Toast.makeText(context, "没有找到要替换的文本", Toast.LENGTH_SHORT).show()
+            context.showToast("没有找到要替换的文本")
             noteSearchError = null
             noteSearchMatchCount = 0
             noteSearchCurrentStart = -1
@@ -2126,7 +2590,7 @@ fun EditorScreen(
         editorController.replaceAll(newText, TextRange(cursor, cursor))
         markEditorDirty()
         updateSearchState(query, -1, newText)
-        Toast.makeText(context, "已替换 ${replacement.count} 处", Toast.LENGTH_SHORT).show()
+        context.showToast("已替换 ${replacement.count} 处")
     }
 
     fun jumpToHeading(heading: MarkdownHeading) {
@@ -2159,7 +2623,19 @@ fun EditorScreen(
         if (isPrivacyEditor || currentNote?.id != jump.noteId || jump.query.isBlank() || initialContent.isBlank()) {
             return@LaunchedEffect
         }
-        val matchIndex = initialContent.indexOf(jump.query, ignoreCase = true)
+        val jumpMatches = buildNoteSearchMatches(
+            text = initialContent,
+            query = jump.query,
+            useRegex = false,
+            matchCase = false,
+        ).matches
+        val preferredMatch = jumpMatches.firstOrNull { it.start == jump.preferredStart }
+        if (jump.preferredStart >= 0 && preferredMatch == null && isOpeningNoteContent) {
+            return@LaunchedEffect
+        }
+        val matchIndex = preferredMatch?.start
+            ?: jumpMatches.firstOrNull()?.start
+            ?: -1
         if (matchIndex < 0) {
             if (!isOpeningNoteContent) {
                 viewModel.consumeEditorSearchJump(jump.requestId)
@@ -2201,6 +2677,311 @@ fun EditorScreen(
                 suppressNextSearchKeyboardRequest = false
             } else {
                 keyboardController?.show()
+            }
+        }
+    }
+
+    if (showWebClipImportDialog && isNewRegularNote) {
+        WebClipImportDialog(
+            onDismiss = { showWebClipImportDialog = false },
+            onImported = { draft ->
+                showWebClipImportDialog = false
+                viewModel.createNote(draft, source = "editor_web_clip")
+            },
+            targetFolder = folder,
+            importImage = viewModel::importImage,
+        )
+    }
+
+    if (isDownloadingWebImages) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("下载网页图片") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (webImageProgress == null) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("正在检查正文中的网络图片……")
+                    } else {
+                        WebClipImageProgressContent(webImageProgress)
+                    }
+                }
+            },
+            confirmButton = {},
+        )
+    }
+
+    if (showAiPanel) {
+        val snapshot = aiRequestSnapshot
+        val hasSelection = snapshot?.let { it.selection.start != it.selection.end } == true
+        val selectedRange = snapshot?.let { findAiTextRange(it, aiTextScope) }
+        val primaryActions = if (hasSelection && aiTextScope == KardLeafAiTextScope.SELECTION) {
+            listOf(
+                KardLeafAiAction.POLISH,
+                KardLeafAiAction.FIX_WRITING,
+                KardLeafAiAction.SHORTEN,
+                KardLeafAiAction.TRANSLATE,
+            )
+        } else {
+            listOf(
+                KardLeafAiAction.SUMMARIZE,
+                KardLeafAiAction.KEY_POINTS,
+                KardLeafAiAction.GENERATE_TITLE,
+                KardLeafAiAction.CONTINUE,
+            )
+        }
+        val secondaryActions = KardLeafAiAction.values().filter {
+            it != KardLeafAiAction.CUSTOM && it !in primaryActions
+        }
+        ModalBottomSheet(
+            onDismissRequest = {
+                if (aiRunning) stopAiRequest()
+                showAiPanel = false
+            },
+            sheetState = aiSheetState,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.92f)
+                    .imePadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text(
+                            text = aiResultAction?.localizedTitle() ?: localizedText("AI 助手", "AI assistant"),
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                        Text(
+                            text = localizedText(
+                                "${aiTextScope.localizedTitle()} · ${selectedRange?.length ?: 0} 个字符",
+                                "${aiTextScope.localizedTitle()} · ${selectedRange?.length ?: 0} characters",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            if (aiRunning) stopAiRequest()
+                            showAiPanel = false
+                        },
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = localizedText("关闭", "Close"))
+                    }
+                }
+
+                Text(
+                    text = localizedText("处理范围", "Scope"),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    KardLeafAiTextScope.values().forEach { scope ->
+                        FilterChip(
+                            selected = aiTextScope == scope,
+                            enabled = !aiRunning && (scope != KardLeafAiTextScope.SELECTION || hasSelection),
+                            onClick = {
+                                aiTextScope = scope
+                                aiResult = null
+                                aiError = null
+                                aiResultAction = null
+                                aiRequestRange = null
+                            },
+                            label = { Text(scope.localizedTitle()) },
+                        )
+                    }
+                }
+
+                if (aiRunning) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text(
+                        text = localizedText("正在处理，可随时停止", "Processing. You can stop at any time."),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(onClick = { stopAiRequest() }) {
+                        Text(localizedText("停止生成", "Stop generating"))
+                    }
+                } else {
+                    aiError?.let { errorMessage ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = MaterialTheme.shapes.medium,
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = localizedText("AI 请求失败", "AI request failed"),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                )
+                                Text(errorMessage, color = MaterialTheme.colorScheme.onErrorContainer)
+                            }
+                        }
+                    }
+
+                    val resultText = aiResult?.takeIf { it.isNotBlank() }
+                    if (resultText == null) {
+                        Text(
+                            text = localizedText("常用操作", "Quick actions"),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            primaryActions.forEach { action ->
+                                AssistChip(
+                                    onClick = { runAiAction(action) },
+                                    label = { Text(action.localizedTitle()) },
+                                    leadingIcon = { Icon(Icons.Outlined.AutoAwesome, null, modifier = Modifier.size(18.dp)) },
+                                )
+                            }
+                        }
+                        Text(
+                            text = localizedText("更多操作", "More actions"),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            secondaryActions.forEach { action ->
+                                AssistChip(
+                                    onClick = { runAiAction(action) },
+                                    label = { Text(action.localizedTitle()) },
+                                )
+                            }
+                        }
+                        OutlinedTextField(
+                            value = aiCustomInstruction,
+                            onValueChange = { aiCustomInstruction = it },
+                            label = { Text(localizedText("自定义指令", "Custom instruction")) },
+                            placeholder = { Text(localizedText("例如：改写成适合发布的 Markdown 教程", "Example: Rewrite as a publishable Markdown tutorial")) },
+                            minLines = 2,
+                            maxLines = 4,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Button(
+                            enabled = aiCustomInstruction.isNotBlank(),
+                            onClick = { runAiAction(KardLeafAiAction.CUSTOM, aiCustomInstruction) },
+                        ) {
+                            Text(localizedText("执行自定义指令", "Run custom instruction"))
+                        }
+                    } else {
+                        val action = aiResultAction
+                        if (action?.showsDiffPreview() == true && aiOriginalInput != resultText) {
+                            val diff = buildAiDiffPreview(aiOriginalInput, resultText)
+                            Text(
+                                text = localizedText("差异预览", "Diff preview"),
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(
+                                text = localizedText(
+                                    "相同前文 ${diff.unchangedPrefixChars} 字 · 相同后文 ${diff.unchangedSuffixChars} 字",
+                                    "${diff.unchangedPrefixChars} unchanged prefix chars · ${diff.unchangedSuffixChars} unchanged suffix chars",
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (diff.removed.isNotEmpty()) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    shape = MaterialTheme.shapes.medium,
+                                ) {
+                                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(
+                                            localizedText("原文变化部分", "Original changed part"),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                        )
+                                        Text(aiPreviewText(diff.removed), color = MaterialTheme.colorScheme.onErrorContainer)
+                                    }
+                                }
+                            }
+                            if (diff.added.isNotEmpty()) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    shape = MaterialTheme.shapes.medium,
+                                ) {
+                                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(
+                                            localizedText("AI 结果变化部分", "AI changed part"),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        )
+                                        Text(aiPreviewText(diff.added), color = MaterialTheme.colorScheme.onSecondaryContainer)
+                                    }
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = localizedText("完整结果", "Full result"),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            tonalElevation = 1.dp,
+                            shape = MaterialTheme.shapes.medium,
+                        ) {
+                            Text(
+                                text = resultText,
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+
+                        OutlinedTextField(
+                            value = aiFollowUpInstruction,
+                            onValueChange = { aiFollowUpInstruction = it },
+                            label = { Text(localizedText("继续修改", "Refine result")) },
+                            placeholder = { Text(localizedText("例如：再短一点，保留第二段", "Example: Make it shorter and keep the second paragraph")) },
+                            minLines = 2,
+                            maxLines = 4,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Button(
+                                enabled = aiFollowUpInstruction.isNotBlank(),
+                                onClick = { continueEditingAiResult() },
+                            ) {
+                                Text(localizedText("继续修改", "Refine"))
+                            }
+                            TextButton(onClick = { rerunAiAction() }) {
+                                Text(localizedText("重新生成", "Regenerate"))
+                            }
+                            TextButton(onClick = { copyAiResult() }) {
+                                Text(localizedText("复制", "Copy"))
+                            }
+                            if (isEditing && action != KardLeafAiAction.CONTINUE) {
+                                TextButton(onClick = { applyAiResult(replaceOriginal = true) }) {
+                                    Text(localizedText("替换当前范围", "Replace scope"))
+                                }
+                            }
+                            if (isEditing) {
+                                TextButton(onClick = { applyAiResult(replaceOriginal = false) }) {
+                                    Text(localizedText("插入下方", "Insert below"))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -2283,23 +3064,33 @@ fun EditorScreen(
             title = snapshot.title,
             content = snapshot.content,
             allNotes = allNotes,
+            outgoingLinks = outgoingWikilinks,
+            backlinkLinks = backlinks,
             onDismiss = { showNoteInfoDialog = false },
             onHeadingClick = { heading -> jumpToHeading(heading) },
+            onNoteClick = { path ->
+                showNoteInfoDialog = false
+                viewModel.openNoteByPath(path)
+            },
+            onWikilinkClick = { target ->
+                showNoteInfoDialog = false
+                viewModel.openWikilinkTarget(target, currentNote?.file?.path.orEmpty())
+            },
         )
     }
 
     if (!isPrivacyEditor) externalConflict?.let { conflictNote ->
         AlertDialog(
             onDismissRequest = { viewModel.dismissExternalConflict() },
-            title = { Text("文件冲突") },
+            title = { Text(localizedText("文件冲突", "File conflict")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "当前笔记有未保存修改，外部文件也发生了变化。请选择保留当前编辑内容，或使用外部版本。",
+                        localizedText("当前笔记有未保存修改，外部文件也发生了变化。请选择保留当前编辑内容，或使用外部版本。", "This note has unsaved changes and the external file also changed. Keep your edits or use the external version."),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Text(
-                        text = "外部版本预览：${conflictNote.content.take(200)}${if (conflictNote.content.length > 200) "..." else ""}",
+                        text = localizedText("外部版本预览：", "External version preview: ") + conflictNote.content.take(200) + if (conflictNote.content.length > 200) "..." else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 6,
@@ -2309,26 +3100,24 @@ fun EditorScreen(
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.dismissExternalConflict() }) {
-                    Text("保留我的修改")
+                    Text(localizedText("保留我的修改", "Keep my changes"))
                 }
             },
             confirmButton = {
                 Row {
                     TextButton(onClick = { viewModel.applyExternalConflict() }) {
-                        Text("使用外部版本")
+                        Text(localizedText("使用外部版本", "Use external version"))
                     }
                     TextButton(onClick = {
                         val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                             as android.content.ClipboardManager
                         clipboard.setPrimaryClip(
-                            android.content.ClipData.newPlainText("外部版本内容", conflictNote.content),
+                            android.content.ClipData.newPlainText(localizedText("外部版本内容", "External version"), conflictNote.content),
                         )
-                        android.widget.Toast
-                            .makeText(context, "已复制外部版本内容", android.widget.Toast.LENGTH_SHORT)
-                            .show()
+                        context.showToast(localizedText("已复制外部版本内容", "External version copied"))
                         viewModel.dismissExternalConflict()
                     }) {
-                        Text("复制外部版本内容")
+                        Text(localizedText("复制外部版本内容", "Copy external version"))
                     }
                 }
             },
@@ -2374,30 +3163,36 @@ fun EditorScreen(
             keyboardController?.hide()
             isEditing = false
         }
-        if (usesCodeMirrorLikeEditor && editorController.requestExternalSnapshot { snapshot ->
-                KardLeafLog.d(EDITOR_TRACE_TAG, "enterPreviewMode got CodeMirror snapshot key=$editorDocumentKey contentLen=${snapshot.content.length}")
+        if (usesExternalEditorSnapshot && editorController.requestExternalSnapshot { snapshot ->
+                KardLeafLog.d(EDITOR_TRACE_TAG, "enterPreviewMode got external snapshot key=$editorDocumentKey kernel=$editorKernel contentLen=${snapshot.content.length}")
                 applySnapshot(snapshot)
             }
         ) {
-            KardLeafLog.d(EDITOR_TRACE_TAG, "enterPreviewMode request CodeMirror snapshot key=$editorDocumentKey")
+            KardLeafLog.d(EDITOR_TRACE_TAG, "enterPreviewMode request external snapshot key=$editorDocumentKey kernel=$editorKernel")
             return
         }
         applySnapshot(editorController.getSnapshot())
     }
 
     fun showLargeNoteEditBlockedToast() {
-        Toast.makeText(
-            context,
-            "当前笔记过大，暂时只能快速预览，避免编辑器卡死",
-            Toast.LENGTH_SHORT,
-        ).show()
+        context.showToast("当前笔记过大，暂时只能快速预览，避免编辑器卡死")
     }
 
     fun enterEditMode(
         preservePreviewPosition: Boolean = false,
         previewMarkdownOffset: Int? = null,
     ) {
+        val enterAt = SystemClock.elapsedRealtime()
+        val engine = if (usesCodeMirrorLikeEditor) "CODEMIRROR" else if (usesQuillpadStyleEditor) "QUILLPAD" else "NATIVE"
+        KardLeafLog.d(
+            EDIT_ENTER_TRACE_TAG,
+            "enterStart engine=$engine contentLen=$userPerfContentLen preserve=$preservePreviewPosition offsetProvided=${previewMarkdownOffset != null}",
+        )
         val snapshot = editorController.getSnapshot()
+        KardLeafLog.d(
+            EDIT_ENTER_TRACE_TAG,
+            "snapshotReady engine=$engine elapsed=${SystemClock.elapsedRealtime() - enterAt}ms contentLen=${snapshot.content.length}",
+        )
         val currentTextLength = maxOf(initialContent.length, snapshot.content.length)
         if (!usesCodeMirrorLikeEditor && isShowingPartialLargeNote) {
             viewModel.promotePartialLargeNoteForEditing()
@@ -2423,19 +3218,39 @@ fun EditorScreen(
                 ?.coerceIn(0, textLength)
                 ?: (textLength * previewScrollRatio).toInt().coerceIn(0, textLength)
             editorController.setSelection(targetOffset)
+            editEntrySelection = TextRange(targetOffset)
             pendingEditScrollOffset = targetOffset
             pendingEditScrollRatio = if (previewMarkdownOffset == null) previewScrollRatio else null
+        } else {
+            editEntrySelection = snapshot.selection
         }
         isLeavingEditor = false
-        requestKeyboardOnEdit = true
+        requestKeyboardOnEdit = false
+        editorFocusRequestToken += 1
+        editEnterTraceStartMs = enterAt
+        editEnterTraceRun += 1
         isEditing = true
+        KardLeafLog.d(
+            EDIT_ENTER_TRACE_TAG,
+            "stateChanged run=$editEnterTraceRun engine=$engine elapsed=${SystemClock.elapsedRealtime() - enterAt}ms " +
+                "selection=${editEntrySelection?.start ?: snapshot.selection.start}:${editEntrySelection?.end ?: snapshot.selection.end}",
+        )
+    }
+
+    wikilinkPrompt?.let { prompt ->
+        WikilinkPromptDialog(
+            prompt = prompt,
+            onDismiss = viewModel::dismissWikilinkPrompt,
+            onCreate = { target, sourcePath -> viewModel.createWikilinkNote(target, sourcePath) },
+            onCandidate = { path -> viewModel.openWikilinkCandidate(path) },
+        )
     }
 
     LaunchedEffect(effectiveEditorOpen, editorDocumentKey, isUserPerfTrackedNote) {
         if (effectiveEditorOpen && isUserPerfTrackedNote && !userPerfScreenComposedLogged) {
             userPerfScreenComposedLogged = true
             logUserPerfOpenStep(
-                "screenComposed",
+                "editorComposeEntered",
                 userPerfModeName(),
             )
         }
@@ -2503,6 +3318,19 @@ fun EditorScreen(
         }
         if (openingPreviewRenderPending && lastRenderedPreviewSignature == visiblePreviewSignature) {
             openingPreviewRenderPending = false
+        }
+    }
+
+    LaunchedEffect(
+        pendingEditorEditNoteId,
+        currentNote?.file?.path,
+        effectiveEditorOpen,
+        isOpeningNoteContent,
+    ) {
+        val noteId = currentNote?.id ?: return@LaunchedEffect
+        if (pendingEditorEditNoteId == noteId && effectiveEditorOpen && !isOpeningNoteContent) {
+            viewModel.consumeEditorEditRequest(noteId)
+            enterEditMode()
         }
     }
 
@@ -2665,7 +3493,7 @@ fun EditorScreen(
                     "currentPath=${currentNote?.file?.path} currentTitle=${currentNote?.title} " +
                     "snapshotTitleLen=${backSnapshot.title.length} snapshotContentLen=${backSnapshot.content.length} " +
                     "editorDirty=${viewModel.editorDirty.value} privacyDirty=$privacyEditorDirty " +
-                    "hideDraftTitle=$hideDraftTitleInEditor hideInitialTitle=$hideInitialTitleInEditor rawInitialTitle=$rawInitialTitle",
+                    "hideQuickNoteTitle=$hideQuickNoteTitleInEditor hideInitialTitle=$hideInitialTitleInEditor rawInitialTitle=$rawInitialTitle",
             )
         }
         if (isEditing && shouldSaveEditorOnLeave()) {
@@ -2786,7 +3614,7 @@ fun EditorScreen(
                             NoteSearchTextField(
                                 value = noteSearchQuery,
                                 onValueChange = { noteSearchQuery = it },
-                                placeholder = "搜索当前笔记",
+                                placeholder = localizedText("搜索当前笔记", "Search this note"),
                                 focused = noteSearchFocused,
                                 focusRequester = searchFocusRequester,
                                 onFocusChanged = { noteSearchFocused = it },
@@ -2815,14 +3643,14 @@ fun EditorScreen(
                             onClick = { moveSearchMatch(forward = false) },
                             modifier = Modifier.size(40.dp),
                         ) {
-                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "上一个")
+                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = localizedText("上一个", "Previous"))
                         }
                         IconButton(
                             enabled = noteSearchMatchCount > 0,
                             onClick = { moveSearchMatch(forward = true) },
                             modifier = Modifier.size(40.dp),
                         ) {
-                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "下一个")
+                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = localizedText("下一个", "Next"))
                         }
                         Box(
                             modifier = Modifier.width(58.dp),
@@ -2832,7 +3660,7 @@ fun EditorScreen(
                                 text = noteSearchError ?: if (noteSearchCurrentOrdinal > 0 && noteSearchMatchCount > 0) {
                                     "$noteSearchCurrentOrdinal/$noteSearchMatchCount"
                                 } else {
-                                    "${noteSearchMatchCount}处"
+                                    localizedText("${noteSearchMatchCount}处", "$noteSearchMatchCount matches")
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (noteSearchError == null) {
@@ -2848,7 +3676,7 @@ fun EditorScreen(
                             onClick = { closeNoteSearch() },
                             modifier = Modifier.size(40.dp),
                         ) {
-                            Icon(Icons.Default.Close, contentDescription = "关闭搜索")
+                            Icon(Icons.Default.Close, contentDescription = localizedText("关闭搜索", "Close search"))
                         }
                     } else {
                         val normalizedEditorTopToolbarOrder = editorTopToolbarOrder.distinct().toMutableList().also { order ->
@@ -2901,7 +3729,7 @@ fun EditorScreen(
                             IconButton(onClick = { openNoteSidePanel(noteSidePanelWidthPx) }) {
                                 Icon(
                                     Icons.Outlined.Toc,
-                                    contentDescription = "大纲",
+                                    contentDescription = localizedText("大纲", "Outline"),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -2912,7 +3740,26 @@ fun EditorScreen(
                             IconButton(onClick = { openNoteSidePanel(-noteSidePanelWidthPx) }) {
                                 Icon(
                                     Icons.Outlined.StickyNote2,
-                                    contentDescription = "属性备注",
+                                    contentDescription = localizedText("属性备注", "Properties & remarks"),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+
+                        @Composable
+                        fun WebClipAction() {
+                            IconButton(onClick = {
+                                showLabelMenu = false
+                                showMoreMenu = false
+                                showHeadingMenu = false
+                                showMathMenu = false
+                                focusManager.clearFocus(force = true)
+                                keyboardController?.hide()
+                                showWebClipImportDialog = true
+                            }) {
+                                Icon(
+                                    Icons.Outlined.Language,
+                                    contentDescription = localizedText("保存网站", "Save website"),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -2929,7 +3776,7 @@ fun EditorScreen(
                             }) {
                                 Icon(
                                     Icons.Outlined.Search,
-                                    contentDescription = "搜索当前笔记",
+                                    contentDescription = localizedText("搜索当前笔记", "Search this note"),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -2947,7 +3794,7 @@ fun EditorScreen(
                             }) {
                                 Icon(
                                     Icons.Outlined.AccountTree,
-                                    contentDescription = "思维导图",
+                                    contentDescription = localizedText("思维导图", "Mind map"),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -2974,7 +3821,7 @@ fun EditorScreen(
                             val note = currentNote
                             if (note != null && !note.isTrashed) {
                                 IconButton(onClick = { showHistoryDialog = true }) {
-                                    Icon(Icons.Outlined.History, contentDescription = "历史版本")
+                                    Icon(Icons.Outlined.History, contentDescription = localizedText("历史版本", "Version history"))
                                 }
                             }
                         }
@@ -2984,7 +3831,7 @@ fun EditorScreen(
                             val note = currentNote
                             if (note != null && !note.isTrashed) {
                                 IconButton(onClick = { addCurrentNoteToPrivacy(note) { leaveEditor() } }) {
-                                    Icon(Icons.Outlined.Shield, contentDescription = "保护")
+                                    Icon(Icons.Outlined.Shield, contentDescription = localizedText("保护", "Protect"))
                                 }
                             }
                         }
@@ -3042,7 +3889,7 @@ fun EditorScreen(
                             when (item) {
                                 PrefsManager.EditorTopToolbarItemId.MINDMAP -> {
                                     DropdownMenuItem(
-                                        text = { Text("思维导图") },
+                                        text = { Text(localizedText("思维导图", "Mind map")) },
                                         leadingIcon = { Icon(Icons.Outlined.AccountTree, null) },
                                         onClick = {
                                             showMoreMenu = false
@@ -3054,7 +3901,7 @@ fun EditorScreen(
                                 PrefsManager.EditorTopToolbarItemId.LABEL -> {
                                     if (!isPrivacyEditor) {
                                         DropdownMenuItem(
-                                            text = { Text("移动笔记") },
+                                            text = { Text(localizedText("移动笔记", "Move note")) },
                                             leadingIcon = { Icon(Icons.Outlined.FolderOpen, null) },
                                             onClick = {
                                                 showMoreMenu = false
@@ -3065,7 +3912,7 @@ fun EditorScreen(
                                 }
                                 PrefsManager.EditorTopToolbarItemId.OUTLINE -> if (noteSidePanelToolbarEnabled) {
                                     DropdownMenuItem(
-                                        text = { Text("大纲") },
+                                        text = { Text(localizedText("大纲", "Outline")) },
                                         leadingIcon = { Icon(Icons.Outlined.Toc, null) },
                                         onClick = {
                                             showMoreMenu = false
@@ -3075,7 +3922,7 @@ fun EditorScreen(
                                 }
                                 PrefsManager.EditorTopToolbarItemId.REMARKS -> if (noteSidePanelToolbarEnabled) {
                                     DropdownMenuItem(
-                                        text = { Text("属性备注") },
+                                        text = { Text(localizedText("属性备注", "Properties & remarks")) },
                                         leadingIcon = { Icon(Icons.Outlined.StickyNote2, null) },
                                         onClick = {
                                             showMoreMenu = false
@@ -3085,7 +3932,7 @@ fun EditorScreen(
                                 }
                                 PrefsManager.EditorTopToolbarItemId.SEARCH -> {
                                     DropdownMenuItem(
-                                        text = { Text("搜索当前笔记") },
+                                        text = { Text(localizedText("搜索当前笔记", "Search this note")) },
                                         leadingIcon = { Icon(Icons.Outlined.Search, null) },
                                         onClick = {
                                             showMoreMenu = false
@@ -3110,54 +3957,58 @@ fun EditorScreen(
                                 }
                                 PrefsManager.EditorTopToolbarItemId.HISTORY -> {
                                     val note = currentNote
-                                    if (note != null && !note.isTrashed) {
-                                        DropdownMenuItem(
-                                            text = { Text("历史版本") },
-                                            leadingIcon = { Icon(Icons.Outlined.History, null) },
-                                            onClick = {
+                                    DropdownMenuItem(
+                                        text = { Text(localizedText("历史版本", "Version history")) },
+                                        leadingIcon = { Icon(Icons.Outlined.History, null) },
+                                        enabled = note != null && !note.isTrashed,
+                                        onClick = {
+                                            if (note != null && !note.isTrashed) {
                                                 showHistoryDialog = true
                                                 showMoreMenu = false
-                                            },
-                                        )
-                                    }
+                                            }
+                                        },
+                                    )
                                 }
                                 PrefsManager.EditorTopToolbarItemId.PRIVACY -> {
                                     val note = currentNote
-                                    if (note != null && !note.isTrashed) {
-                                        DropdownMenuItem(
-                                            text = { Text("保护") },
-                                            leadingIcon = { Icon(Icons.Outlined.Shield, null) },
-                                            onClick = {
+                                    DropdownMenuItem(
+                                        text = { Text(localizedText("保护", "Protect")) },
+                                        leadingIcon = { Icon(Icons.Outlined.Shield, null) },
+                                        enabled = note != null && !note.isTrashed,
+                                        onClick = {
+                                            if (note != null && !note.isTrashed) {
                                                 addCurrentNoteToPrivacy(note) { leaveEditor() }
                                                 showMoreMenu = false
-                                            },
-                                        )
-                                    }
+                                            }
+                                        },
+                                    )
                                 }
                                 PrefsManager.EditorTopToolbarItemId.ARCHIVE -> {
                                     val note = currentNote
-                                    if (note != null && !note.isTrashed) {
-                                        if (note.isArchived) {
-                                            DropdownMenuItem(
-                                                text = { Text(stringResource(R.string.unarchive)) },
-                                                leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
-                                                onClick = {
-                                                    viewModel.restoreNote(note)
+                                    val archivedNote = note?.takeIf { it.isArchived && !it.isTrashed }
+                                    if (archivedNote != null) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.unarchive)) },
+                                            leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                                            onClick = {
+                                                viewModel.restoreNote(archivedNote)
+                                                showMoreMenu = false
+                                                leaveEditor()
+                                            },
+                                        )
+                                    } else {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.archive)) },
+                                            leadingIcon = { Icon(Icons.Outlined.Inventory2, null) },
+                                            enabled = note != null && !note.isTrashed,
+                                            onClick = {
+                                                note?.takeIf { !it.isTrashed }?.let { activeNote ->
+                                                    viewModel.archiveNote(activeNote)
                                                     showMoreMenu = false
                                                     leaveEditor()
-                                                },
-                                            )
-                                        } else {
-                                            DropdownMenuItem(
-                                                text = { Text(stringResource(R.string.archive)) },
-                                                leadingIcon = { Icon(Icons.Outlined.Inventory2, null) },
-                                                onClick = {
-                                                    viewModel.archiveNote(note)
-                                                    showMoreMenu = false
-                                                    leaveEditor()
-                                                },
-                                            )
-                                        }
+                                                }
+                                            },
+                                        )
                                     }
                                 }
                                 PrefsManager.EditorTopToolbarItemId.DELETE -> {
@@ -3172,14 +4023,17 @@ fun EditorScreen(
                                                 leaveEditor()
                                             },
                                         )
-                                    } else if (note != null) {
+                                    } else {
                                         DropdownMenuItem(
                                             text = { Text(stringResource(R.string.delete)) },
                                             leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null) },
+                                            enabled = note != null,
                                             onClick = {
-                                                viewModel.deleteNote(note)
-                                                showMoreMenu = false
-                                                leaveEditor()
+                                                if (note != null) {
+                                                    viewModel.deleteNote(note)
+                                                    showMoreMenu = false
+                                                    leaveEditor()
+                                                }
                                             },
                                         )
                                     }
@@ -3249,7 +4103,7 @@ fun EditorScreen(
                                         )
                                     }
                                 }
-                            } else if (currentNoteObj != null) {
+                            } else {
                                 Box {
                                     Box(
                                         modifier = Modifier
@@ -3258,15 +4112,33 @@ fun EditorScreen(
                                                 onClick = {
                                                     val now = SystemClock.uptimeMillis()
                                                     val ignoreReopen = !showMoreMenu && now - lastMoreMenuDismissAt < MENU_REOPEN_GUARD_MS
-                                                    KardLeafLog.d(BACK_TRACE_TAG, "Editor note more click toggle menu noteId=${currentNoteObj.id} showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
+                                                    KardLeafLog.d(
+                                                        BACK_TRACE_TAG,
+                                                        "Editor note more click toggle menu noteId=${currentNoteObj?.id ?: "new"} showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen",
+                                                    )
                                                     if (!ignoreReopen) {
                                                         showLabelMenu = false
                                                         showHeadingMenu = false
                                                         showMathMenu = false
+                                                        if (!showMoreMenu) {
+                                                            showDownloadWebImagesAction = currentNoteObj?.let { note ->
+                                                                val menuCheckContent =
+                                                                    if (viewModel.editorDirty.value) {
+                                                                        editorController.getSnapshot().content
+                                                                    } else {
+                                                                        note.content
+                                                                    }
+                                                                NoteFormatUtils.hasRemoteMarkdownImage(menuCheckContent)
+                                                            } ?: false
+                                                        }
                                                         showMoreMenu = !showMoreMenu
                                                     }
                                                 },
-                                                onLongClick = { addCurrentNoteToPrivacy(currentNoteObj) { leaveEditor() } },
+                                                onLongClick = {
+                                                    currentNoteObj?.let { note ->
+                                                        addCurrentNoteToPrivacy(note) { leaveEditor() }
+                                                    }
+                                                },
                                             ),
                                         contentAlignment = Alignment.Center,
                                     ) {
@@ -3285,7 +4157,7 @@ fun EditorScreen(
                                             },
                                         expanded = showMoreMenu,
                                         onDismissRequest = {
-                                            KardLeafLog.d(BACK_TRACE_TAG, "Editor privacy more onDismissRequest showMoreMenu=$showMoreMenu")
+                                            KardLeafLog.d(BACK_TRACE_TAG, "Editor note more onDismissRequest showMoreMenu=$showMoreMenu")
                                             lastMoreMenuDismissAt = SystemClock.uptimeMillis()
                                             showMoreMenu = false
                                         },
@@ -3295,40 +4167,65 @@ fun EditorScreen(
                                             dismissOnClickOutside = true,
                                         ),
                                     ) {
-                                        val targetEditorKernel = if (usesCodeMirrorLikeEditor) {
-                                            PrefsManager.EditorKernel.NATIVE
-                                        } else {
-                                            PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW
+                                        listOf(
+                                            PrefsManager.EditorKernel.QUILLPAD_STYLE to localizedText("原生内核", "Native editor"),
+                                            PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW to "WebView",
+                                        ).forEach { (targetEditorKernel, label) ->
+                                            DropdownMenuItem(
+                                                text = { Text(label) },
+                                                trailingIcon = {
+                                                    RadioButton(
+                                                        selected = editorKernel == targetEditorKernel,
+                                                        onClick = null,
+                                                    )
+                                                },
+                                                onClick = { switchEditorKernel(targetEditorKernel) },
+                                            )
                                         }
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(
-                                                    if (targetEditorKernel == PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW) {
-                                                        "切换内核：CodeMirror"
-                                                    } else {
-                                                        "切换内核：原生编辑器"
-                                                    },
-                                                )
-                                            },
-                                            leadingIcon = {
-                                                Icon(
-                                                    if (targetEditorKernel == PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW) Icons.Outlined.Code else Icons.Outlined.Edit,
-                                                    null,
-                                                )
-                                            },
-                                            onClick = { switchEditorKernelTemporarily(targetEditorKernel) },
-                                        )
                                         HorizontalDivider()
                                         val renderedMoreToolbarItems = editorTopToolbarMoreDisplayItems
                                             .filter { it != PrefsManager.EditorTopToolbarItemId.EDIT || !isEditing }
+                                        var aiAssistantRendered = false
                                         renderedMoreToolbarItems.forEach { item ->
                                             EditorTopToolbarMoreItem(item)
+                                            if (item == PrefsManager.EditorTopToolbarItemId.MINDMAP) {
+                                                DropdownMenuItem(
+                                                    text = { Text(localizedText("AI 助手", "AI assistant")) },
+                                                    leadingIcon = { Icon(Icons.Outlined.AutoAwesome, null) },
+                                                    onClick = {
+                                                        showMoreMenu = false
+                                                        requestAiSnapshot()
+                                                    },
+                                                )
+                                                aiAssistantRendered = true
+                                            }
+                                        }
+                                        if (!aiAssistantRendered) {
+                                            DropdownMenuItem(
+                                                text = { Text(localizedText("AI 助手", "AI assistant")) },
+                                                leadingIcon = { Icon(Icons.Outlined.AutoAwesome, null) },
+                                                onClick = {
+                                                    showMoreMenu = false
+                                                    requestAiSnapshot()
+                                                },
+                                            )
+                                        }
+                                        currentNoteObj?.takeIf { showDownloadWebImagesAction }?.let { downloadableNote ->
+                                            DropdownMenuItem(
+                                                text = { Text("下载网页图片") },
+                                                leadingIcon = { Icon(Icons.Outlined.Download, null) },
+                                                enabled = !isDownloadingWebImages,
+                                                onClick = { downloadWebImages(downloadableNote) },
+                                            )
                                         }
                                     }
                                 }
                             }
                         }
 
+                        if (isNewRegularNote) {
+                            WebClipAction()
+                        }
                         editorTopToolbarTopItems.forEach { item ->
                             when (item) {
                                 PrefsManager.EditorTopToolbarItemId.MINDMAP -> MindMapAction()
@@ -3348,7 +4245,8 @@ fun EditorScreen(
                 },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = backgroundColor),
                 )
-                AnimatedVisibility(
+                Box(modifier = Modifier.fillMaxWidth()) {
+                androidx.compose.animation.AnimatedVisibility(
                     visible = !showNoteSearch && showNoteDetailFileInfo,
                     enter = kardLeafSharedAxisYIn(
                         initialOffsetY = { height -> -height / 4 },
@@ -3359,18 +4257,13 @@ fun EditorScreen(
                         durationMillis = KardLeafMotion.MicroDurationMillis,
                     ),
                 ) {
-                    Text(
-                        text = noteFileInfoText,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    EditorFileInfoText(
+                        date = currentNote?.createdAt ?: fileInfoFallbackDate,
+                        charCount = editorContentLength,
+                        folder = folder,
                     )
                 }
-                AnimatedVisibility(
+                androidx.compose.animation.AnimatedVisibility(
                     visible = showNoteSearch && isEditing,
                     enter = kardLeafSharedAxisYIn(
                         initialOffsetY = { height -> -height / 4 },
@@ -3418,6 +4311,7 @@ fun EditorScreen(
                             onClick = { replaceAllSearchMatches() },
                         )
                     }
+                }
                 }
                 HorizontalDivider(
                     thickness = 0.6.dp,
@@ -3541,18 +4435,40 @@ fun EditorScreen(
                                     KardLeafCustomFeatures.ToolbarItem.HEADING -> ToolbarIconButton(text = "H1", bold = true, onClick = { applyHeadingAtCursor(1) })
                                     KardLeafCustomFeatures.ToolbarItem.HEADING2 -> ToolbarIconButton(text = "H2", bold = true, onClick = { applyHeadingAtCursor(2) })
                                     KardLeafCustomFeatures.ToolbarItem.HEADING3 -> ToolbarIconButton(text = "H3", bold = true, onClick = { applyHeadingAtCursor(3) })
-                                    KardLeafCustomFeatures.ToolbarItem.RULE -> ToolbarIconButton(text = "---", onClick = { insertAtCursorOrCommand("---\n", command = "insertHorizontalRule") })
+                                    KardLeafCustomFeatures.ToolbarItem.RULE -> ToolbarIconButton(
+                                        text = "",
+                                        icon = Icons.Outlined.HorizontalRule,
+                                        contentDescription = "分割线",
+                                        onClick = { insertAtCursorOrCommand("***\n", command = "insertHorizontalRule") },
+                                    )
                                     KardLeafCustomFeatures.ToolbarItem.BOLD -> ToolbarIconButton(text = "B", bold = true, onClick = { insertAtCursorOrCommand("**", "**", command = "toggleBold") })
                                     KardLeafCustomFeatures.ToolbarItem.ITALIC -> ToolbarIconButton(text = "I", italic = true, onClick = { insertAtCursorOrCommand("_", "_", command = "toggleItalic") })
-                                    KardLeafCustomFeatures.ToolbarItem.UNDERLINE -> ToolbarIconButton(text = "U", underline = true, onClick = { insertAtCursor("<u>", "</u>") })
+                                    KardLeafCustomFeatures.ToolbarItem.UNDERLINE -> ToolbarIconButton(text = "U", underline = true, onClick = { insertAtCursorOrCommand("<u>", "</u>", command = "toggleUnderline") })
                                     KardLeafCustomFeatures.ToolbarItem.STRIKE -> ToolbarIconButton(text = "S", strikethrough = true, onClick = { insertAtCursorOrCommand("~~", "~~", command = "toggleStrike") })
                                     KardLeafCustomFeatures.ToolbarItem.LINK -> ToolbarIconButton(text = "Link", onClick = { insertAtCursor("[", "](url)") })
                                     KardLeafCustomFeatures.ToolbarItem.CODE -> ToolbarIconButton(text = "`", onClick = { insertAtCursorOrCommand("`", "`", command = "toggleCode") })
                                     KardLeafCustomFeatures.ToolbarItem.CODE_BLOCK -> ToolbarIconButton(text = "```", onClick = { insertAtCursorOrCommand("```\n", "\n```", command = "insertCodeBlock") })
-                                    KardLeafCustomFeatures.ToolbarItem.QUOTE -> ToolbarIconButton(text = "\"", onClick = { insertAtCursorOrCommand("> ", command = "toggleBlockquote") })
+                                    KardLeafCustomFeatures.ToolbarItem.QUOTE -> ToolbarIconButton(
+                                        text = "",
+                                        icon = Icons.Outlined.FormatQuote,
+                                        contentDescription = "引用",
+                                        onClick = { insertAtCursorOrCommand("> ", command = "toggleBlockquote") },
+                                    )
                                     KardLeafCustomFeatures.ToolbarItem.MATH -> ToolbarIconButton(text = "$", onClick = { insertAtCursor("$", "$") })
                                     KardLeafCustomFeatures.ToolbarItem.BULLET -> ToolbarIconButton(text = "-", onClick = { insertAtCursorOrCommand("- ", command = "toggleUnorderedList") })
                                     KardLeafCustomFeatures.ToolbarItem.NUMBERED -> ToolbarIconButton(text = "1.", onClick = { insertAtCursorOrCommand("1. ", command = "toggleOrderedList") })
+                                    KardLeafCustomFeatures.ToolbarItem.INDENT -> ToolbarIconButton(
+                                        text = "",
+                                        icon = Icons.Outlined.FormatIndentIncrease,
+                                        contentDescription = "缩进",
+                                        onClick = { changeIndent(true) },
+                                    )
+                                    KardLeafCustomFeatures.ToolbarItem.OUTDENT -> ToolbarIconButton(
+                                        text = "",
+                                        icon = Icons.Outlined.FormatIndentDecrease,
+                                        contentDescription = "反缩进",
+                                        onClick = { changeIndent(false) },
+                                    )
                                     KardLeafCustomFeatures.ToolbarItem.CHECKBOX -> ToolbarIconButton(text = "[ ]", onClick = { insertAtCursorOrCommand("- [ ] ", command = "toggleCheckList") })
                                     KardLeafCustomFeatures.ToolbarItem.CHECKBOX_DONE -> ToolbarIconButton(text = "[x]", onClick = { insertAtCursor("- [x] ") })
                                     KardLeafCustomFeatures.ToolbarItem.TABLE -> ToolbarIconButton(text = "表格", onClick = { insertAtCursorOrCommand("| 列1 | 列2 |\n| --- | --- |\n| 内容 | 内容 |\n", command = "insertTable") })
@@ -3652,7 +4568,7 @@ fun EditorScreen(
                                                             DropdownMenuItem(
                                                                 text = { Text(label) },
                                                                 onClick = {
-                                                                    if (!runCodeMirrorCommand("toggleHeading", label.removePrefix("H").toIntOrNull() ?: 1)) {
+                                                                    if (!runEditorCommand("toggleHeading", label.removePrefix("H").toIntOrNull() ?: 1)) {
                                                                         insertAtCursor(md)
                                                                     }
                                                                     showHeadingMenu = false
@@ -3664,15 +4580,25 @@ fun EditorScreen(
                                         }
                                         KardLeafCustomFeatures.ToolbarItem.HEADING2 -> ToolbarIconButton(text = "H2", bold = true, onClick = { applyHeadingAtCursor(2) })
                                         KardLeafCustomFeatures.ToolbarItem.HEADING3 -> ToolbarIconButton(text = "H3", bold = true, onClick = { applyHeadingAtCursor(3) })
-                                        KardLeafCustomFeatures.ToolbarItem.RULE -> ToolbarIconButton(text = "---", onClick = { insertAtCursorOrCommand("---\n", command = "insertHorizontalRule") })
+                                        KardLeafCustomFeatures.ToolbarItem.RULE -> ToolbarIconButton(
+                                            text = "",
+                                            icon = Icons.Outlined.HorizontalRule,
+                                            contentDescription = "分割线",
+                                            onClick = { insertAtCursorOrCommand("***\n", command = "insertHorizontalRule") },
+                                        )
                                         KardLeafCustomFeatures.ToolbarItem.BOLD -> ToolbarIconButton(text = "B", bold = true, onClick = { insertAtCursorOrCommand("**", "**", command = "toggleBold") })
                                         KardLeafCustomFeatures.ToolbarItem.ITALIC -> ToolbarIconButton(text = "I", italic = true, onClick = { insertAtCursorOrCommand("_", "_", command = "toggleItalic") })
-                                        KardLeafCustomFeatures.ToolbarItem.UNDERLINE -> ToolbarIconButton(text = "U", underline = true, onClick = { insertAtCursor("<u>", "</u>") })
+                                        KardLeafCustomFeatures.ToolbarItem.UNDERLINE -> ToolbarIconButton(text = "U", underline = true, onClick = { insertAtCursorOrCommand("<u>", "</u>", command = "toggleUnderline") })
                                         KardLeafCustomFeatures.ToolbarItem.STRIKE -> ToolbarIconButton(text = "S", strikethrough = true, onClick = { insertAtCursorOrCommand("~~", "~~", command = "toggleStrike") })
                                         KardLeafCustomFeatures.ToolbarItem.LINK -> ToolbarIconButton(text = "Link", onClick = { insertAtCursor("[", "](url)") })
                                         KardLeafCustomFeatures.ToolbarItem.CODE -> ToolbarIconButton(text = "`", onClick = { insertAtCursorOrCommand("`", "`", command = "toggleCode") })
                                         KardLeafCustomFeatures.ToolbarItem.CODE_BLOCK -> ToolbarIconButton(text = "```", onClick = { insertAtCursorOrCommand("```\n", "\n```", command = "insertCodeBlock") })
-                                        KardLeafCustomFeatures.ToolbarItem.QUOTE -> ToolbarIconButton(text = "\"", onClick = { insertAtCursorOrCommand("> ", command = "toggleBlockquote") })
+                                        KardLeafCustomFeatures.ToolbarItem.QUOTE -> ToolbarIconButton(
+                                            text = "",
+                                            icon = Icons.Outlined.FormatQuote,
+                                            contentDescription = "引用",
+                                            onClick = { insertAtCursorOrCommand("> ", command = "toggleBlockquote") },
+                                        )
                                         KardLeafCustomFeatures.ToolbarItem.MATH -> {
                                             Box {
                                                 ToolbarIconButton(
@@ -3732,6 +4658,18 @@ fun EditorScreen(
                                         }
                                         KardLeafCustomFeatures.ToolbarItem.BULLET -> ToolbarIconButton(text = "-", onClick = { insertAtCursorOrCommand("- ", command = "toggleUnorderedList") })
                                         KardLeafCustomFeatures.ToolbarItem.NUMBERED -> ToolbarIconButton(text = "1.", onClick = { insertAtCursorOrCommand("1. ", command = "toggleOrderedList") })
+                                        KardLeafCustomFeatures.ToolbarItem.INDENT -> ToolbarIconButton(
+                                            text = "",
+                                            icon = Icons.Outlined.FormatIndentIncrease,
+                                            contentDescription = "缩进",
+                                            onClick = { changeIndent(true) },
+                                        )
+                                        KardLeafCustomFeatures.ToolbarItem.OUTDENT -> ToolbarIconButton(
+                                            text = "",
+                                            icon = Icons.Outlined.FormatIndentDecrease,
+                                            contentDescription = "反缩进",
+                                            onClick = { changeIndent(false) },
+                                        )
                                         KardLeafCustomFeatures.ToolbarItem.CHECKBOX -> ToolbarIconButton(text = "[ ]", onClick = { insertAtCursorOrCommand("- [ ] ", command = "toggleCheckList") })
                                         KardLeafCustomFeatures.ToolbarItem.CHECKBOX_DONE -> ToolbarIconButton(text = "[x]", onClick = { insertAtCursor("- [x] ") })
                                         KardLeafCustomFeatures.ToolbarItem.TABLE -> ToolbarIconButton(text = "表格", onClick = { insertAtCursorOrCommand("| 列1 | 列2 |\n| --- | --- |\n| 内容 | 内容 |\n", command = "insertTable") })
@@ -3768,7 +4706,7 @@ fun EditorScreen(
                     .then(noteSidePanelContentDragModifier)
                     .then(noteSidePanelActiveDragModifier),
         ) {
-            if (effectiveEditorOpen && isEditing && !isClosingEditor && !blocksDirectEditForLargeNote) {
+            if (effectiveEditorOpen && isEditing && !blocksDirectEditForLargeNote) {
                 KardLeafLog.d(
                     LARGE_NOTE_OPEN_TRACE_TAG,
                     "screen compose editor surface key=$editorDocumentKey kernel=$editorKernel useCodeMirror=$usesCodeMirrorLikeEditor " +
@@ -3777,8 +4715,8 @@ fun EditorScreen(
                 if (usesCodeMirrorLikeEditor) {
                     KardLeafLog.d(
                         TITLE_TRACE_TAG,
-                        "title render key=$editorDocumentKey engine=CODEMIRROR showTitle=$showBars " +
-                            "showBars=$showBars hideDraftTitle=$hideDraftTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
+                        "title render key=$editorDocumentKey engine=CODEMIRROR showTitle=${showBars && !hideQuickNoteTitleInEditor} " +
+                            "showBars=$showBars hideQuickNoteTitle=$hideQuickNoteTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
                             "showDetailTitle=$showNoteDetailTitle rawInitialTitle=$rawInitialTitle initialTitle=$initialTitle " +
                             "displayInitialTitle=$displayInitialTitle keepLastTitleForEmptyExternal=$keepLastTitleForEmptyExternal " +
                             "lastValidTitleLen=${lastValidEditorDisplayTitle.length} currentPath=${currentNote?.file?.path} currentTitle=${currentNote?.title}",
@@ -3791,10 +4729,14 @@ fun EditorScreen(
                         scrollController = codeMirrorScrollController,
                         onTitleChanged = { markEditorDirty() },
                         onContentChanged = {
+                            editorContentLength.value = editorController.getContentLength()
                             markEditorDirty()
                             syncUndoRedoState()
                         },
-                        onContentEdited = { markEditorDirty() },
+                        onContentEdited = {
+                            editorContentLength.value = editorController.getContentLength()
+                            markEditorDirty()
+                        },
                         onUndoRedoStateChanged = { syncUndoRedoState() },
                         onUserInteraction = { hideNoteSearchCursor("codemirror editor touch") },
                         onFastScrollSourceScrolled = { fastScrollSignal.notifyScrollChanged() },
@@ -3808,8 +4750,18 @@ fun EditorScreen(
                         contentParagraphSpacingDp = editorParagraphSpacingDp,
                         contentFontFamily = editorFontFamily,
                         isDark = isDark,
-                        showTitle = showBars,
+                        showTitle = showBars && !hideQuickNoteTitleInEditor,
                         livePreviewEnabled = codeMirrorLivePreviewEnabled,
+                        keyboardInsetPx = (
+                            imeInsets.getBottom(density) - navigationBarsInsets.getBottom(density)
+                        ).coerceAtLeast(0),
+                        requestFocusToken = editorFocusRequestToken,
+                        preferredFocusSelection = editEntrySelection,
+                        onDrawingImageClicked = { target -> handleImageClicked(target) },
+                        wikilinkNotes = allNotes,
+                        onInternalLinkOpen = { target ->
+                            viewModel.openWikilinkTarget(target, currentNote?.file?.path.orEmpty())
+                        },
                         resolveImages = { markdown ->
                             viewModel.resolveMarkdownImageDataUris(markdown, folder).map { image ->
                                 KardLeafCodeMirrorImage(
@@ -3839,27 +4791,20 @@ fun EditorScreen(
                             }
                             .then(userPerfAreaFirstFrameModifier("codeMirror")),
                     )
-                } else {
-                    KardLeafLog.d(
-                        TITLE_TRACE_TAG,
-                        "title render key=$editorDocumentKey engine=NATIVE showTitle=${showBars && !hideDraftTitleInEditor} " +
-                            "showBars=$showBars hideDraftTitle=$hideDraftTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
-                            "showDetailTitle=$showNoteDetailTitle rawInitialTitle=$rawInitialTitle initialTitle=$initialTitle " +
-                            "displayInitialTitle=$displayInitialTitle keepLastTitleForEmptyExternal=$keepLastTitleForEmptyExternal " +
-                            "lastValidTitleLen=${lastValidEditorDisplayTitle.length} currentPath=${currentNote?.file?.path} currentTitle=${currentNote?.title}",
-                    )
-                    KardLeafNativeEditor(
+                } else if (usesQuillpadStyleEditor) {
+                    KardLeafQuillpadEditor(
                         initialTitle = editorSurfaceTitle,
                         initialContent = editorSurfaceContent,
                         documentKey = editorDocumentKey,
                         controller = editorController,
                         onTitleChanged = { markEditorDirty() },
                         onContentChanged = {
+                            editorContentLength.value = editorController.getContentLength()
                             markEditorDirty()
                             syncUndoRedoState()
                         },
                         onUndoRedoChanged = { syncUndoRedoState() },
-                        onUserInteraction = { hideNoteSearchCursor("editor content touch") },
+                        onUserInteraction = { hideNoteSearchCursor("quillpad editor touch") },
                         onFastScrollSourceScrolled = { fastScrollSignal.notifyScrollChanged() },
                         onInlineImageClicked = { reference -> openDrawingPadForReference(reference) },
                         titleHint = stringResource(R.string.title_hint),
@@ -3874,18 +4819,93 @@ fun EditorScreen(
                         contentFontFamily = editorFontFamily,
                         requestFocusToken = editorFocusRequestToken,
                         initialSelection = editorSurfaceSelection,
-                        showTitle = showBars && !hideDraftTitleInEditor,
+                        showTitle = showBars && !hideQuickNoteTitleInEditor,
                         currentFolder = folder,
+                        inlineImagePreviewEnabled = editingImagePreviewEnabled,
                         readOnly = usesOpeningEditShell,
+                        imeBottomPx = imeInsets.getBottom(density),
+                        openSession = editorOpenSession,
+                        onFrameCommitted = onEditorFrameCommitted,
                         userPerfOpenStartRealtimeMs = userPerfOpenStartMs,
                         userPerfSizeTier = userPerfSizeTier,
                         modifier = Modifier
                             .fillMaxSize()
+                            .imePadding()
+                            .then(userPerfAreaFirstFrameModifier("quillpadStyle")),
+                    )
+                } else {
+                    KardLeafLog.d(
+                        TITLE_TRACE_TAG,
+                        "title render key=$editorDocumentKey engine=NATIVE showTitle=${showBars && !hideQuickNoteTitleInEditor} " +
+                            "showBars=$showBars hideQuickNoteTitle=$hideQuickNoteTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
+                            "showDetailTitle=$showNoteDetailTitle rawInitialTitle=$rawInitialTitle initialTitle=$initialTitle " +
+                            "displayInitialTitle=$displayInitialTitle keepLastTitleForEmptyExternal=$keepLastTitleForEmptyExternal " +
+                            "lastValidTitleLen=${lastValidEditorDisplayTitle.length} currentPath=${currentNote?.file?.path} currentTitle=${currentNote?.title}",
+                    )
+                    KardLeafNativeEditor(
+                        initialTitle = editorSurfaceTitle,
+                        initialContent = editorSurfaceContent,
+                        documentKey = editorDocumentKey,
+                        controller = editorController,
+                        onTitleChanged = { markEditorDirty() },
+                        onContentChanged = {
+                            editorContentLength.value = editorController.getContentLength()
+                            markEditorDirty()
+                            syncUndoRedoState()
+                        },
+                        onUndoRedoChanged = { syncUndoRedoState() },
+                        onUserInteraction = { hideNoteSearchCursor("editor content touch") },
+                        onFastScrollSourceScrolled = { fastScrollSignal.notifyScrollChanged() },
+                        onInlineImageClicked = { target -> handleImageClicked(target) },
+                        titleHint = stringResource(R.string.title_hint),
+                        contentHint = stringResource(R.string.start_typing_hint),
+                        textColor = MaterialTheme.colorScheme.onBackground,
+                        hintColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        titleTextSize = MaterialTheme.typography.titleLarge.fontSize,
+                        contentTextSize = editorFontSizeSp.sp,
+                        contentLineHeightMultiplier = editorLineHeightMultiplier,
+                        contentLetterSpacingSp = editorLetterSpacingSp,
+                        contentParagraphSpacingDp = editorParagraphSpacingDp,
+                        contentFontFamily = editorFontFamily,
+                        requestFocusToken = editorFocusRequestToken,
+                        initialSelection = editorSurfaceSelection,
+                        showTitle = showBars && !hideQuickNoteTitleInEditor,
+                        currentFolder = folder,
+                        inlineImagePreviewEnabled = editingImagePreviewEnabled,
+                        readOnly = usesOpeningEditShell,
+                        userPerfOpenStartRealtimeMs = userPerfOpenStartMs,
+                        userPerfSizeTier = userPerfSizeTier,
+                        openSession = editorOpenSession,
+                        onFrameCommitted = onEditorFrameCommitted,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .imePadding()
                             .then(userPerfAreaFirstFrameModifier("nativeEditor")),
                     )
                 }
             } else if (effectiveEditorOpen) {
-                if (showsLargePlainTextPreview) {
+                if (usesCodeMirrorLikeEditor && isOpeningNoteContent) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(backgroundColor)
+                            .padding(start = 16.dp, end = 16.dp, top = 6.dp),
+                    ) {
+                        if (showBars && editorSurfaceTitle.isNotBlank()) {
+                            Text(
+                                text = editorSurfaceTitle,
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                            )
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                            )
+                        }
+                    }
+                } else if (showsLargePlainTextPreview) {
                     val plainSnapshot = largePlainPreviewSnapshot
                     KardLeafLog.d(
                         TITLE_TRACE_TAG,
@@ -3894,7 +4914,7 @@ fun EditorScreen(
                             "initialTitle=$initialTitle initialTitleLen=${initialTitle.length} displayInitialTitle=$displayInitialTitle " +
                             "displayInitialTitleLen=${displayInitialTitle.length} keepLastTitleForEmptyExternal=$keepLastTitleForEmptyExternal " +
                             "lastValidTitleLen=${lastValidEditorDisplayTitle.length} " +
-                            "showDetailTitle=$showNoteDetailTitle hideDraftTitle=$hideDraftTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
+                            "showDetailTitle=$showNoteDetailTitle hideQuickNoteTitle=$hideQuickNoteTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
                             "currentPath=${currentNote?.file?.path} currentTitle=${currentNote?.title}",
                     )
                     LargePlainTextPreview(
@@ -3945,9 +4965,16 @@ fun EditorScreen(
                         onScrollRatioChanged = { previewScrollRatio = it },
                         onFastScrollSourceScrolled = { fastScrollSignal.notifyScrollChanged() },
                         onImageClicked = { index ->
-                            previewImageReferences.getOrNull(index)?.let { reference ->
-                                openDrawingPadForReference(reference)
+                            previewImageTargets.getOrNull(index)?.let { target ->
+                                KardLeafLog.d(
+                                    "KardLeafImageTrace",
+                                    "preview image click index=$index reference=${target.reference} occurrence=${target.occurrenceIndex}",
+                                )
+                                handleImageClicked(target)
                             }
+                        },
+                        onInternalLinkOpen = { target ->
+                            viewModel.openWikilinkTarget(target, currentNote?.file?.path.orEmpty())
                         },
                         onContentRendered = { length, contentHash ->
                             lastRenderedPreviewSignature = length to contentHash
@@ -3977,6 +5004,7 @@ fun EditorScreen(
                         contentLetterSpacingSp = editorLetterSpacingSp,
                         contentParagraphSpacingDp = editorParagraphSpacingDp,
                         contentFontFamily = editorFontFamily,
+                        previewTheme = previewThemeId,
                         onCheckboxToggled = { index, checked ->
                             if (!isOpeningNoteContent) {
                                 val snapshot = editorController.getSnapshot()
@@ -4037,7 +5065,8 @@ fun EditorScreen(
                         Modifier
                             .align(Alignment.CenterEnd)
                             .fillMaxHeight()
-                            .width(noteSidePanelEdgeWidth)
+                            .width(editorFastScrollEdgeWidth)
+                            .padding(bottom = editorFastScrollBottomPadding)
                             .zIndex(4f),
                     factory = { fastScrollContext -> EditorFastScrollEdgeView(fastScrollContext) },
                     update = { fastScrollView ->
@@ -4140,7 +5169,7 @@ fun EditorScreen(
                         parentIndex = parentIndex,
                     )
                     if (reparentResult == null) {
-                        Toast.makeText(context, "没有可调整的标题层级", Toast.LENGTH_SHORT).show()
+                        context.showToast("没有可调整的标题层级")
                     } else {
                         val updatedSnapshot = editSnapshot.copy(content = reparentResult.content)
                         editorController.replaceAll(reparentResult.content, reparentResult.selection)
@@ -4153,14 +5182,10 @@ fun EditorScreen(
                         if (!isEditing) {
                             renderPreviewSnapshot(updatedSnapshot)
                         }
-                        Toast.makeText(
-                            context,
-                            "已将「${reparentResult.movedTitle}」移动到「${reparentResult.parentTitle}」下",
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                        context.showToast("已将「${reparentResult.movedTitle}」移动到「${reparentResult.parentTitle}」下")
                     }
                 },
-                onNodeAddChild = { parentIndex ->
+                onNodeAddChild = { parentIndex, childTitle ->
                     val editSnapshot = editorController.getSnapshot()
                     val prepareResult = prepareMarkdownMindMap(editSnapshot.content)
                     if (prepareResult.unavailableTitle != null) {
@@ -4172,9 +5197,10 @@ fun EditorScreen(
                             content = editSnapshot.content,
                             headings = prepareResult.headings,
                             parentIndex = parentIndex,
+                            title = childTitle,
                         )
                         if (addResult == null) {
-                            Toast.makeText(context, "当前节点不能继续添加子节点", Toast.LENGTH_SHORT).show()
+                            context.showToast("当前节点不能继续添加子节点")
                         } else {
                             val updatedSnapshot = editSnapshot.copy(content = addResult.content)
                             editorController.replaceAll(addResult.content, addResult.selection)
@@ -4187,12 +5213,136 @@ fun EditorScreen(
                             if (!isEditing) {
                                 renderPreviewSnapshot(updatedSnapshot)
                             }
-                            Toast.makeText(
-                                context,
-                                "已在「${addResult.parentTitle}」下添加子节点",
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                            context.showToast("已在「${addResult.parentTitle}」下添加子节点")
                         }
+                    }
+                },
+                onNodeAddSibling = { anchorIndex, siblingTitle ->
+                    val editSnapshot = editorController.getSnapshot()
+                    val prepareResult = prepareMarkdownMindMap(editSnapshot.content)
+                    if (prepareResult.unavailableTitle != null) {
+                        mindMapHeadings = prepareResult.headings
+                        mindMapUnavailableTitle = prepareResult.unavailableTitle
+                        mindMapUnavailableMessage = prepareResult.unavailableMessage
+                    } else {
+                        val addResult = addMarkdownHeadingSiblingAfter(
+                            content = editSnapshot.content,
+                            headings = prepareResult.headings,
+                            anchorIndex = anchorIndex,
+                            title = siblingTitle,
+                        )
+                        if (addResult == null) {
+                            context.showToast("当前节点不能添加同级节点")
+                        } else {
+                            val updatedSnapshot = editSnapshot.copy(content = addResult.content)
+                            editorController.replaceAll(addResult.content, addResult.selection)
+                            prepareMarkdownMindMap(addResult.content).also { result ->
+                                mindMapHeadings = result.headings
+                                mindMapUnavailableTitle = result.unavailableTitle
+                                mindMapUnavailableMessage = result.unavailableMessage
+                            }
+                            markEditorDirty()
+                            if (!isEditing) {
+                                renderPreviewSnapshot(updatedSnapshot)
+                            }
+                            context.showToast("已在「${addResult.anchorTitle}」后添加同级节点")
+                        }
+                    }
+                },
+                onNodeMove = { nodeIndex, moveUp ->
+                    val editSnapshot = editorController.getSnapshot()
+                    val currentHeadings = extractMarkdownHeadings(editSnapshot.content)
+                    val moveResult = moveMarkdownHeadingSubtree(
+                        content = editSnapshot.content,
+                        headings = currentHeadings,
+                        nodeIndex = nodeIndex,
+                        moveUp = moveUp,
+                    )
+                    if (moveResult == null) {
+                        context.showToast(if (moveUp) "已经是同级中的第一个节点" else "已经是同级中的最后一个节点")
+                    } else {
+                        val updatedSnapshot = editSnapshot.copy(content = moveResult.content)
+                        editorController.replaceAll(moveResult.content, moveResult.selection)
+                        prepareMarkdownMindMap(moveResult.content).also { result ->
+                            mindMapHeadings = result.headings
+                            mindMapUnavailableTitle = result.unavailableTitle
+                            mindMapUnavailableMessage = result.unavailableMessage
+                        }
+                        markEditorDirty()
+                        if (!isEditing) {
+                            renderPreviewSnapshot(updatedSnapshot)
+                        }
+                        context.showToast(if (moveUp) "已上移「${moveResult.movedTitle}」" else "已下移「${moveResult.movedTitle}」")
+                    }
+                },
+                onNodeRename = { nodeIndex, renamedTitle ->
+                    val editSnapshot = editorController.getSnapshot()
+                    val currentHeadings = extractMarkdownHeadings(editSnapshot.content)
+                    val renameResult = renameMarkdownHeading(
+                        content = editSnapshot.content,
+                        headings = currentHeadings,
+                        nodeIndex = nodeIndex,
+                        title = renamedTitle,
+                    )
+                    if (renameResult == null) {
+                        context.showToast("节点名称没有变化")
+                    } else {
+                        val updatedSnapshot = editSnapshot.copy(content = renameResult.content)
+                        editorController.replaceAll(renameResult.content, renameResult.selection)
+                        prepareMarkdownMindMap(renameResult.content).also { result ->
+                            mindMapHeadings = result.headings
+                            mindMapUnavailableTitle = result.unavailableTitle
+                            mindMapUnavailableMessage = result.unavailableMessage
+                        }
+                        markEditorDirty()
+                        if (!isEditing) {
+                            renderPreviewSnapshot(updatedSnapshot)
+                        }
+                        context.showToast("已重命名为「${renameResult.renamedTitle}」")
+                    }
+                },
+                onNodeDelete = { nodeIndex ->
+                    val editSnapshot = editorController.getSnapshot()
+                    val currentHeadings = extractMarkdownHeadings(editSnapshot.content)
+                    val deleteResult = deleteMarkdownHeadingSubtree(
+                        content = editSnapshot.content,
+                        headings = currentHeadings,
+                        nodeIndex = nodeIndex,
+                    )
+                    if (deleteResult == null) {
+                        context.showToast("当前节点无法删除")
+                    } else {
+                        val updatedSnapshot = editSnapshot.copy(content = deleteResult.content)
+                        editorController.replaceAll(deleteResult.content, deleteResult.selection)
+                        prepareMarkdownMindMap(deleteResult.content).also { result ->
+                            mindMapHeadings = result.headings
+                            mindMapUnavailableTitle = result.unavailableTitle
+                            mindMapUnavailableMessage = result.unavailableMessage
+                        }
+                        markEditorDirty()
+                        if (!isEditing) {
+                            renderPreviewSnapshot(updatedSnapshot)
+                        }
+                        context.showToast("已删除「${deleteResult.deletedTitle}」及其子节点")
+                    }
+                },
+            )
+        }
+        if (viewingImageTarget != null) {
+            ImageViewerScreen(
+                resource = viewerResource,
+                isLoading = viewerLoading,
+                modifier = Modifier.zIndex(12f),
+                onDismiss = {
+                    viewingImageTarget = null
+                    viewerResource = null
+                    viewerLoading = false
+                },
+                onEdit = {
+                    val target = viewingImageTarget
+                    val resource = viewerResource
+                    if (target != null && resource != null) {
+                        openImageEditor(target, resource)
                     }
                 },
             )
@@ -4205,12 +5355,19 @@ fun EditorScreen(
                     closeEditorWhenDashboardDrawingDismissed = false
                     editingDrawingReference = null
                     editingDrawingSource = null
+                    editingImageResource = null
+                    editingImageTarget = null
                     showDrawingPad = false
                     if (shouldCloseEditor) {
                         leaveEditor()
                     }
                 },
                 initialDrawingSource = editingDrawingSource,
+                initialBackgroundBitmap = editingImageResource?.backgroundBitmap,
+                initialSourceWidth = editingImageResource?.sourceWidth ?: 0,
+                initialSourceHeight = editingImageResource?.sourceHeight ?: 0,
+                initialBackgroundMimeType = editingImageResource?.mimeType,
+                initialExifOrientation = editingImageResource?.exifOrientation ?: 1,
                 onSave = { bitmap, drawingSource -> saveDrawingImage(bitmap, drawingSource) },
             )
         }
@@ -4235,6 +5392,9 @@ fun EditorScreen(
             NoteRemarkSidePanel(
                 frontMatterProperties = noteSidePanelProperties,
                 textStats = noteTextStats,
+                outgoingLinks = outgoingWikilinks,
+                backlinkLinks = backlinks,
+                onLinkClick = { path -> viewModel.openNoteByPath(path) },
                 remarks = noteRemarks,
                 draft = noteRemarkDraft,
                 onDraftChange = { noteRemarkDraft = it },
@@ -4246,7 +5406,7 @@ fun EditorScreen(
                                 noteRemarkRefreshVersion++
                             }
                             noteRemarkDraft = ""
-                            Toast.makeText(context, "备注已添加", Toast.LENGTH_SHORT).show()
+                            context.showToast("备注已添加")
                         }
                     }
                 },
@@ -4256,12 +5416,12 @@ fun EditorScreen(
                         viewModel.updateNoteRemark(remark.id, updatedContent) {
                             noteRemarkRefreshVersion++
                         }
-                        Toast.makeText(context, "备注已更新", Toast.LENGTH_SHORT).show()
+                        context.showToast("备注已更新")
                     }
                 },
                 onDelete = { remark ->
                     viewModel.deleteNoteRemark(remark.id)
-                    Toast.makeText(context, "备注已删除", Toast.LENGTH_SHORT).show()
+                    context.showToast("备注已删除")
                 },
                 modifier =
                     Modifier
@@ -4280,481 +5440,4 @@ fun EditorScreen(
         }
     }
 }
-
-
-private fun noteSearchSnippetForLog(text: String, start: Int, end: Int): String {
-    if (start < 0 || end <= start || start >= text.length) return ""
-    return text.substring(start.coerceAtLeast(0), end.coerceAtMost(text.length))
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-        .take(32)
-}
-
-private data class NoteSearchMatchRange(
-    val start: Int,
-    val end: Int,
-)
-
-private data class NoteSearchMatchesResult(
-    val matches: List<NoteSearchMatchRange> = emptyList(),
-    val errorMessage: String? = null,
-)
-
-private data class NoteSearchReplacementResult(
-    val text: String? = null,
-    val count: Int = 0,
-    val errorMessage: String? = null,
-)
-
-private data class SearchMatchSummary(
-    val count: Int,
-    val currentStart: Int,
-    val currentEnd: Int,
-    val currentOrdinal: Int,
-    val errorMessage: String? = null,
-)
-
-private fun summarizeNoteSearchMatches(
-    text: String,
-    query: String,
-    preferredStart: Int,
-    useRegex: Boolean,
-    matchCase: Boolean,
-): SearchMatchSummary {
-    val result = buildNoteSearchMatches(text, query, useRegex, matchCase)
-    result.errorMessage?.let { return SearchMatchSummary(0, -1, -1, 0, it) }
-    val matches = result.matches
-    if (matches.isEmpty()) return SearchMatchSummary(0, -1, -1, 0)
-    val preferredIndex = matches.indexOfFirst { it.start == preferredStart }
-    val currentIndex = if (preferredIndex >= 0) preferredIndex else 0
-    val current = matches[currentIndex]
-    return SearchMatchSummary(
-        count = matches.size,
-        currentStart = current.start,
-        currentEnd = current.end,
-        currentOrdinal = currentIndex + 1,
-    )
-}
-
-private fun buildNoteSearchMatches(
-    text: String,
-    query: String,
-    useRegex: Boolean,
-    matchCase: Boolean,
-): NoteSearchMatchesResult {
-    if (text.isEmpty() || query.isBlank()) return NoteSearchMatchesResult()
-    return if (useRegex) {
-        val pattern = createNoteSearchPattern(query, matchCase)
-            ?: return NoteSearchMatchesResult(errorMessage = "正则表达式无效")
-        val matcher = pattern.matcher(text)
-        val matches = buildList {
-            while (matcher.find()) {
-                val start = matcher.start().coerceIn(0, text.length)
-                val end = matcher.end().coerceIn(0, text.length)
-                if (end > start) add(NoteSearchMatchRange(start, end))
-            }
-        }
-        NoteSearchMatchesResult(matches = matches)
-    } else {
-        val matches = buildList {
-            var searchFrom = 0
-            while (searchFrom <= text.length - query.length) {
-                val index = text.indexOf(query, startIndex = searchFrom, ignoreCase = !matchCase)
-                if (index < 0) break
-                val end = index + query.length
-                add(NoteSearchMatchRange(index, end))
-                searchFrom = end.coerceAtLeast(index + 1)
-            }
-        }
-        NoteSearchMatchesResult(matches = matches)
-    }
-}
-
-private fun buildCurrentReplacement(
-    text: String,
-    range: NoteSearchMatchRange,
-    query: String,
-    replacement: String,
-    useRegex: Boolean,
-    matchCase: Boolean,
-): NoteSearchReplacementResult {
-    if (!useRegex) return NoteSearchReplacementResult(text = replacement, count = 1)
-    val pattern = createNoteSearchPattern(query, matchCase)
-        ?: return NoteSearchReplacementResult(errorMessage = "正则表达式无效")
-    val matcher = pattern.matcher(text)
-    while (matcher.find()) {
-        val start = matcher.start().coerceIn(0, text.length)
-        val end = matcher.end().coerceIn(0, text.length)
-        if (start == range.start && end == range.end) {
-            val expanded = expandRegexReplacement(replacement, matcher)
-                ?: return NoteSearchReplacementResult(errorMessage = "替换内容包含无效的正则引用")
-            return NoteSearchReplacementResult(text = expanded, count = 1)
-        }
-    }
-    return NoteSearchReplacementResult(errorMessage = "没有找到要替换的文本")
-}
-
-private fun replaceAllNoteSearchMatches(
-    text: String,
-    query: String,
-    replacement: String,
-    useRegex: Boolean,
-    matchCase: Boolean,
-): NoteSearchReplacementResult {
-    if (text.isEmpty() || query.isBlank()) return NoteSearchReplacementResult(text = text)
-    if (!useRegex) {
-        val builder = StringBuilder(text.length)
-        var count = 0
-        var searchFrom = 0
-        while (searchFrom <= text.length - query.length) {
-            val index = text.indexOf(query, startIndex = searchFrom, ignoreCase = !matchCase)
-            if (index < 0) break
-            builder.append(text, searchFrom, index)
-            builder.append(replacement)
-            searchFrom = index + query.length
-            count++
-        }
-        if (count == 0) return NoteSearchReplacementResult(text = text)
-        builder.append(text, searchFrom, text.length)
-        return NoteSearchReplacementResult(text = builder.toString(), count = count)
-    }
-
-    val pattern = createNoteSearchPattern(query, matchCase)
-        ?: return NoteSearchReplacementResult(errorMessage = "正则表达式无效")
-    val matcher = pattern.matcher(text)
-    val builder = StringBuilder(text.length)
-    var count = 0
-    var lastEnd = 0
-    while (matcher.find()) {
-        val start = matcher.start().coerceIn(0, text.length)
-        val end = matcher.end().coerceIn(0, text.length)
-        if (end <= start) continue
-        builder.append(text, lastEnd, start)
-        val expanded = expandRegexReplacement(replacement, matcher)
-            ?: return NoteSearchReplacementResult(errorMessage = "替换内容包含无效的正则引用")
-        builder.append(expanded)
-        lastEnd = end
-        count++
-    }
-    if (count == 0) return NoteSearchReplacementResult(text = text)
-    builder.append(text, lastEnd, text.length)
-    return NoteSearchReplacementResult(text = builder.toString(), count = count)
-}
-
-private fun createNoteSearchPattern(
-    query: String,
-    matchCase: Boolean,
-): Pattern? =
-    try {
-        val caseFlags = if (matchCase) {
-            0
-        } else {
-            Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
-        }
-        Pattern.compile(query, Pattern.MULTILINE or caseFlags)
-    } catch (_: PatternSyntaxException) {
-        null
-    }
-
-private fun expandRegexReplacement(
-    replacement: String,
-    matcher: java.util.regex.Matcher,
-): String? {
-    val builder = StringBuilder(replacement.length)
-    var index = 0
-    while (index < replacement.length) {
-        val char = replacement[index]
-        when {
-            char == '\\' && index + 1 < replacement.length -> {
-                builder.append(replacement[index + 1])
-                index += 2
-            }
-            char == '$' -> {
-                var cursor = index + 1
-                if (cursor >= replacement.length || !replacement[cursor].isDigit()) return null
-                while (cursor < replacement.length && replacement[cursor].isDigit()) cursor++
-                val groupIndex = replacement.substring(index + 1, cursor).toIntOrNull() ?: return null
-                val groupText = try {
-                    matcher.group(groupIndex).orEmpty()
-                } catch (_: RuntimeException) {
-                    return null
-                }
-                builder.append(groupText)
-                index = cursor
-            }
-            else -> {
-                builder.append(char)
-                index++
-            }
-        }
-    }
-    return builder.toString()
-}
-
-private fun buildNoteSidePanelProperties(
-    frontMatterProperties: List<NoteFormatUtils.FrontMatterProperty>,
-    note: Note?,
-    title: String,
-): List<NoteFormatUtils.FrontMatterProperty> {
-    if (frontMatterProperties.isNotEmpty()) return frontMatterProperties
-    val currentNote = note ?: return emptyList()
-    return buildList {
-        title.trim().takeIf { it.isNotBlank() }?.let { value ->
-            add(NoteFormatUtils.FrontMatterProperty(key = "title", values = listOf(value)))
-        }
-        currentNote.file.path.trim().takeIf { it.isNotBlank() }?.let { value ->
-            add(NoteFormatUtils.FrontMatterProperty(key = "path", values = listOf(value)))
-        }
-        add(
-            NoteFormatUtils.FrontMatterProperty(
-                key = "created",
-                values = listOf(formatNoteSidePanelTime(currentNote.createdAt)),
-            ),
-        )
-        add(
-            NoteFormatUtils.FrontMatterProperty(
-                key = "updated",
-                values = listOf(formatNoteSidePanelTime(currentNote.lastModified)),
-            ),
-        )
-    }
-}
-
-private fun formatNoteSidePanelTime(date: Date): String =
-    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(date)
-
-
-private data class MindMapPrepareResult(
-    val headings: List<MarkdownHeading>,
-    val unavailableTitle: String? = null,
-    val unavailableMessage: String? = null,
-)
-
-private fun blockedLargeMindMapResult(contentLength: Int): MindMapPrepareResult =
-    MindMapPrepareResult(
-        headings = emptyList(),
-        unavailableTitle = "笔记过大",
-        unavailableMessage = "当前笔记约 ${contentLength.coerceAtLeast(0)} 字，已停止生成思维导图，避免误触后卡死。",
-    )
-
-private fun prepareMarkdownMindMap(content: String): MindMapPrepareResult {
-    if (content.length > KardLeafContentLimits.MIND_MAP_MAX_CONTENT_CHARS) {
-        return blockedLargeMindMapResult(content.length)
-    }
-    val headings = extractMarkdownHeadings(content)
-    if (headings.size > KardLeafContentLimits.MIND_MAP_MAX_HEADING_COUNT) {
-        return MindMapPrepareResult(
-            headings = emptyList(),
-            unavailableTitle = "节点过多",
-            unavailableMessage = "当前笔记检测到 ${headings.size} 个标题节点，已停止生成思维导图，避免 WebView 渲染过重。",
-        )
-    }
-    val nonStandardReason = validateStandardMindMapHeadings(headings)
-    if (nonStandardReason != null) {
-        return MindMapPrepareResult(
-            headings = emptyList(),
-            unavailableTitle = "非标准思维导图格式",
-            unavailableMessage = nonStandardReason,
-        )
-    }
-    return MindMapPrepareResult(headings = headings)
-}
-
-private fun validateStandardMindMapHeadings(headings: List<MarkdownHeading>): String? {
-    if (headings.isEmpty()) {
-        return "当前笔记没有检测到标准 Markdown 标题。思维导图需要使用 # 一级节点、## 二级节点、### 三级节点这类结构。"
-    }
-    val first = headings.first()
-    if (first.level != 1) {
-        return "第 ${first.lineIndex + 1} 行不是一级标题。标准思维导图需要从 # 一级节点开始。"
-    }
-    headings.zipWithNext().forEach { (previous, current) ->
-        if (current.level > previous.level + 1) {
-            return "第 ${current.lineIndex + 1} 行标题层级跳级。请不要从 H${previous.level} 直接跳到 H${current.level}。"
-        }
-    }
-    return null
-}
-
-
-private data class MindMapReparentResult(
-    val content: String,
-    val selection: TextRange,
-    val movedTitle: String,
-    val parentTitle: String,
-)
-
-private data class MindMapAddChildResult(
-    val content: String,
-    val selection: TextRange,
-    val parentTitle: String,
-)
-
-private fun addMarkdownHeadingChild(
-    content: String,
-    headings: List<MarkdownHeading>,
-    parentIndex: Int,
-): MindMapAddChildResult? {
-    val parent = if (parentIndex >= 0) headings.getOrNull(parentIndex) ?: return null else null
-    val childLevel = ((parent?.level ?: 0) + 1).coerceIn(1, 6)
-    if (parent != null && parent.level >= 6) return null
-
-    val parentSubtreeEnd = if (parent == null) headings.size else findMarkdownHeadingSubtreeEnd(headings, parentIndex)
-    val insertAt = if (parent == null) {
-        content.length
-    } else {
-        headings.getOrNull(parentSubtreeEnd)
-            ?.let { findLineStart(content, it.startOffset) }
-            ?: content.length
-    }.coerceIn(0, content.length)
-
-    val newTitle = "新节点"
-    val marker = "#".repeat(childLevel) + " "
-    val prefix = when {
-        insertAt == 0 -> ""
-        content.getOrNull(insertAt - 1) == '\n' || content.getOrNull(insertAt - 1) == '\r' -> ""
-        else -> "\n"
-    }
-    val suffix = when {
-        insertAt >= content.length -> "\n"
-        content.getOrNull(insertAt) == '\n' || content.getOrNull(insertAt) == '\r' -> ""
-        else -> "\n"
-    }
-    val insertion = prefix + marker + newTitle + suffix
-    val updatedContent = content.substring(0, insertAt) + insertion + content.substring(insertAt)
-    val titleStart = insertAt + prefix.length + marker.length
-    val titleEnd = titleStart + newTitle.length
-
-    return MindMapAddChildResult(
-        content = updatedContent,
-        selection = TextRange(titleStart, titleEnd),
-        parentTitle = parent?.text?.ifBlank { "未命名节点" } ?: "根节点",
-    )
-}
-
-private fun reparentMarkdownHeading(
-    content: String,
-    headings: List<MarkdownHeading>,
-    movingIndex: Int,
-    parentIndex: Int,
-): MindMapReparentResult? {
-    val moving = headings.getOrNull(movingIndex) ?: return null
-    val parent = if (parentIndex >= 0) headings.getOrNull(parentIndex) else null
-    if (parentIndex == movingIndex) return null
-
-    val movingSubtreeEnd = findMarkdownHeadingSubtreeEnd(headings, movingIndex)
-    if (parentIndex in movingIndex until movingSubtreeEnd) return null
-
-    val blockStart = findLineStart(content, moving.startOffset)
-    val blockEnd = headings.getOrNull(movingSubtreeEnd)
-        ?.let { findLineStart(content, it.startOffset) }
-        ?: content.length
-    if (blockStart !in 0..blockEnd || blockEnd > content.length) return null
-
-    val targetSubtreeEnd = if (parent == null) {
-        headings.size
-    } else {
-        findMarkdownHeadingSubtreeEnd(headings, parentIndex)
-    }
-    val targetEnd = if (parent == null) {
-        content.length
-    } else {
-        headings.getOrNull(targetSubtreeEnd)
-            ?.let { findLineStart(content, it.startOffset) }
-            ?: content.length
-    }
-    if (targetEnd in (blockStart + 1) until blockEnd) return null
-
-    val targetLevel = ((parent?.level ?: 0) + 1).coerceIn(1, 6)
-    val levelDelta = targetLevel - moving.level
-    val originalBlock = content.substring(blockStart, blockEnd)
-    val updatedBlock = if (levelDelta == 0) {
-        originalBlock
-    } else {
-        adjustMarkdownHeadingLevelsInBlock(
-            block = originalBlock,
-            contentBlockStart = blockStart,
-            headings = headings.subList(movingIndex, movingSubtreeEnd),
-            levelDelta = levelDelta,
-        )
-    }
-
-    val withoutBlock = content.removeRange(blockStart, blockEnd)
-    val blockLength = blockEnd - blockStart
-    val insertAt = (if (targetEnd > blockStart) targetEnd - blockLength else targetEnd)
-        .coerceIn(0, withoutBlock.length)
-    if (insertAt == blockStart && updatedBlock == originalBlock) return null
-
-    val updatedContent = buildString(content.length - originalBlock.length + updatedBlock.length) {
-        append(withoutBlock.substring(0, insertAt))
-        append(updatedBlock)
-        append(withoutBlock.substring(insertAt))
-    }
-    val movedHeadingOffsetInBlock = moving.startOffset - blockStart
-    val newHeadingStart = (insertAt + movedHeadingOffsetInBlock).coerceIn(0, updatedContent.length)
-    return MindMapReparentResult(
-        content = updatedContent,
-        selection = TextRange(newHeadingStart, newHeadingStart),
-        movedTitle = moving.text.ifBlank { "未命名节点" },
-        parentTitle = parent?.text?.ifBlank { "未命名节点" } ?: "根节点",
-    )
-}
-
-private fun findMarkdownHeadingSubtreeEnd(
-    headings: List<MarkdownHeading>,
-    index: Int,
-): Int {
-    val heading = headings.getOrNull(index) ?: return headings.size
-    for (cursor in index + 1 until headings.size) {
-        if (headings[cursor].level <= heading.level) return cursor
-    }
-    return headings.size
-}
-
-private fun findLineStart(
-    content: String,
-    offset: Int,
-): Int {
-    var cursor = offset.coerceIn(0, content.length)
-    while (cursor > 0 && content[cursor - 1] != '\n' && content[cursor - 1] != '\r') {
-        cursor--
-    }
-    return cursor
-}
-
-private fun adjustMarkdownHeadingLevelsInBlock(
-    block: String,
-    contentBlockStart: Int,
-    headings: List<MarkdownHeading>,
-    levelDelta: Int,
-): String {
-    val builder = StringBuilder(block)
-    headings.sortedByDescending { it.startOffset }.forEach { heading ->
-        val markerStart = (heading.startOffset - contentBlockStart).coerceIn(0, builder.length)
-        var markerEnd = markerStart
-        while (markerEnd < builder.length && builder[markerEnd] == '#') {
-            markerEnd++
-        }
-        if (markerEnd > markerStart) {
-            val targetLevel = (heading.level + levelDelta).coerceIn(1, 6)
-            builder.replace(markerStart, markerEnd, "#".repeat(targetLevel))
-        }
-    }
-    return builder.toString()
-}
-
-private fun formatEditorFileInfoText(
-    date: Date,
-    charCount: Int,
-    folder: String,
-): String {
-    val folderText = folder
-        .replace("\\", "/")
-        .trim()
-        .takeIf { it.isNotBlank() }
-        ?: "未分类"
-    val timeText = SimpleDateFormat("yyyy/M/d HH:mm", Locale.getDefault()).format(date)
-    return "$timeText | ${charCount.coerceAtLeast(0)} 字 | $folderText"
-}
-
 

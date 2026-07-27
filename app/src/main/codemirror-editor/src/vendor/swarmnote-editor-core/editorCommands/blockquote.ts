@@ -1,6 +1,6 @@
 /**
  * 引用块命令
- * 
+ *
  * **功能：**
  * 切换选中文本或当前行的引用块前缀（`> `）。
  */
@@ -19,7 +19,7 @@ interface DetectedBlockquote {
 
 /**
  * 检测行是否为引用块
- * 
+ *
  * @param lineText - 行文本
  * @returns 检测结果或 null
  */
@@ -31,16 +31,16 @@ function detectBlockquote(lineText: string): DetectedBlockquote | null {
 
 /**
  * 切换引用块前缀
- * 
+ *
  * **工作流程：**
  * 1. 获取选区覆盖的所有行
  * 2. 检测每行是否为引用块
  * 3. 如果所有行都是引用块，移除所有 `> ` 前缀
  * 4. 否则，为所有非引用块行添加 `> ` 前缀（保留现有缩进）
- * 
+ *
  * **单光标情况：**
  * 作用于光标所在的行。
- * 
+ *
  * @param view - 编辑器视图
  */
 export function toggleBlockquote(view: EditorView): void {
@@ -90,5 +90,9 @@ export function toggleBlockquote(view: EditorView): void {
 
   // 如果有变更，执行 dispatch
   if (changes.length === 0) return;
-  view.dispatch({ changes });
+  const changeSet = view.state.changes(changes);
+  view.dispatch({
+    changes: changeSet,
+    selection: view.state.selection.map(changeSet, 1),
+  });
 }

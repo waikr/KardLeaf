@@ -4,7 +4,7 @@
  * **四种模式详解：**
  *
  * 1. `off` - 关闭特殊渲染，仅显示原始 Markdown 源码
- * 
+ *
  * 2. `inline`（默认）- 内联模式
  *    - fence 标记行（```lang / ```）折叠为 header/footer widget
  *    - 代码内容行保持在 CM 文档流中
@@ -44,7 +44,7 @@ import type { CodeBlockMode } from '../../types';
 
 /**
  * 从 fence 行提取编程语言标识
- * 
+ *
  * @param state - 编辑器状态
  * @param fenceLineFrom - fence 行起始位置
  * @param fenceLineTo - fence 行结束位置
@@ -59,7 +59,7 @@ function extractLanguage(state: EditorState, fenceLineFrom: number, fenceLineTo:
 
 /**
  * 提取代码块的实际内容（去除 fence 标记行）
- * 
+ *
  * @param state - 编辑器状态
  * @param codeBlockFrom - 代码块起始位置（包含开头的 ```）
  * @param codeBlockTo - 代码块结束位置（包含结尾的 ```）
@@ -87,7 +87,7 @@ interface CodeBlockSourceRange {
 
 /**
  * 设置代码块源码显示状态的 Effect
- * 
+ *
  * 用于 toggle 模式下手动切换某个代码块的源码可见性。
  */
 export const setCodeBlockSourceMode = StateEffect.define<{
@@ -98,7 +98,7 @@ export const setCodeBlockSourceMode = StateEffect.define<{
 
 /**
  * 判断两个范围是否重叠
- * 
+ *
  * @param a - 范围 A
  * @param b - 范围 B
  * @returns 是否重叠
@@ -109,9 +109,9 @@ function codeRangesOverlap(a: CodeBlockSourceRange, b: CodeBlockSourceRange): bo
 
 /**
  * 代码块源码模式 StateField
- * 
+ *
  * 维护一个数组，记录所有处于“显示源码”状态的代码块范围。
- * 
+ *
  * **更新逻辑：**
  * 1. 映射现有范围到新的文档位置（处理文档变化）
  * 2. 处理 setCodeBlockSourceMode effects：
@@ -123,7 +123,7 @@ const codeBlockSourceModeField = StateField.define<CodeBlockSourceRange[]>({
   create: () => [],
   /**
    * 状态更新函数
-   * 
+   *
    * @param ranges - 当前显示源码的代码块范围列表
    * @param tr - 事务对象
    * @returns 更新后的范围列表
@@ -139,13 +139,13 @@ const codeBlockSourceModeField = StateField.define<CodeBlockSourceRange[]>({
     for (const effect of tr.effects) {
       if (!effect.is(setCodeBlockSourceMode)) continue;
       const { from, to, showSource } = effect.value;
-      
+
       // 映射 effect 中的范围
       const mapped: CodeBlockSourceRange = {
         from: tr.changes.mapPos(from, 1),
         to: tr.changes.mapPos(to, -1),
       };
-      
+
       if (showSource) {
         // 添加到列表（避免重复）
         if (!next.some((r) => codeRangesOverlap(r, mapped))) {
@@ -163,7 +163,7 @@ const codeBlockSourceModeField = StateField.define<CodeBlockSourceRange[]>({
 
 /**
  * 检查指定范围的代码块是否处于源码显示模式
- * 
+ *
  * @param ranges - 显示源码的范围列表
  * @param from - 要检查的范围起始位置
  * @param to - 要检查的范围结束位置
@@ -181,36 +181,88 @@ function isCodeBlockInSourceMode(
 
 /**
  * 为复制按钮附加事件处理器
- * 
+ *
  * @param button - 复制按钮元素
  * @param view - 编辑器视图
  * @param codeFrom - 代码块起始位置
  * @param codeTo - 代码块结束位置
  */
+function setCopyButtonIcon(button: HTMLButtonElement, copied: boolean) {
+  button.innerHTML = copied
+    ? '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="8" y="3" width="13" height="14" rx="3" stroke="currentColor" stroke-width="2"/><rect x="3" y="8" width="13" height="13" rx="3" stroke="currentColor" stroke-width="2"/></svg>';
+}
+
 function attachCopyHandler(button: HTMLButtonElement, view: EditorView, codeFrom: number, codeTo: number) {
-  button.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    // 提取代码内容并复制到剪贴板
+  const stopEvent = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  };
+  const showCopied = () => {
+    setCopyButtonIcon(button, true);
+    button.title = '已复制';
+    button.setAttribute('aria-label', '已复制');
+    setTimeout(() => {
+      setCopyButtonIcon(button, false);
+      button.title = '复制';
+      button.setAttribute('aria-label', '复制');
+    }, 2000);
+  };
+  const copy = () => {
     const code = extractCodeContent(view.state, codeFrom, codeTo);
-    void navigator.clipboard.writeText(code).then(() => {
-      // 显示“已复制”反馈
-      button.textContent = 'Copied!';
-      setTimeout(() => {
-        button.textContent = 'Copy';
-      }, 1500);
-    });
+    const android = window.KardLeafAndroid;
+    try {
+      if (android && typeof android.copyCodeBlock === 'function') {
+        const copied = android.copyCodeBlock(code) === true;
+        if (copied) {
+          showCopied();
+          return;
+        }
+      }
+    } catch {
+      // Fall through to the browser clipboard outside the Android host.
+    }
+    void navigator.clipboard.writeText(code).then(showCopied);
+  };
+  let activated = false;
+
+  button.addEventListener('pointerdown', (event) => {
+    stopEvent(event);
+    if (!event.isPrimary || event.button !== 0) return;
+    button.classList.toggle('cm-codeblock-copy-touch-reset', event.pointerType !== 'mouse');
+    activated = true;
+    copy();
+  });
+  button.addEventListener('mousedown', (event) => {
+    stopEvent(event);
+    if ('PointerEvent' in window || event.button !== 0) return;
+    button.classList.remove('cm-codeblock-copy-touch-reset');
+    activated = true;
+    copy();
+  });
+  button.addEventListener('touchstart', (event) => {
+    stopEvent(event);
+    if ('PointerEvent' in window) return;
+    button.classList.add('cm-codeblock-copy-touch-reset');
+    activated = true;
+    copy();
+  }, { passive: false });
+  button.addEventListener('click', (event) => {
+    stopEvent(event);
+    if (!activated) copy();
+    activated = false;
   });
 }
 
 /**
  * 代码块头部 Widget
- * 
+ *
  * **功能：**
  * - 显示编程语言标签
  * - 提供“Copy”按钮
  * - 点击空白区域将光标移动到代码第一行
- * 
+ *
  * **使用场景：**
  * inline 模式下，替换开头的 ```lang 行
  */
@@ -239,7 +291,7 @@ class CodeBlockHeaderWidget extends WidgetType {
 
   /**
    * 创建 DOM 元素
-   * 
+   *
    * @param view - 编辑器视图
    * @returns 头部容器元素
    */
@@ -263,8 +315,12 @@ class CodeBlockHeaderWidget extends WidgetType {
     // 添加复制按钮
     const copyBtn = document.createElement('button');
     copyBtn.className = 'cm-codeblock-copy';
-    copyBtn.textContent = 'Copy';
     copyBtn.type = 'button';
+    copyBtn.contentEditable = 'false';
+    copyBtn.tabIndex = -1;
+    copyBtn.title = '复制';
+    copyBtn.setAttribute('aria-label', '复制');
+    setCopyButtonIcon(copyBtn, false);
     attachCopyHandler(copyBtn, view, this.codeFrom, this.codeTo);
     container.appendChild(copyBtn);
 
@@ -290,14 +346,14 @@ class CodeBlockHeaderWidget extends WidgetType {
   /**
    * 是否忽略事件（返回 false 表示不忽略，允许交互）
    */
-  ignoreEvent(): boolean {
-    return false;
+  ignoreEvent(event: Event): boolean {
+    return event.target instanceof Element && !!event.target.closest('.cm-codeblock-copy');
   }
 }
 
 /**
  * 代码块底部 Widget
- * 
+ *
  * **功能：**
  * 在 inline 模式下，替换结尾的 ``` 行。
  * 目前只是一个视觉分隔符，无交互功能。
@@ -322,13 +378,13 @@ class CodeBlockFooterWidget extends WidgetType {
 
 /**
  * 代码块卡片 Widget
- * 
+ *
  * **功能：**
  * 在 auto/toggle 模式下，将整个代码块折叠为一个只读卡片。
  * 卡片包含：
  * - 头部：语言标签 + 操作按钮（Copy / Code）
  * - 主体：等宽纯文本显示代码内容（无高亮）
- * 
+ *
  * **交互模式：**
  * - auto 模式：点击卡片主体将光标移入，卡片消失，显示源码
  * - toggle 模式：点击 "Code" 按钮切换到源码视图
@@ -368,7 +424,7 @@ class CodeBlockCardWidget extends WidgetType {
 
   /**
    * 创建卡片 DOM 结构
-   * 
+   *
    * @param view - 编辑器视图
    * @returns 卡片容器元素
    */
@@ -418,8 +474,12 @@ class CodeBlockCardWidget extends WidgetType {
     // 添加复制按钮
     const copyBtn = document.createElement('button');
     copyBtn.className = 'cm-codeblock-copy';
-    copyBtn.textContent = 'Copy';
     copyBtn.type = 'button';
+    copyBtn.contentEditable = 'false';
+    copyBtn.tabIndex = -1;
+    copyBtn.title = '复制';
+    copyBtn.setAttribute('aria-label', '复制');
+    setCopyButtonIcon(copyBtn, false);
     attachCopyHandler(copyBtn, view, this.codeFrom, this.codeTo);
     header.appendChild(copyBtn);
 
@@ -452,8 +512,8 @@ class CodeBlockCardWidget extends WidgetType {
     return container;
   }
 
-  ignoreEvent(): boolean {
-    return false;
+  ignoreEvent(event: Event): boolean {
+    return event.target instanceof Element && !!event.target.closest('.cm-codeblock-copy');
   }
 }
 
@@ -503,7 +563,7 @@ class CodeBlockRenderToggleWidget extends WidgetType {
 
 /**
  * 为代码块的所有行添加背景类名
- * 
+ *
  * @param decorations - 装饰数组（会被修改）
  * @param state - 编辑器状态
  * @param fromLineFrom - 起始行的 from 位置
@@ -526,7 +586,7 @@ function pushBlockBackgroundLines(
 
 /**
  * 构建 Inline 模式的装饰
- * 
+ *
  * **逻辑：**
  * 1. 遍历语法树，查找 FencedCode 节点
  * 2. 检查光标是否在代码块内（shouldShowSource）
@@ -534,7 +594,7 @@ function pushBlockBackgroundLines(
  *    - 替换第一行（```lang）为 HeaderWidget
  *    - 替换最后一行（```）为 FooterWidget
  * 4. 为所有代码行添加背景类名
- * 
+ *
  * @param state - 编辑器状态
  * @returns 装饰范围数组
  */
@@ -553,7 +613,7 @@ function buildInlineDecorations(state: EditorState): Range<Decoration>[] {
       if (!cursorInside) {
         // 光标不在内部，折叠 fence 标记
         const language = extractLanguage(state, firstLine.from, firstLine.to);
-        
+
         // 替换开头 ```lang 行为 HeaderWidget
         decorations.push(
           Decoration.replace({
@@ -586,13 +646,13 @@ function buildInlineDecorations(state: EditorState): Range<Decoration>[] {
 
 /**
  * 构建 Auto 模式的装饰
- * 
+ *
  * **逻辑：**
  * 1. 遍历语法树，查找 FencedCode 节点
  * 2. 检查是否应该显示源码（光标在范围内）
  * 3. 如果显示源码：仅添加背景类名（显示原始 Markdown）
  * 4. 如果隐藏源码：替换整个块为 CardWidget
- * 
+ *
  * @param state - 编辑器状态
  * @returns 装饰范围数组
  */
@@ -638,7 +698,7 @@ function buildAutoDecorations(state: EditorState): Range<Decoration>[] {
 
 /**
  * 构建 Toggle 模式的装饰
- * 
+ *
  * **逻辑：**
  * 1. 遍历语法树，查找 FencedCode 节点
  * 2. 检查该代码块是否处于源码模式（通过 sourceRanges）
@@ -647,7 +707,7 @@ function buildAutoDecorations(state: EditorState): Range<Decoration>[] {
  *    - 显示原始 Markdown + 背景
  * 4. 如果不是源码模式：
  *    - 替换整个块为 CardWidget（带 "Code" 按钮）
- * 
+ *
  * @param state - 编辑器状态
  * @param sourceRanges - 处于源码模式的代码块范围列表
  * @returns 装饰范围数组
@@ -706,7 +766,7 @@ function buildToggleDecorations(
 
 /**
  * 根据模式构建装饰集合
- * 
+ *
  * @param state - 编辑器状态
  * @param mode - 代码块渲染模式
  * @returns 装饰集合
@@ -742,6 +802,9 @@ const codeBlockTheme = EditorView.theme({
   '.cm-codeblock-header': {
     display: 'flex',
     alignItems: 'center',
+    boxSizing: 'border-box',
+    width: '100%',
+    minWidth: '0',
     gap: '4px',
     padding: '5px 14px',
     backgroundColor: 'rgba(127, 127, 127, 0.1)',
@@ -751,12 +814,43 @@ const codeBlockTheme = EditorView.theme({
     fontFamily: 'monospace',
   },
   '.cm-codeblock-lang': {
+    minWidth: '0',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
     color: 'rgba(127, 127, 127, 0.75)',
     fontWeight: '600',
     textTransform: 'lowercase',
     letterSpacing: '0.04em',
   },
-  '.cm-codeblock-copy, .cm-codeblock-toggle': {
+  '.cm-codeblock-copy': {
+    width: '30px',
+    minWidth: '30px',
+    height: '30px',
+    flex: '0 0 30px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: 'none',
+    background: 'transparent',
+    color: 'rgba(127, 127, 127, 0.75)',
+    cursor: 'pointer',
+    padding: '0',
+    borderRadius: '7px',
+  },
+  '.cm-codeblock-copy svg': {
+    width: '18px',
+    height: '18px',
+  },
+  '.cm-codeblock-copy:hover': {
+    backgroundColor: 'rgba(127, 127, 127, 0.12)',
+    color: 'rgba(127, 127, 127, 0.95)',
+  },
+  '.cm-codeblock-copy.cm-codeblock-copy-touch-reset:hover': {
+    backgroundColor: 'transparent',
+    color: 'rgba(127, 127, 127, 0.75)',
+  },
+  '.cm-codeblock-toggle': {
     border: '1px solid rgba(127, 127, 127, 0.22)',
     background: 'transparent',
     color: 'rgba(127, 127, 127, 0.6)',
@@ -766,7 +860,7 @@ const codeBlockTheme = EditorView.theme({
     fontSize: '0.8em',
     fontFamily: 'inherit',
   },
-  '.cm-codeblock-copy:hover, .cm-codeblock-toggle:hover': {
+  '.cm-codeblock-toggle:hover': {
     backgroundColor: 'rgba(127, 127, 127, 0.12)',
     color: 'rgba(127, 127, 127, 0.9)',
   },
@@ -807,7 +901,7 @@ export interface BlockCodeOptions {
 
 /**
  * 创建代码块渲染扩展
- * 
+ *
  * **工作流程：**
  * 1. 根据 mode 参数决定渲染策略
  * 2. 如果 mode 为 'off'，返回空数组（无装饰）
@@ -817,7 +911,7 @@ export interface BlockCodeOptions {
  *    - 配置重新加载 (reconfigured)
  *    - 选区变化 (selection)
  *    - Toggle 模式的源码切换 (hasModeToggle)
- * 
+ *
  * @param options - 配置选项
  * @returns CodeMirror 扩展集合
  */
@@ -834,7 +928,7 @@ export function createBlockCodeExtension(options: BlockCodeOptions = {}): Extens
     },
     /**
      * 更新装饰
-     * 
+     *
      * @param deco - 当前装饰集合
      * @param tr - 事务对象
      * @returns 新的装饰集合
@@ -842,7 +936,7 @@ export function createBlockCodeExtension(options: BlockCodeOptions = {}): Extens
     update(deco, tr) {
       // 检查是否有 toggle 模式的源码切换
       const hasModeToggle = tr.effects.some((e) => e.is(setCodeBlockSourceMode));
-      
+
       // 如果文档、配置、选区或源码模式发生变化，重建装饰
       if (tr.docChanged || tr.reconfigured || tr.selection || hasModeToggle) {
         return buildDecorations(tr.state, mode);

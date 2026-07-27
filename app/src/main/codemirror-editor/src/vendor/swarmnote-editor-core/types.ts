@@ -4,7 +4,7 @@ import type { EditorEvent, EditorEventType } from './events';
 
 /**
  * 编辑器命令类型枚举
- * 
+ *
  * 定义了所有可通过 execCommand 执行的编辑操作。
  * 这些命令涵盖了文本格式化、插入元素、行操作、搜索等功能。
  */
@@ -17,6 +17,8 @@ export enum EditorCommandType {
   ToggleBold = 'toggleBold',
   /** 切换斜体 */
   ToggleItalic = 'toggleItalic',
+  /** 切换下划线 */
+  ToggleUnderline = 'toggleUnderline',
   /** 切换行内代码 */
   ToggleCode = 'toggleCode',
   /** 切换删除线 */
@@ -75,7 +77,7 @@ export enum EditorCommandType {
 
 /**
  * 编辑器选区范围
- * 
+ *
  * 表示 CodeMirror 中的一个文本选区，包含起始和结束位置。
  * anchor 和 head 是 CodeMirror 的术语：
  * - anchor: 选区的固定端（用户开始选择的位置）
@@ -141,7 +143,7 @@ export type EditorAppearance = 'light' | 'dark';
 
 /**
  * 编辑器主题配置
- * 
+ *
  * 定义编辑器的视觉样式，包括颜色、字体等。
  */
 export interface EditorThemeConfig {
@@ -183,7 +185,7 @@ export interface EditorThemeConfig {
 
 /**
  * 编辑器设置
- * 
+ *
  * 包含编辑器的所有配置选项，分为基础设置、功能开关和主题配置。
  */
 export interface EditorSettings {
@@ -211,7 +213,7 @@ export interface EditorSettings {
 
 /**
  * 编辑器设置更新接口
- * 
+ *
  * 用于部分更新编辑器设置。features 和 theme 也可以部分更新。
  * 这种设计允许宿主应用只修改需要改变的配置项。
  */
@@ -225,7 +227,7 @@ export interface EditorSettingsUpdate
 
 /**
  * 搜索状态
- * 
+ *
  * 表示搜索面板的当前状态，包括搜索关键词、选项和匹配结果信息。
  */
 export interface SearchState {
@@ -249,7 +251,7 @@ export interface SearchState {
 
 /**
  * 编辑器协作配置
- * 
+ *
  * 配置 Yjs CRDT 协作编辑所需的参数。
  */
 export interface EditorCollaborationConfig {
@@ -265,7 +267,7 @@ export interface EditorCollaborationConfig {
    * 可选的 `Awareness` 实例（来自 `y-protocols/awareness`），绑定到与
    * `ydoc` 相同的 Y.Doc。提供时，编辑器会通过 `yCollab(ytext, awareness)`
    * 连接它，使 `y-codemirror.next` 能够渲染远程光标和用户名标签。
-   * 
+   *
    * 生命周期管理（创建、`setLocalState`、销毁、网络推送/应用）由调用者负责——
    * 编辑器只读取它。使用 `unknown` 类型以避免在此处硬依赖 `y-protocols`。
    */
@@ -274,7 +276,7 @@ export interface EditorCollaborationConfig {
 
 /**
  * 编辑器属性（创建编辑器时的配置）
- * 
+ *
  * 传递给 createEditor 函数的完整配置对象。
  */
 export interface EditorProps {
@@ -337,7 +339,7 @@ export interface EditorProps {
 
 /**
  * 编辑器控制器接口
- * 
+ *
  * 这是外部宿主应用与编辑器交互的主要接口。
  * 提供了文本操作、选区管理、设置更新、搜索控制等功能。
  */
@@ -381,11 +383,11 @@ export interface EditorControl {
 
   /**
    * 设置覆盖编辑器底部的 UI 元素的高度（像素）。
-   * 
+   *
    * 原子性地驱动两个配置：
    * - `scrollMargins.bottom` - 自动 scrollIntoView 时光标会停留在遮挡物上方
    * - `.cm-content` padding-bottom - 用户可以手动滚动最后几行经过遮挡物
-   * 
+   *
    * 传入 0 禁用此功能。当遮挡物高度变化时调用。
    */
   setScrollBottomMargin(px: number): void;
@@ -403,7 +405,7 @@ export type ListType = 'ordered' | 'unordered' | 'check';
 
 /**
  * 选区格式状态
- * 
+ *
  * 描述当前选区或光标位置的格式状态，用于工具栏按钮的状态显示。
  * 例如：如果 bold 为 true，则加粗按钮应该显示为激活状态。
  */

@@ -1,10 +1,23 @@
 package com.kangle.kardleaf.ui
 
+import android.content.Context
+import android.view.Gravity
+import android.widget.Toast
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import java.text.ParsePosition
 import java.text.SimpleDateFormat
 import java.util.Locale
+
+/**
+ * 显示居中 Toast，避免被底部工具栏或顶部栏遮挡。
+ */
+fun Context.showToast(message: String, duration: Int = Toast.LENGTH_SHORT) {
+    Toast.makeText(this, message, duration).apply {
+        setGravity(Gravity.CENTER, 0, 0)
+        show()
+    }
+}
 
 private val copyTitleSuffixRegex = Regex("""~副本(?:\d+)?(?:~\d+)*""")
 private val wikiImageReferenceRegex = NoteFormatUtils.obsidianImageReferenceRegex
@@ -101,6 +114,9 @@ internal fun extractMarkdownImageReferences(markdown: String): List<String?> {
         }
     return matches.sortedBy { it.first }.map { it.second }
 }
+
+internal fun extractPreviewImageClickTargets(markdown: String): List<KardLeafImageClickTarget> =
+    extractMarkdownImageClickTargets(markdown, ImageClickSource.MarkdownPreview)
 
 internal fun extractLocalMarkdownImageReferences(markdown: String): List<String> {
     if (markdown.isBlank()) return emptyList()

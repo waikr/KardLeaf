@@ -1,5 +1,6 @@
 package com.kangle.kardleaf
 
+import com.kangle.kardleaf.data.utils.EditorOpenSession
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.data.utils.KardLeafLogTags
 import android.Manifest
@@ -8,14 +9,16 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Looper
+import android.os.MessageQueue
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.ViewTreeObserver
-import android.widget.Toast
 import androidx.fragment.app.FragmentActivity
+import com.kangle.kardleaf.ui.showToast
 import androidx.documentfile.provider.DocumentFile
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -36,6 +39,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -47,6 +51,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
@@ -69,26 +74,22 @@ import com.kangle.kardleaf.ui.kardLeafSharedAxisYOut
 import com.kangle.kardleaf.ui.theme.KardLeafTheme
 import com.kangle.kardleaf.widget.NoteListWidgetProvider
 import com.kangle.kardleaf.widget.TaskListWidgetProvider
+import com.kangle.kardleaf.widget.WidgetPinHelper
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.unit.dp
+import kotlin.coroutines.resume
 
 private val STARTUP_PERF_TRACE_TAG = KardLeafLogTags.STARTUP_PERF
 private val USER_PERF_TRACE_TAG = KardLeafLogTags.USER_PERF
@@ -108,6 +109,23 @@ private const val REQUEST_PICK_EDITOR_IMAGE = 1108
 private const val REQUEST_POST_NOTIFICATIONS = 1110
 private const val REQUEST_PICK_DRAWER_AVATAR = 1111
 private const val MAX_IMPORT_JSON_BYTES = 25L * 1024L * 1024L
+private const val HEATMAP_STATS_IDLE_DELAY_MS = 15_000L
+
+private suspend fun awaitMainQueueIdleForHeatmapStats() {
+    suspendCancellableCoroutine<Unit> { continuation ->
+        val queue = Looper.getMainLooper().queue
+        val idleHandler = MessageQueue.IdleHandler {
+            if (continuation.isActive) {
+                continuation.resume(Unit)
+            }
+            false
+        }
+        queue.addIdleHandler(idleHandler)
+        continuation.invokeOnCancellation {
+            queue.removeIdleHandler(idleHandler)
+        }
+    }
+}
 
 private fun mainScreenMotionIndex(screen: MainViewModel.Screen): Int = when (screen) {
     MainViewModel.Screen.Dashboard -> 0
@@ -116,7 +134,8 @@ private fun mainScreenMotionIndex(screen: MainViewModel.Screen): Int = when (scr
     MainViewModel.Screen.Tags -> 3
     MainViewModel.Screen.Folders -> 4
     MainViewModel.Screen.Tasks -> 5
-    MainViewModel.Screen.Settings -> 6
+    MainViewModel.Screen.RelationshipGraph -> 6
+    MainViewModel.Screen.Settings -> 7
 }
 
 class MainActivity : FragmentActivity() {
@@ -132,10 +151,17 @@ class MainActivity : FragmentActivity() {
     private var pendingEditorImagePicker: ((Uri) -> Unit)? = null
     private var editorImagePickerLaunchElapsedMs = 0L
     private var webDavRealtimeSyncJob: Job? = null
+    private var appUpdateCheckJob: Job? = null
     private var sampleVaultCleanupPromptJob: Job? = null
     private var latestSampleVaultUri: Uri? = null
     private val sampleVaultCleanupPromptRequest = MutableStateFlow(0L)
     private val drawerAvatarRevisionRequest = MutableStateFlow(0L)
+    private val heatmapUserInteractionVersion = MutableStateFlow(0L)
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        heatmapUserInteractionVersion.value += 1L
+    }
 
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(AppLocaleManager.wrap(newBase))
@@ -176,6 +202,36 @@ class MainActivity : FragmentActivity() {
     private fun launchBackupFolderPicker(onPicked: (Uri) -> Unit) {
         pendingBackupFolderPicker = onPicked
         startActivityForResult(createOpenDocumentTreeIntent(), REQUEST_PICK_BACKUP_FOLDER)
+    }
+
+    private fun openNoteWithSelectedKernel(
+        note: Note,
+        openSession: EditorOpenSession? = null,
+    ) = viewModel.openNote(note, openSession)
+
+    private fun openNotePathWithSelectedKernel(notePath: String) {
+        if (notePath.isBlank()) return
+        lifecycleScope.launch {
+            val note = repository.getNote(notePath)
+            if (note != null) {
+                viewModel.openNote(note)
+            }
+        }
+    }
+
+    private fun createNoteWithSelectedKernel(
+        draft: KardLeafCustomFeatures.ExternalNoteDraft? = null,
+        source: String,
+    ) {
+        viewModel.createNote(draft, source)
+    }
+
+    private fun createQuickNoteWithSelectedKernel(source: String) {
+        viewModel.createQuickNote(source = source)
+    }
+
+    private fun openRecordNoteWithSelectedKernel(recordKey: String) {
+        viewModel.openRecordNote(recordKey)
     }
 
     private fun launchEditorImagePicker(onPicked: (Uri) -> Unit) {
@@ -233,7 +289,7 @@ class MainActivity : FragmentActivity() {
 
         prefsManager.saveRootUri(uri.toString())
 
-        Toast.makeText(this, "正在导入...", Toast.LENGTH_SHORT).show()
+        showToast("正在导入...")
         viewModel.setRootFolder(uri)
         vaultChangeObserver?.start(uri)
     }
@@ -246,12 +302,12 @@ class MainActivity : FragmentActivity() {
             }
             .getOrNull()
         if (sampleVaultUri == null) {
-            Toast.makeText(this, "新建笔记库失败", Toast.LENGTH_SHORT).show()
+            showToast("新建笔记库失败")
             return
         }
 
         prefsManager.saveRootUri(sampleVaultUri.toString())
-        Toast.makeText(this, "已新建 KardLeaf 示例笔记库，正在导入示例笔记", Toast.LENGTH_SHORT).show()
+        showToast("已新建 KardLeaf 示例笔记库，正在导入示例笔记")
         viewModel.setFilter(MainViewModel.NoteFilter.All)
         viewModel.setRootFolder(sampleVaultUri) {
             viewModel.setFilter(MainViewModel.NoteFilter.All)
@@ -488,9 +544,9 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     stream.write(backup.toByteArray(Charsets.UTF_8))
                 } ?: error("Cannot open export file")
             }.onSuccess {
-                Toast.makeText(this, "导出完成", Toast.LENGTH_SHORT).show()
+                showToast("导出完成")
             }.onFailure { error ->
-                Toast.makeText(this, error.message ?: "导出失败", Toast.LENGTH_SHORT).show()
+                showToast(error.message ?: "导出失败")
             }
         }
     }
@@ -501,14 +557,14 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                 viewModel.importUserDataBackup(
                     json = json,
                     onSuccess = {
-                        Toast.makeText(this@MainActivity, "导入完成", Toast.LENGTH_SHORT).show()
+                        showToast("导入完成")
                     },
                     onError = { error ->
-                        Toast.makeText(this@MainActivity, error, Toast.LENGTH_SHORT).show()
+                        showToast(error)
                     },
                 )
             }.onFailure { error ->
-                Toast.makeText(this@MainActivity, error.message ?: "导入失败", Toast.LENGTH_SHORT).show()
+                showToast(error.message ?: "导入失败")
             }
         }
     }
@@ -522,9 +578,9 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     stream.write(backup.toByteArray(Charsets.UTF_8))
                 } ?: error("Cannot open export file")
             }.onSuccess {
-                Toast.makeText(this, "隐私笔记导出完成", Toast.LENGTH_SHORT).show()
+                showToast("隐私笔记导出完成")
             }.onFailure { error ->
-                Toast.makeText(this, error.message ?: "导出失败", Toast.LENGTH_SHORT).show()
+                showToast(error.message ?: "导出失败")
             }
         }
     }
@@ -534,11 +590,11 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
             readImportJson(uri).onSuccess { json ->
                 viewModel.importPrivacyNotes(
                     json = json,
-                    onSuccess = { count -> Toast.makeText(this@MainActivity, "已导入 $count 条隐私笔记", Toast.LENGTH_SHORT).show() },
-                    onError = { error -> Toast.makeText(this@MainActivity, error, Toast.LENGTH_SHORT).show() },
+                    onSuccess = { count -> showToast("已导入 $count 条隐私笔记") },
+                    onError = { error -> showToast(error) },
                 )
             }.onFailure { error ->
-                Toast.makeText(this@MainActivity, error.message ?: "导入失败", Toast.LENGTH_SHORT).show()
+                showToast(error.message ?: "导入失败")
             }
         }
     }
@@ -613,7 +669,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                 }
                 prefsManager.saveDrawerAvatarUri(uri.toString())
                 drawerAvatarRevisionRequest.value = SystemClock.elapsedRealtime()
-                Toast.makeText(this, "头像已更新", Toast.LENGTH_SHORT).show()
+                showToast("头像已更新")
             }
         }
     }
@@ -640,6 +696,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
 
         metadataManager = MetadataManager(applicationContext)
         prefsManager = PrefsManager(applicationContext)
+        KardLeafLog.initialize(applicationContext, prefsManager.isAppLoggingEnabled())
         repository = RoomNoteRepository(applicationContext, metadataManager, prefsManager)
         KardLeafLog.d(
             STARTUP_PERF_TRACE_TAG,
@@ -696,6 +753,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     val isEditorOpen by viewModel.isEditorOpen.collectAsState()
+                    val isLoading by viewModel.isLoading.collectAsState()
                     val editorTransitionState = remember { MutableTransitionState(false) }
                     var isEditorExitPending by remember { mutableStateOf(false) }
                     var showPrivacy by remember { mutableStateOf(false) }
@@ -704,6 +762,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     val sampleCleanupPromptRequestId by sampleVaultCleanupPromptRequest.collectAsState()
                     val labels by viewModel.labels.collectAsState()
                     val allNotes by viewModel.allNotes.collectAsState(initial = emptyList())
+                    val libraryCharacterCount by viewModel.libraryCharacterCount.collectAsState()
                     val drawerAvatarRevision by drawerAvatarRevisionRequest.collectAsState()
                     val yamlTags by viewModel.yamlTags.collectAsState()
                     var dashboardFilterReturnScreen by androidx.compose.runtime.remember {
@@ -720,12 +779,50 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     var createLabelParent by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
                     var labelToDelete by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
 
+                    LaunchedEffect(isEditorOpen, currentScreen, isLoading) {
+                        if (isEditorOpen || isLoading || currentScreen != MainViewModel.Screen.Dashboard) {
+                            return@LaunchedEffect
+                        }
+                        while (true) {
+                            var observedInteractionVersion = heatmapUserInteractionVersion.value
+                            while (true) {
+                                val nextInteractionVersion = withTimeoutOrNull(HEATMAP_STATS_IDLE_DELAY_MS) {
+                                    heatmapUserInteractionVersion.first { it != observedInteractionVersion }
+                                } ?: break
+                                observedInteractionVersion = nextInteractionVersion
+                            }
+
+                            val idleInteractionVersion = heatmapUserInteractionVersion.value
+                            awaitMainQueueIdleForHeatmapStats()
+                            if (heatmapUserInteractionVersion.value != idleInteractionVersion) continue
+
+                            var cancelledByInteraction = false
+                            coroutineScope {
+                                val refreshJob = launch {
+                                    viewModel.refreshLibraryCharacterCountIfDue()
+                                }
+                                val interactionJob = launch {
+                                    heatmapUserInteractionVersion.first { it != idleInteractionVersion }
+                                    cancelledByInteraction = true
+                                    refreshJob.cancel()
+                                }
+                                refreshJob.join()
+                                interactionJob.cancel()
+                            }
+                            if (!cancelledByInteraction) return@LaunchedEffect
+                            KardLeafLog.d("KardLeafHeatmapStats", "library character count cancelled by user interaction")
+                        }
+                    }
+
                     val drawerState = androidx.compose.material3.rememberDrawerState(androidx.compose.material3.DrawerValue.Closed)
                     val scope = androidx.compose.runtime.rememberCoroutineScope()
-                    var perceivedEditorOpenStartMs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Long?>(null) }
-                    var perceivedEditorOpenFirstFrameLogged by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-                    var perceivedEditorOpenEstimatedContentLen by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(-1) }
-                    var perceivedEditorOpenSizeTier by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("unknown") }
+                    var editorOpenSession by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<EditorOpenSession?>(null) }
+                    var editorOpenLayoutSessionId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Long?>(null) }
+                    var editorOpenFrameCommittedSessionId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Long?>(null) }
+                    var editorOpenTransitionFinishedSessionId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Long?>(null) }
+                    var editorOpenHumanSettledSessionId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Long?>(null) }
+                    var editorOpenCount by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(0) }
+                    var lastEditorOpenDocumentKey by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
                     var perceivedEditorCloseStartMs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Long?>(null) }
 
                     LaunchedEffect(isEditorOpen) {
@@ -757,7 +854,36 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                             }
                             isEditorExitPending = false
                             viewModel.finishEditorCloseAnimation()
+                        } else if (
+                            editorTransitionState.isIdle &&
+                            editorTransitionState.currentState &&
+                            editorTransitionState.targetState
+                        ) {
+                            val session = editorOpenSession ?: return@LaunchedEffect
+                            if (editorOpenTransitionFinishedSessionId != session.sessionId) {
+                                editorOpenTransitionFinishedSessionId = session.sessionId
+                                KardLeafLog.d(USER_PERF_TRACE_TAG, "editorOpen transitionFinished ${session.trace()}")
+                            }
                         }
+                    }
+
+                    LaunchedEffect(
+                        editorOpenSession?.sessionId,
+                        editorOpenFrameCommittedSessionId,
+                        editorOpenTransitionFinishedSessionId,
+                    ) {
+                        val session = editorOpenSession ?: return@LaunchedEffect
+                        if (
+                            editorOpenFrameCommittedSessionId != session.sessionId ||
+                            editorOpenTransitionFinishedSessionId != session.sessionId ||
+                            editorOpenHumanSettledSessionId == session.sessionId
+                        ) {
+                            return@LaunchedEffect
+                        }
+                        withFrameNanos { _ -> }
+                        withFrameNanos { _ -> }
+                        editorOpenHumanSettledSessionId = session.sessionId
+                        KardLeafLog.d(USER_PERF_TRACE_TAG, "editorOpen humanSettled stableFrames=2 ${session.trace()}")
                     }
                     fun startEditorExitAnimation() {
                         if (isEditorExitPending || !editorTransitionState.targetState) return
@@ -774,19 +900,35 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                         else -> "gte_100w"
                     }
 
-                    fun markEditorOpenStart(source: String, note: Note? = null) {
+                    fun markEditorOpenStart(source: String, note: Note? = null): EditorOpenSession {
                         val now = SystemClock.elapsedRealtime()
                         val estimatedContentLen = note?.let { maxOf(it.content.length, it.contentPreview.length) } ?: -1
-                        val sizeTier = if (estimatedContentLen >= 0) noteSizeTier(estimatedContentLen) else "unknown"
-                        perceivedEditorOpenStartMs = now
-                        perceivedEditorOpenFirstFrameLogged = false
-                        perceivedEditorOpenEstimatedContentLen = estimatedContentLen
-                        perceivedEditorOpenSizeTier = sizeTier
+                        val documentKey = note?.file?.path ?: "new:$source"
+                        val coldOrWarm = when {
+                            editorOpenCount == 0 -> "processFirst"
+                            lastEditorOpenDocumentKey == documentKey -> "warmSameDocument"
+                            else -> "warmDifferentDocument"
+                        }
+                        val session = EditorOpenSession.create(
+                            documentKey = documentKey,
+                            estimatedLength = estimatedContentLen,
+                            kernel = prefsManager.getEditorKernel().name,
+                            coldOrWarm = coldOrWarm,
+                            humanStartRealtimeMs = now,
+                        )
+                        editorOpenSession = session
+                        editorOpenLayoutSessionId = null
+                        editorOpenFrameCommittedSessionId = null
+                        editorOpenTransitionFinishedSessionId = null
+                        editorOpenHumanSettledSessionId = null
+                        editorOpenCount++
+                        lastEditorOpenDocumentKey = documentKey
                         KardLeafLog.d(
                             USER_PERF_TRACE_TAG,
-                            "editorOpen humanStart source=$source time=$now estimatedContentLen=$estimatedContentLen " +
-                                "sizeTier=$sizeTier path=${note?.file?.path}",
+                            "editorOpen humanStart source=$source sizeTier=${if (estimatedContentLen >= 0) noteSizeTier(estimatedContentLen) else "unknown"} " +
+                                session.trace(),
                         )
+                        return session
                     }
 
                     fun markEditorCloseStart(source: String) {
@@ -799,27 +941,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     }
 
                     LaunchedEffect(isEditorOpen) {
-                        if (isEditorOpen) {
-                            val start = perceivedEditorOpenStartMs ?: return@LaunchedEffect
-                            KardLeafLog.d(
-                                USER_PERF_TRACE_TAG,
-                                "editorOpen humanSettledSchedule effectDelay=${SystemClock.elapsedRealtime() - start}ms wait=330ms " +
-                                    "estimatedContentLen=$perceivedEditorOpenEstimatedContentLen sizeTier=$perceivedEditorOpenSizeTier",
-                            )
-                            delay(330L)
-                            KardLeafLog.d(
-                                USER_PERF_TRACE_TAG,
-                                "editorOpen humanSettledAfterDelay elapsed=${SystemClock.elapsedRealtime() - start}ms waitFrame=true " +
-                                    "estimatedContentLen=$perceivedEditorOpenEstimatedContentLen sizeTier=$perceivedEditorOpenSizeTier",
-                            )
-                            withFrameNanos { _ -> }
-                            KardLeafLog.d(
-                                USER_PERF_TRACE_TAG,
-                                "editorOpen humanSettled elapsed=${SystemClock.elapsedRealtime() - start}ms " +
-                                    "estimatedContentLen=$perceivedEditorOpenEstimatedContentLen sizeTier=$perceivedEditorOpenSizeTier",
-                            )
-                            perceivedEditorOpenStartMs = null
-                        } else {
+                        if (!isEditorOpen) {
                             val start = perceivedEditorCloseStartMs ?: return@LaunchedEffect
                             KardLeafLog.d(
                                 USER_PERF_TRACE_TAG,
@@ -864,6 +986,9 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     var drawerBackAction by androidx.compose.runtime.remember {
                         androidx.compose.runtime.mutableStateOf<(() -> Boolean)?>(null)
                     }
+                    var showCategoryDrawerContent by androidx.compose.runtime.remember {
+                        androidx.compose.runtime.mutableStateOf(false)
+                    }
                     var openDrawingPadAfterEditorOpen by androidx.compose.runtime.remember {
                         androidx.compose.runtime.mutableStateOf(false)
                     }
@@ -872,6 +997,13 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     }
                     fun openDrawerIfAllowed() {
                         if (isEditorOpen || SystemClock.uptimeMillis() < drawerOpenBlockedUntil) return
+                        showCategoryDrawerContent = false
+                        drawerContentBlockedUntil = SystemClock.uptimeMillis() + 700L
+                        scope.launch { drawerState.open() }
+                    }
+                    fun openCategoryDrawerIfAllowed() {
+                        if (isEditorOpen || SystemClock.uptimeMillis() < drawerOpenBlockedUntil) return
+                        showCategoryDrawerContent = true
                         drawerContentBlockedUntil = SystemClock.uptimeMillis() + 700L
                         scope.launch { drawerState.open() }
                     }
@@ -944,11 +1076,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                     viewModel.deleteLabel(
                                         name = name,
                                         onSuccess = {
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                context.getString(R.string.label_deleted_toast),
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            ).show()
+                                            context.showToast(context.getString(R.string.label_deleted_toast))
                                         },
                                         onError = { error ->
                                             val localizedError =
@@ -957,7 +1085,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                                 } else {
                                                     error
                                                 }
-                                            android.widget.Toast.makeText(context, localizedError, android.widget.Toast.LENGTH_SHORT).show()
+                                            context.showToast(localizedError)
                                         },
                                     )
                                     labelToDelete = null
@@ -991,6 +1119,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         if (currentScreen != MainViewModel.Screen.Dashboard) {
                                             viewModel.navigateTo(MainViewModel.Screen.Dashboard)
                                         }
+                                        showCategoryDrawerContent = false
                                         scope.launch { drawerState.open() }
                                     }
                                     com.kangle.kardleaf.ui.OnboardingTourTarget.Settings -> {
@@ -1021,8 +1150,10 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                 com.kangle.kardleaf.ui.AppDrawerContent(
                                     currentScreen = currentScreen,
                                     currentFilter = currentFilter,
-                                labels = labels,
-                                allNotes = allNotes,
+                                    labels = labels,
+                                    allNotes = allNotes,
+                                    libraryCharacterCount = libraryCharacterCount,
+                                    categoryOnly = showCategoryDrawerContent,
                                 onScreenSelect = { screen ->
                                     clearTemporaryDashboardReturn()
                                     closeDrawerThen {
@@ -1030,6 +1161,22 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                     }
                                 },
                                 onDashboardFilterSelect = selectFilterFromDrawer,
+                                onNoteClick = { note ->
+                                    clearTemporaryDashboardReturn()
+                                    closeDrawerThen {
+                                        val session = markEditorOpenStart("category_drawer_note_click", note)
+                                        blockDrawerOpenBriefly()
+                                        openNoteWithSelectedKernel(note, session)
+                                    }
+                                },
+                                onCreateDrawing = {
+                                    closeDrawerThen {
+                                        markEditorOpenStart("drawer_new_drawing")
+                                        blockDrawerOpenBriefly()
+                                        openDrawingPadAfterEditorOpen = true
+                                        viewModel.createNote(source = "drawer_new_drawing")
+                                    }
+                                },
                                 onCreateLabel = { parent ->
                                     createLabelParent = parent
                                     showCreateLabelDialog = true
@@ -1040,11 +1187,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         oldPath = oldPath,
                                         newPath = newPath,
                                         onError = { error ->
-                                            android.widget.Toast.makeText(
-                                                this@MainActivity,
-                                                error,
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            ).show()
+                                            showToast(error)
                                         },
                                     )
                                 },
@@ -1131,6 +1274,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                                 }
                                             }
                                             if (shouldOpenDrawer) {
+                                                showCategoryDrawerContent = false
                                                 drawerContentBlockedUntil = SystemClock.uptimeMillis() + 700L
                                                 scope.launch { drawerState.open() }
                                             }
@@ -1157,7 +1301,8 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         currentScreen is MainViewModel.Screen.Images ||
                                         currentScreen is MainViewModel.Screen.Tags ||
                                         currentScreen is MainViewModel.Screen.Folders ||
-                                        currentScreen is MainViewModel.Screen.Tasks),
+                                        currentScreen is MainViewModel.Screen.Tasks ||
+                                        currentScreen is MainViewModel.Screen.RelationshipGraph),
                             ) {
                                 KardLeafLog.d(BACK_TRACE_TAG, "Main screen BackHandler hit screen=$currentScreen -> Dashboard")
                                 viewModel.navigateTo(MainViewModel.Screen.Dashboard)
@@ -1201,28 +1346,45 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         onRestoreSampleVaultSamples = { restoreLatestSampleVaultSamples() },
                                 onNoteClick = { note ->
                                             if (!isDrawerContentBlocked()) {
-                                                markEditorOpenStart("dashboard_note_click", note)
+                                                val session = markEditorOpenStart("dashboard_note_click", note)
                                                 blockDrawerOpenBriefly()
-                                                viewModel.openNote(note)
+                                                openNoteWithSelectedKernel(note, session)
                                             }
+                                        },
+                                        onSearchNoteClick = { note, query ->
+                                            val session = markEditorOpenStart("dashboard_search_note_click", note)
+                                            viewModel.openNoteAtSearchMatch(note, query, session)
                                         },
                                         onFabClick = {
                                             if (!isDrawerContentBlocked()) {
-                                                val source = if (currentFilter is MainViewModel.NoteFilter.Drafts) "dashboard_drafts_fab" else "dashboard_fab"
+                                                val source = if (currentFilter is MainViewModel.NoteFilter.QuickNotes) "dashboard_quick_memo_fab" else "dashboard_fab"
                                                 markEditorOpenStart(source)
                                                 blockDrawerOpenBriefly()
-                                                if (currentFilter is MainViewModel.NoteFilter.Drafts) {
-                                                    viewModel.createTemporaryNote(source = "dashboard_drafts_fab")
+                                                if (currentFilter is MainViewModel.NoteFilter.QuickNotes) {
+                                                    createQuickNoteWithSelectedKernel(source = "dashboard_quick_memo_fab")
                                                 } else {
-                                                    viewModel.createNote(source = "dashboard_fab")
+                                                    createNoteWithSelectedKernel(source = "dashboard_fab")
                                                 }
                                             }
                                         },
-                                        onCreateDraftClick = {
+                                        onOpenCategoryDrawer = {
+                                            openCategoryDrawerIfAllowed()
+                                        },
+                                        onCreateQuickNoteClick = {
                                             if (!isDrawerContentBlocked()) {
-                                                markEditorOpenStart("home_bottom_toolbar_draft")
+                                                markEditorOpenStart("home_bottom_toolbar_quick_memo")
                                                 blockDrawerOpenBriefly()
-                                                viewModel.createTemporaryNote(source = "home_bottom_toolbar_draft")
+                                                createQuickNoteWithSelectedKernel(source = "home_bottom_toolbar_quick_memo")
+                                            }
+                                        },
+                                        onWebClipImported = { draft ->
+                                            if (!isDrawerContentBlocked()) {
+                                                markEditorOpenStart("dashboard_web_clip")
+                                                blockDrawerOpenBriefly()
+                                                createNoteWithSelectedKernel(
+                                                    draft = draft,
+                                                    source = "dashboard_web_clip",
+                                                )
                                             }
                                         },
                                         onCreateDrawingClick = {
@@ -1262,9 +1424,9 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         onOpenDrawer = { openDrawerIfAllowed() },
                                         onNoteClick = { note ->
                                             if (!isDrawerContentBlocked()) {
-                                                markEditorOpenStart("dates_note_click", note)
+                                                val session = markEditorOpenStart("dates_note_click", note)
                                                 blockDrawerOpenBriefly()
-                                                viewModel.openNote(note)
+                                                openNoteWithSelectedKernel(note, session)
                                             }
                                         },
                                     )
@@ -1275,9 +1437,9 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         onOpenDrawer = { openDrawerIfAllowed() },
                                         onNoteClick = { note ->
                                             if (!isDrawerContentBlocked()) {
-                                                markEditorOpenStart("images_note_click", note)
+                                                val session = markEditorOpenStart("images_note_click", note)
                                                 blockDrawerOpenBriefly()
-                                                viewModel.openNote(note)
+                                                openNoteWithSelectedKernel(note, session)
                                             }
                                         },
                                     )
@@ -1311,7 +1473,21 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         onOpenNotePath = { notePath ->
                                             markEditorOpenStart("tasks_note_click")
                                             blockDrawerOpenBriefly()
-                                            viewModel.openRecordNote(notePath)
+                                            openRecordNoteWithSelectedKernel(notePath)
+                                        },
+                                    )
+                                }
+                                MainViewModel.Screen.RelationshipGraph -> {
+                                    com.kangle.kardleaf.ui.RelationshipGraphScreen(
+                                        notes = allNotes,
+                                        loadNoteLinks = { repository.getAllNoteLinks() },
+                                        onOpenDrawer = { openDrawerIfAllowed() },
+                                        onNoteClick = { note ->
+                                            if (!isDrawerContentBlocked()) {
+                                                val session = markEditorOpenStart("relationship_graph_note_click", note)
+                                                blockDrawerOpenBriefly()
+                                                openNoteWithSelectedKernel(note, session)
+                                            }
                                         },
                                     )
                                 }
@@ -1336,7 +1512,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                     onLoadHistoryCleanupPreview = { keep -> viewModel.getHistoryCleanupPreview(keep) },
                                     onLoadRemarkNoteSummaries = { viewModel.getRemarkNoteSummaries() },
                                     onLoadHistoryNoteSummaries = { viewModel.getHistoryNoteSummaries() },
-                                    onOpenRecordNote = { noteKey -> viewModel.openRecordNote(noteKey) },
+                                    onOpenRecordNote = { noteKey -> openRecordNoteWithSelectedKernel(noteKey) },
                                     onCleanupHistory = { viewModel.cleanupOldHistoryVersions() },
                                     onWebDavVaultChanged = { changedPaths ->
                                         viewModel.onExternalVaultChanged(
@@ -1370,13 +1546,12 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .onGloballyPositioned {
-                                            val start = perceivedEditorOpenStartMs
-                                            if (start != null && !perceivedEditorOpenFirstFrameLogged) {
-                                                perceivedEditorOpenFirstFrameLogged = true
+                                            val session = editorOpenSession
+                                            if (session != null && editorOpenLayoutSessionId != session.sessionId) {
+                                                editorOpenLayoutSessionId = session.sessionId
                                                 KardLeafLog.d(
                                                     USER_PERF_TRACE_TAG,
-                                                    "editorOpen firstFrame elapsed=${SystemClock.elapsedRealtime() - start}ms " +
-                                                        "estimatedContentLen=$perceivedEditorOpenEstimatedContentLen sizeTier=$perceivedEditorOpenSizeTier",
+                                                    "editorOpen layoutPositioned ${session.trace()}",
                                                 )
                                             }
                                         },
@@ -1388,7 +1563,12 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         viewModel = viewModel,
                                         onBack = { startEditorExitAnimation() },
                                         onLeavingEditorStart = { markEditorCloseStart("editor_back") },
-                                        editorOpenStartRealtimeMs = perceivedEditorOpenStartMs,
+                                        editorOpenSession = editorOpenSession,
+                                        onEditorFrameCommitted = { sessionId ->
+                                            if (editorOpenSession?.sessionId == sessionId) {
+                                                editorOpenFrameCommittedSessionId = sessionId
+                                            }
+                                        },
                                         initialLabel = label,
                                         onPickImage = { onPicked -> launchEditorImagePicker(onPicked) },
                                         openDrawingPadOnStart = openDrawingPadAfterEditorOpen,
@@ -1584,11 +1764,50 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
         KardLeafLog.d(BACK_TRACE_TAG, "Activity onBackPressed exit")
     }
 
+    private fun maybeCheckForAppUpdate() {
+        if (!prefsManager.isAutoUpdateCheckEnabled()) return
+        if (prefsManager.hasCheckedForUpdatesToday()) return
+        if (appUpdateCheckJob?.isActive == true) return
+
+        prefsManager.markUpdateCheckAttemptToday()
+        appUpdateCheckJob = lifecycleScope.launch {
+            when (val result = AppUpdateChecker.checkLatestRelease(prefsManager)) {
+                is AppUpdateCheckResult.UpdateAvailable -> showAppUpdateDialog(result.release)
+                is AppUpdateCheckResult.UpToDate ->
+                    KardLeafLog.d("KardLeafUpdate", "automatic check up-to-date latest=${result.latestTag}")
+                is AppUpdateCheckResult.Failed ->
+                    KardLeafLog.w("KardLeafUpdate", "automatic check failed reason=${result.message}")
+            }
+        }
+    }
+
+    private fun showAppUpdateDialog(release: AppReleaseInfo) {
+        if (isFinishing || isDestroyed) return
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        val message = buildString {
+            append("当前版本：${BuildConfig.VERSION_NAME}\n")
+            append("最新版本：${release.tagName}")
+            if (release.publishedDate.isNotBlank()) append("\n发布日期：${release.publishedDate}")
+            if (release.releaseNotes.isNotBlank()) append("\n\n${release.releaseNotes}")
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("发现新版本")
+            .setMessage(message)
+            .setNegativeButton("稍后", null)
+            .setPositiveButton("下载更新") { _, _ ->
+                runCatching {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(release.downloadUrl)))
+                }.onFailure { showToast("无法打开下载链接") }
+            }
+            .show()
+    }
+
     override fun onResume() {
         val resumeStartMs = SystemClock.elapsedRealtime()
         KardLeafLog.d(STARTUP_PERF_TRACE_TAG, "activity onResume start firstResume=${!hasCompletedFirstResume}")
         super.onResume()
         startWebDavRealtimeSyncLoop()
+        maybeCheckForAppUpdate()
         val persistedRootUri = getPersistedRootUriWithPermission()
         persistedRootUri?.let { uri ->
             vaultChangeObserver?.start(uri)
@@ -1646,6 +1865,19 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
     }
 
     private fun handleIntent(intent: Intent) {
+        if (intent.hasExtra(NoteListWidgetProvider.EXTRA_OPEN_FOLDER)) {
+            viewModel.navigateTo(MainViewModel.Screen.Dashboard)
+            val filter = if (intent.getBooleanExtra(NoteListWidgetProvider.EXTRA_OPEN_ALL_NOTES, false)) {
+                MainViewModel.NoteFilter.All
+            } else {
+                MainViewModel.NoteFilter.Label(
+                    intent.getStringExtra(NoteListWidgetProvider.EXTRA_OPEN_FOLDER).orEmpty(),
+                )
+            }
+            viewModel.setFilter(filter)
+            return
+        }
+
         val data = intent.data
         if (data?.scheme == "kardleaf" && data.host == "search") {
             viewModel.requestOpenSearch()
@@ -1659,19 +1891,18 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
             viewModel.navigateTo(MainViewModel.Screen.Settings)
             return
         }
+        if (data?.scheme == "kardleaf" && data.host == "widgets") {
+            WidgetPinHelper.showPicker(this)
+            return
+        }
 
         KardLeafCustomFeatures.parseExternalCreateNoteUri(intent.data)?.let { draft ->
-            viewModel.createNote(draft, source = "external_intent")
+            createNoteWithSelectedKernel(draft, source = "external_intent")
             return
         }
 
         intent.getStringExtra("note_id")?.let { noteId ->
-            lifecycleScope.launch {
-                val note = repository.getNote(noteId)
-                if (note != null) {
-                    viewModel.openNote(note)
-                }
-            }
+            openNotePathWithSelectedKernel(noteId)
         }
     }
 
@@ -1682,7 +1913,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                 launchCreateJsonDocument("KardLeaf-user-data.json", REQUEST_EXPORT_USER_DATA)
             },
             onError = { error ->
-                Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
+                showToast(error)
             },
         )
     }
@@ -1693,7 +1924,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                 pendingPrivacyExport = json
                 launchCreateJsonDocument("KardLeaf-privacy.json", REQUEST_EXPORT_PRIVACY)
             },
-            onError = { error -> Toast.makeText(this, error, Toast.LENGTH_SHORT).show() },
+            onError = { error -> showToast(error) },
         )
     }
 
@@ -1744,10 +1975,10 @@ private fun AppPasswordLockScreen(onUnlocked: () -> Unit) {
 
     fun verifyAppPassword(input: String) {
         val inputHash = com.kangle.kardleaf.ui.hashPassword(input)
-        if (inputHash == prefsManager.getAppPasswordHash() || inputHash == prefsManager.getSafetyWordHash()) {
+        if (inputHash == prefsManager.getAppPasswordHash()) {
             onUnlocked()
         } else {
-            error = "密码或安全词错误"
+            error = "密码错误"
             if (prefsManager.getPasswordInputMode() == PrefsManager.PasswordInputMode.SIMPLE) {
                 pwd = ""
             }
@@ -1758,7 +1989,7 @@ private fun AppPasswordLockScreen(onUnlocked: () -> Unit) {
         screenTitle = "应用锁",
         headline = "欢迎回来",
         description = "输入应用密码后继续使用卡叶笔记。",
-        passwordLabel = if (prefsManager.getSafetyWordHash() != null) "密码或安全词" else "密码",
+        passwordLabel = "应用密码",
         password = pwd,
         onPasswordChange = { pwd = it },
         primaryButtonText = "解锁",
@@ -1767,7 +1998,6 @@ private fun AppPasswordLockScreen(onUnlocked: () -> Unit) {
         errorMessage = error,
         biometricAvailable = canUseBiometric,
         onBiometricUnlock = { unlockWithBiometric() },
-        autoShowBiometric = canUseBiometric,
         passwordInputMode = prefsManager.getPasswordInputMode(),
     )
 }

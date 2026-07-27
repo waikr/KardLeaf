@@ -36,7 +36,7 @@ internal fun shareSelectedNotes(
         ShareSelectedNotesMode.WORD -> wordExportBlockMessage(notes)
     }
     if (blockMessage != null) {
-        Toast.makeText(context, blockMessage, Toast.LENGTH_LONG).show()
+        context.showToast(blockMessage, Toast.LENGTH_LONG)
         return
     }
     val shareDir = File(context.cacheDir, "shared_notes").apply {

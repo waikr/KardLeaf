@@ -39,11 +39,9 @@ import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material.icons.outlined.Drafts
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.UnfoldLess
@@ -51,7 +49,7 @@ import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,10 +58,10 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -86,11 +84,17 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import com.kangle.kardleaf.R
+import com.kangle.kardleaf.localizedText
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeMode
@@ -108,8 +112,12 @@ fun AppDrawerContent(
     currentFilter: MainViewModel.NoteFilter,
     labels: List<String>,
     allNotes: List<Note> = emptyList(),
+    libraryCharacterCount: Long? = null,
+    categoryOnly: Boolean = false,
     onScreenSelect: (MainViewModel.Screen) -> Unit,
     onDashboardFilterSelect: (MainViewModel.NoteFilter) -> Unit,
+    onNoteClick: (Note) -> Unit = {},
+    onCreateDrawing: () -> Unit = {},
     onCreateLabel: (String) -> Unit,
     onDeleteLabel: (String) -> Unit,
     onRenameLabel: (String, String) -> Unit,
@@ -135,7 +143,12 @@ fun AppDrawerContent(
         drawerContainerColor = drawerBackground,
         drawerContentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-        var collapsedFolders by remember(labels) { mutableStateOf<Set<String>>(emptySet()) }
+        val allFolderPaths = remember(labels, allNotes) {
+            collectDrawerFolderPaths(labels, allNotes)
+        }
+        var collapsedFolders by remember(allFolderPaths) {
+            mutableStateOf(allFolderPaths)
+        }
         var showFiles by remember { mutableStateOf(false) }
         var selectedFolderPath by remember(labels) { mutableStateOf<String?>(null) }
         var drawerUiBackStack by remember(labels) { mutableStateOf<List<DrawerUiState>>(emptyList()) }
@@ -177,11 +190,59 @@ fun AppDrawerContent(
         DisposableEffect(Unit) {
             onDispose { onBackActionChanged(null) }
         }
-        Column(
-            modifier = Modifier
-                .fillMaxHeight()
-                .background(drawerBackground),
-        ) {
+
+        val lifecycleOwner = LocalView.current.findViewTreeLifecycleOwner()
+        DisposableEffect(lifecycleOwner, allFolderPaths) {
+            if (lifecycleOwner == null) {
+                onDispose { }
+            } else {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_STOP) {
+                        collapsedFolders = allFolderPaths
+                        selectedFolderPath = null
+                        drawerUiBackStack = emptyList()
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
+        }
+
+        if (categoryOnly) {
+            CategoryDrawerContent(
+                visibleLabels = visibleLabels,
+                allNotes = allNotes,
+                currentScreen = currentScreen,
+                currentFilter = currentFilter,
+                collapsedFolders = collapsedFolders,
+                hasExpandedFolders = !collapsedFolders.containsAll(allFolderPaths),
+                selectedFolderPath = selectedFolderPath,
+                onToggleFolder = { path ->
+                    collapsedFolders = if (path in collapsedFolders) {
+                        collapsedFolders - path
+                    } else {
+                        collapsedFolders + path
+                    }
+                },
+                onDashboardFilterSelect = onDashboardFilterSelect,
+                onNoteClick = onNoteClick,
+                onCreateLabel = onCreateLabel,
+                onDeleteLabel = onDeleteLabel,
+                onRenameLabel = onRenameLabel,
+                onSelectFolder = { selectedFolderPath = it },
+                onExpandAll = { collapsedFolders = emptySet() },
+                onCollapseAll = {
+                    collapsedFolders = allFolderPaths
+                    selectedFolderPath = null
+                },
+                onOpenFolderManagement = onOpenFolderManagement,
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .background(drawerBackground),
+            ) {
             Column(
                 modifier =
                     Modifier
@@ -197,32 +258,10 @@ fun AppDrawerContent(
                         onOpenSettings = onOpenSettings,
                         onThemeModeChange = onThemeModeChange,
                     )
-                    DataCardHeatmap(allNotes = allNotes)
-                } else if (isModern) {
-                    Column(
-                        modifier = Modifier
-                            .padding(14.dp)
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(28.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .border(
-                                width = 1.dp,
-                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                                shape = RoundedCornerShape(28.dp),
-                            )
-                            .padding(horizontal = 18.dp, vertical = 16.dp),
-                    ) {
-                        Text(
-                            stringResource(R.string.app_name),
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            "${stringResource(R.string.app_name_cn)} · ${stringResource(R.string.app_author)}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    DataCardHeatmap(
+                        allNotes = allNotes,
+                        libraryCharacterCount = libraryCharacterCount,
+                    )
                 } else {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -239,7 +278,10 @@ fun AppDrawerContent(
                 }
 
                 // 可编辑的侧边栏功能项（顺序、显隐、分组由设置“侧边栏调整”控制）
-                val visibleDrawerItems = drawerOrder.filter { it !in hiddenItems }
+                val visibleDrawerItems = drawerOrder.filter { itemId ->
+                    itemId !in hiddenItems &&
+                        !(drawerStyle == PrefsManager.DrawerStyle.DATA_CARD && itemId == PrefsManager.DrawerItemId.SETTINGS)
+                }
                 if (drawerStyle.isGroupedDrawerStyle()) {
                     buildDrawerItemGroups(visibleDrawerItems, drawerGroupStartItems).forEach { groupItems ->
                         DrawerItemGroup(drawerStyle = drawerStyle) {
@@ -251,6 +293,7 @@ fun AppDrawerContent(
                                     currentFilter = currentFilter,
                                     onDashboardFilterSelect = onDashboardFilterSelect,
                                     onScreenSelect = onScreenSelect,
+                                    onCreateDrawing = onCreateDrawing,
                                     onOpenFolderManagement = onOpenFolderManagement,
                                     onShowOnboarding = onShowOnboarding,
                                     onOpenSettings = onOpenSettings,
@@ -268,6 +311,7 @@ fun AppDrawerContent(
                             currentFilter = currentFilter,
                             onDashboardFilterSelect = onDashboardFilterSelect,
                             onScreenSelect = onScreenSelect,
+                            onCreateDrawing = onCreateDrawing,
                             onOpenFolderManagement = onOpenFolderManagement,
                             onShowOnboarding = onShowOnboarding,
                             onOpenSettings = onOpenSettings,
@@ -279,6 +323,7 @@ fun AppDrawerContent(
             }
         }
     }
+}
 }
 
 
@@ -303,20 +348,42 @@ private fun DataCardDrawerHeader(
     var showAvatarDialog by remember { mutableStateOf(false) }
 
     if (showAvatarDialog) {
-        AlertDialog(
+        Dialog(
             onDismissRequest = { showAvatarDialog = false },
-            title = { Text("头像") },
-            text = {
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 6.dp,
+            ) {
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
+                    Text(
+                        text = "更换头像",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "选择图片后将立即更新侧边栏头像",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(modifier = Modifier.height(22.dp))
                     Box(
                         modifier = Modifier
-                            .size(132.dp)
+                            .size(116.dp)
                             .clip(RoundedCornerShape(999.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                            .border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                                shape = RoundedCornerShape(999.dp),
+                            ),
                         contentAlignment = Alignment.Center,
                     ) {
                         if (avatarImage != null) {
@@ -330,27 +397,35 @@ private fun DataCardDrawerHeader(
                             Icon(
                                 imageVector = Icons.Outlined.AccountCircle,
                                 contentDescription = "头像预览",
-                                modifier = Modifier.size(96.dp),
+                                modifier = Modifier.size(82.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
-                    OutlinedButton(onClick = onPickAvatar) {
+                    Spacer(modifier = Modifier.height(24.dp))
+                    OutlinedButton(
+                        onClick = {
+                            showAvatarDialog = false
+                            onPickAvatar()
+                        },
+                        modifier = Modifier
+                            .width(156.dp)
+                            .height(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Image,
+                            contentDescription = null,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text("上传头像")
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showAvatarDialog = false }) {
-                    Text("确认")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAvatarDialog = false }) {
-                    Text("取消")
-                }
-            },
-        )
+            }
+        }
     }
 
     Row(
@@ -440,7 +515,10 @@ private fun rememberDrawerAvatarImage(avatarUri: String?): ImageBitmap? {
 }
 
 @Composable
-private fun DataCardHeatmap(allNotes: List<Note>) {
+private fun DataCardHeatmap(
+    allNotes: List<Note>,
+    libraryCharacterCount: Long?,
+) {
     val today = remember { heatmapDayStart(Date()) }
     val monthStart = remember(today) {
         Calendar.getInstance().apply {
@@ -574,7 +652,7 @@ private fun DataCardHeatmap(allNotes: List<Note>) {
             )
             DataCardStatDivider()
             DataCardHeatmapStat(
-                value = formatHeatmapNumber(heatmapStats.characterCount),
+                value = libraryCharacterCount?.let(::formatHeatmapNumber) ?: "待统计",
                 label = "文字数量",
                 modifier = Modifier.weight(1f),
             )
@@ -619,7 +697,6 @@ private data class HeatmapStats(
     val columns: List<List<HeatmapDay>>,
     val activeDayCount: Int,
     val noteCount: Int,
-    val characterCount: Long,
 )
 
 private data class HeatmapDay(
@@ -635,7 +712,6 @@ private fun buildHeatmapStats(
 ): HeatmapStats {
     val dayCounts = mutableMapOf<Long, Int>()
     var noteCount = 0
-    var characterCount = 0L
 
     notes.forEach { note ->
         if (note.isTrashed || note.isArchived) return@forEach
@@ -644,8 +720,6 @@ private fun buildHeatmapStats(
         val key = createdDay.time
         dayCounts[key] = (dayCounts[key] ?: 0) + 1
         noteCount++
-        val text = note.content.ifBlank { note.contentPreview }
-        characterCount += text.count { !it.isWhitespace() }.toLong()
     }
 
     val columns = mutableListOf<List<HeatmapDay>>()
@@ -664,7 +738,6 @@ private fun buildHeatmapStats(
         columns = columns,
         activeDayCount = dayCounts.size,
         noteCount = noteCount,
-        characterCount = characterCount,
     )
 }
 
@@ -687,6 +760,87 @@ private fun formatHeatmapNumber(value: Long): String =
 
 private fun PrefsManager.DrawerStyle.isGroupedDrawerStyle(): Boolean =
     this == PrefsManager.DrawerStyle.GROUPED_CARD || this == PrefsManager.DrawerStyle.DATA_CARD
+
+@Composable
+private fun CategoryDrawerContent(
+    visibleLabels: List<String>,
+    allNotes: List<Note>,
+    currentScreen: MainViewModel.Screen,
+    currentFilter: MainViewModel.NoteFilter,
+    collapsedFolders: Set<String>,
+    hasExpandedFolders: Boolean,
+    selectedFolderPath: String?,
+    onToggleFolder: (String) -> Unit,
+    onDashboardFilterSelect: (MainViewModel.NoteFilter) -> Unit,
+    onNoteClick: (Note) -> Unit,
+    onCreateLabel: (String) -> Unit,
+    onDeleteLabel: (String) -> Unit,
+    onRenameLabel: (String, String) -> Unit,
+    onSelectFolder: (String?) -> Unit,
+    onExpandAll: () -> Unit,
+    onCollapseAll: () -> Unit,
+    onOpenFolderManagement: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .background(MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 10.dp, top = 18.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "分类",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            IconButton(onClick = if (hasExpandedFolders) onCollapseAll else onExpandAll) {
+                Icon(
+                    imageVector = if (hasExpandedFolders) Icons.Outlined.UnfoldLess else Icons.Outlined.UnfoldMore,
+                    contentDescription = if (hasExpandedFolders) "全部收起" else "全部展开",
+                )
+            }
+            IconButton(onClick = { onCreateLabel("") }) {
+                Icon(Icons.Filled.Add, contentDescription = "新建分类")
+            }
+            IconButton(onClick = onOpenFolderManagement) {
+                Icon(Icons.Outlined.Settings, contentDescription = "分类管理")
+            }
+        }
+        HorizontalDivider()
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 8.dp),
+        ) {
+            ThemedDrawerItem(
+                label = localizedText("全部笔记", "All notes"),
+                icon = Icons.Outlined.Description,
+                selected = currentScreen is MainViewModel.Screen.Dashboard && currentFilter is MainViewModel.NoteFilter.All,
+                onClick = { onDashboardFilterSelect(MainViewModel.NoteFilter.All) },
+                compact = true,
+            )
+            FileDrawerSection(
+                visibleLabels = visibleLabels,
+                allNotes = allNotes,
+                currentScreen = currentScreen,
+                currentFilter = currentFilter,
+                collapsedFolders = collapsedFolders,
+                selectedFolderPath = selectedFolderPath,
+                onToggleFolder = onToggleFolder,
+                onNoteClick = onNoteClick,
+                onDeleteLabel = onDeleteLabel,
+                onRenameLabel = onRenameLabel,
+                onSelectFolder = onSelectFolder,
+            )
+        }
+    }
+}
 
 private fun buildDrawerItemGroups(
     visibleItems: List<PrefsManager.DrawerItemId>,
@@ -734,6 +888,7 @@ private fun AppDrawerFunctionalItem(
     currentFilter: MainViewModel.NoteFilter,
     onDashboardFilterSelect: (MainViewModel.NoteFilter) -> Unit,
     onScreenSelect: (MainViewModel.Screen) -> Unit,
+    onCreateDrawing: () -> Unit,
     onOpenFolderManagement: () -> Unit,
     onShowOnboarding: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -756,6 +911,7 @@ private fun AppDrawerFunctionalItem(
             currentFilter = currentFilter,
             onDashboardFilterSelect = onDashboardFilterSelect,
             onScreenSelect = onScreenSelect,
+            onCreateDrawing = onCreateDrawing,
             onShowOnboarding = onShowOnboarding,
             onOpenSettings = onOpenSettings,
             onOpenPrivacy = onOpenPrivacy,
@@ -773,41 +929,72 @@ private data class FolderNode(
     val name: String,
     val path: String,
     val children: List<FolderNode>,
+    val notes: List<Note>,
 )
 
 @Composable
 private fun FileDrawerSection(
     visibleLabels: List<String>,
+    allNotes: List<Note>,
     currentScreen: MainViewModel.Screen,
     currentFilter: MainViewModel.NoteFilter,
     collapsedFolders: Set<String>,
     selectedFolderPath: String?,
     onToggleFolder: (String) -> Unit,
-    onDashboardFilterSelect: (MainViewModel.NoteFilter) -> Unit,
+    onNoteClick: (Note) -> Unit,
     onDeleteLabel: (String) -> Unit,
     onRenameLabel: (String, String) -> Unit,
     onSelectFolder: (String?) -> Unit,
 ) {
-    if (visibleLabels.isNotEmpty()) {
+    val visibleNotes = remember(allNotes) { allNotes.filter { !it.isTrashed && !it.isArchived } }
+    val rootNotes = remember(visibleNotes) {
+        visibleNotes
+            .filter { normalizeDrawerPath(it.folder).isBlank() }
+            .sortedBy { it.title.lowercase(Locale.getDefault()) }
+    }
+    val folderTree = remember(visibleLabels, visibleNotes) { buildFolderTree(visibleLabels, visibleNotes) }
+    if (folderTree.isNotEmpty()) {
         FolderTree(
-            nodes = buildFolderTree(visibleLabels),
+            nodes = folderTree,
             currentScreen = currentScreen,
             currentFilter = currentFilter,
             collapsedFolders = collapsedFolders,
             selectedFolderPath = selectedFolderPath,
             onToggleFolder = onToggleFolder,
-            onDashboardFilterSelect = onDashboardFilterSelect,
+            onNoteClick = onNoteClick,
             onDeleteLabel = onDeleteLabel,
             onRenameLabel = onRenameLabel,
             onSelectFolder = onSelectFolder,
         )
     }
+    rootNotes.forEach { note ->
+        FolderNoteItem(note = note, depth = 0, onNoteClick = onNoteClick)
+    }
 }
 
-private fun buildFolderTree(paths: List<String>): List<FolderNode> {
+private fun normalizeDrawerPath(path: String): String =
+    path.replace('\\', '/').trim('/')
+
+private fun collectDrawerFolderPaths(paths: List<String>, notes: List<Note>): Set<String> =
+    (paths.asSequence().map(::normalizeDrawerPath) +
+        notes.asSequence()
+            .filter { !it.isTrashed && !it.isArchived }
+            .map { normalizeDrawerPath(it.folder) })
+        .filter { it.isNotBlank() }
+        .flatMap { path ->
+            val parts = path.split("/").filter { it.isNotBlank() }
+            parts.indices.asSequence().map { index -> parts.take(index + 1).joinToString("/") }
+        }
+        .toSet()
+
+private fun buildFolderTree(paths: List<String>, notes: List<Note>): List<FolderNode> {
+    val normalizedPaths = (paths.map(::normalizeDrawerPath) + notes.map { normalizeDrawerPath(it.folder) })
+        .filter { it.isNotBlank() }
+        .distinct()
+
     fun build(prefix: String): List<FolderNode> {
         val prefixWithSlash = prefix.takeIf { it.isNotBlank() }?.let { "$it/" }.orEmpty()
-        return paths
+        return normalizedPaths
             .asSequence()
             .filter { it.startsWith(prefixWithSlash) && it != prefix }
             .map { it.removePrefix(prefixWithSlash).substringBefore("/") }
@@ -820,6 +1007,9 @@ private fun buildFolderTree(paths: List<String>): List<FolderNode> {
                     name = name,
                     path = path,
                     children = build(path),
+                    notes = notes
+                        .filter { normalizeDrawerPath(it.folder) == path }
+                        .sortedBy { it.title.lowercase(Locale.getDefault()) },
                 )
             }
             .toList()
@@ -835,7 +1025,7 @@ private fun FolderTree(
     collapsedFolders: Set<String>,
     selectedFolderPath: String?,
     onToggleFolder: (String) -> Unit,
-    onDashboardFilterSelect: (MainViewModel.NoteFilter) -> Unit,
+    onNoteClick: (Note) -> Unit,
     onDeleteLabel: (String) -> Unit,
     onRenameLabel: (String, String) -> Unit,
     onSelectFolder: (String?) -> Unit,
@@ -850,7 +1040,6 @@ private fun FolderTree(
             collapsedFolders = collapsedFolders,
             selectedFolderPath = selectedFolderPath,
             onToggleFolder = onToggleFolder,
-            onDashboardFilterSelect = onDashboardFilterSelect,
             onDeleteLabel = onDeleteLabel,
             onRenameLabel = onRenameLabel,
             onSelectFolder = onSelectFolder,
@@ -863,14 +1052,35 @@ private fun FolderTree(
                 collapsedFolders = collapsedFolders,
                 selectedFolderPath = selectedFolderPath,
                 onToggleFolder = onToggleFolder,
-                onDashboardFilterSelect = onDashboardFilterSelect,
+                onNoteClick = onNoteClick,
                 onDeleteLabel = onDeleteLabel,
                 onRenameLabel = onRenameLabel,
                 onSelectFolder = onSelectFolder,
                 depth = depth + 1,
             )
         }
+        if (node.path !in collapsedFolders) {
+            node.notes.forEach { note ->
+                FolderNoteItem(note = note, depth = depth + 1, onNoteClick = onNoteClick)
+            }
+        }
     }
+}
+
+@Composable
+private fun FolderNoteItem(
+    note: Note,
+    depth: Int,
+    onNoteClick: (Note) -> Unit,
+) {
+    ThemedDrawerItem(
+        label = note.title.ifBlank { note.file.nameWithoutExtension },
+        icon = Icons.Outlined.Description,
+        selected = false,
+        onClick = { onNoteClick(note) },
+        modifier = Modifier.padding(start = (depth * 12).dp),
+        compact = true,
+    )
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -883,7 +1093,6 @@ private fun FolderTreeItem(
     collapsedFolders: Set<String>,
     selectedFolderPath: String?,
     onToggleFolder: (String) -> Unit,
-    onDashboardFilterSelect: (MainViewModel.NoteFilter) -> Unit,
     onDeleteLabel: (String) -> Unit,
     onRenameLabel: (String, String) -> Unit,
     onSelectFolder: (String?) -> Unit,
@@ -893,7 +1102,7 @@ private fun FolderTreeItem(
     val isFilterSelected = currentScreen is MainViewModel.Screen.Dashboard && (currentFilter as? MainViewModel.NoteFilter.Label)?.name == node.path
     val isActionSelected = selectedFolderPath == node.path
     val isSelected = isFilterSelected || isActionSelected
-    val hasChildren = node.children.isNotEmpty()
+    val hasChildren = node.children.isNotEmpty() || node.notes.isNotEmpty()
     val isCollapsed = node.path in collapsedFolders
     var isEditing by remember(node.path) { mutableStateOf(false) }
     var editedName by remember(node.path) { mutableStateOf(node.name) }
@@ -999,8 +1208,12 @@ private fun FolderTreeItem(
             editedName = node.name
             isEditing = true
         } else {
-            onSelectFolder(null)
-            onDashboardFilterSelect(MainViewModel.NoteFilter.Label(node.path))
+            if (selectedFolderPath != null) {
+                onSelectFolder(null)
+            }
+            if (hasChildren) {
+                onToggleFolder(node.path)
+            }
         }
     }
     val folderLongClick: () -> Unit = {
@@ -1008,6 +1221,11 @@ private fun FolderTreeItem(
         editedName = node.name
         onSelectFolder(node.path)
     }
+
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (isCollapsed) 0f else 90f,
+        label = "DrawerFolderChevron",
+    )
 
     if (!isModern) {
         Row(
@@ -1022,59 +1240,46 @@ private fun FolderTreeItem(
                             Color.Transparent
                         },
                     )
-                    .padding(start = 24.dp + (depth * 16).dp, end = 12.dp),
+                    .combinedClickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = folderClick,
+                        onLongClick = folderLongClick,
+                    )
+                    .padding(start = 16.dp + (depth * 16).dp, end = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier =
-                    Modifier
-                        .combinedClickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = folderClick,
-                            onLongClick = folderLongClick,
-                        ),
-                verticalAlignment = Alignment.CenterVertically,
+            Box(
+                modifier = Modifier.size(20.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    Icons.Outlined.Folder,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(20.dp),
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = node.name,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(
-                modifier =
-                    Modifier
-                        .weight(1f)
-                        .height(44.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            enabled = selectedFolderPath != null,
-                            onClick = { onSelectFolder(null) },
-                        ),
-            )
-            if (hasChildren) {
-                IconButton(
-                    onClick = { onToggleFolder(node.path) },
-                    modifier = Modifier.size(36.dp),
-                ) {
+                if (hasChildren) {
                     Icon(
-                        imageVector = if (isCollapsed) Icons.AutoMirrored.Outlined.KeyboardArrowRight else Icons.Outlined.KeyboardArrowDown,
+                        imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
                         contentDescription = if (isCollapsed) "展开文件夹" else "折叠文件夹",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .graphicsLayer { rotationZ = chevronRotation },
                     )
                 }
             }
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                Icons.Outlined.Folder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.width(20.dp),
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = node.name,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
         }
         return
     }
@@ -1121,66 +1326,54 @@ private fun FolderTreeItem(
             .clip(folderShape)
             .background(backgroundColor)
             .border(1.dp, borderColor, folderShape)
-            .padding(start = 8.dp, end = 2.dp),
+            .height(42.dp)
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = folderClick,
+                onLongClick = folderLongClick,
+            )
+            .padding(start = 6.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .height(42.dp)
-                .combinedClickable(
-                    interactionSource = interactionSource,
-                    indication = null,
-                    onClick = folderClick,
-                    onLongClick = folderLongClick,
-                ),
-            verticalAlignment = Alignment.CenterVertically,
+        Box(
+            modifier = Modifier.size(20.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(iconBackgroundColor),
-                contentAlignment = Alignment.Center,
-            ) {
+            if (hasChildren) {
                 Icon(
-                    Icons.Outlined.Folder,
-                    contentDescription = null,
-                    tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(
-                text = node.name,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(
-            modifier = Modifier
-                .width(4.dp)
-                .height(42.dp)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    enabled = selectedFolderPath != null,
-                    onClick = { onSelectFolder(null) },
-                ),
-        )
-        if (hasChildren) {
-            IconButton(
-                onClick = { onToggleFolder(node.path) },
-                modifier = Modifier.size(36.dp),
-            ) {
-                Icon(
-                    imageVector = if (isCollapsed) Icons.AutoMirrored.Outlined.KeyboardArrowRight else Icons.Outlined.KeyboardArrowDown,
+                    imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
                     contentDescription = if (isCollapsed) "展开文件夹" else "折叠文件夹",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .graphicsLayer { rotationZ = chevronRotation },
                 )
             }
         }
+        Spacer(modifier = Modifier.width(4.dp))
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(iconBackgroundColor),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Outlined.Folder,
+                contentDescription = null,
+                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = node.name,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
     }
 }

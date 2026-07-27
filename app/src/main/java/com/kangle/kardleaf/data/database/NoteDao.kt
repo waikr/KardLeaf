@@ -198,8 +198,43 @@ interface NoteDao {
         deletedAtMs: Long,
     )
 
+    @Query(
+        """
+        UPDATE notes
+        SET filePath = :trashPath,
+            fileName = :trashFileName,
+            isArchived = 0,
+            isTrashed = 1,
+            deletedAtMs = :deletedAtMs
+        WHERE filePath = :sourcePath
+        """,
+    )
+    suspend fun moveNoteToTrashPath(
+        sourcePath: String,
+        trashPath: String,
+        trashFileName: String,
+        deletedAtMs: Long,
+    ): Int
+
     @Query("UPDATE notes SET isArchived = 0, isTrashed = 0, deletedAtMs = NULL WHERE filePath = :filePath")
     suspend fun restoreNote(filePath: String)
+
+    @Query(
+        """
+        UPDATE notes
+        SET filePath = :restoredPath,
+            fileName = :restoredFileName,
+            isArchived = 0,
+            isTrashed = 0,
+            deletedAtMs = NULL
+        WHERE filePath = :trashPath
+        """,
+    )
+    suspend fun restoreNoteFromTrashPath(
+        trashPath: String,
+        restoredPath: String,
+        restoredFileName: String,
+    ): Int
 
     @Query("SELECT COUNT(*) FROM notes WHERE folder = :folder OR folder LIKE :folder || '/%'")
     suspend fun countNotesInFolder(folder: String): Int

@@ -2,6 +2,7 @@ package com.kangle.kardleaf.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -33,7 +34,6 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Sort
@@ -59,6 +59,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -68,10 +69,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import com.kangle.kardleaf.data.model.Note
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -95,6 +101,21 @@ fun FolderManagementScreen(
     var sortTargets by remember { mutableStateOf<List<FolderManageItem>?>(null) }
     var showSortMenu by remember { mutableStateOf(false) }
     var expandedFolderPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    val lifecycleOwner = LocalView.current.findViewTreeLifecycleOwner()
+    DisposableEffect(lifecycleOwner) {
+        if (lifecycleOwner == null) {
+            onDispose { }
+        } else {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_STOP) {
+                    expandedFolderPaths = emptySet()
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
     var toastMessage by remember { mutableStateOf<String?>(null) }
@@ -264,12 +285,11 @@ fun FolderManagementScreen(
                             folder = folder,
                             isExpanded = folder.path in expandedFolderPaths,
                             onOpen = { currentPath = folder.path },
-                            onToggleExpandAll = {
-                                val descendants = descendantFolderPaths(labels, folder.path).toSet()
+                            onToggleExpand = {
                                 expandedFolderPaths = if (folder.path in expandedFolderPaths) {
-                                    expandedFolderPaths - descendants - folder.path
+                                    expandedFolderPaths - folder.path
                                 } else {
-                                    expandedFolderPaths + descendants + folder.path
+                                    expandedFolderPaths + folder.path
                                 }
                             },
                             onRename = { renameTarget = folder },
@@ -424,12 +444,16 @@ private fun FolderManageRow(
     folder: FolderManageItem,
     isExpanded: Boolean,
     onOpen: () -> Unit,
-    onToggleExpandAll: () -> Unit,
+    onToggleExpand: () -> Unit,
     onRename: () -> Unit,
     onMove: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 90f else 0f,
+        label = "FolderManageChevron",
+    )
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -440,9 +464,28 @@ private fun FolderManageRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onOpen)
-                .padding(start = (14 + folder.depth * 20).dp, top = 12.dp, end = 2.dp, bottom = 12.dp),
+                .padding(start = (4 + folder.depth * 20).dp, top = 12.dp, end = 2.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Box(
+                modifier = Modifier.size(36.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (folder.childCount > 0) {
+                    IconButton(
+                        onClick = onToggleExpand,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.KeyboardArrowRight,
+                            contentDescription = if (isExpanded) "收起子文件夹" else "展开子文件夹",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.graphicsLayer { rotationZ = chevronRotation },
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(4.dp))
             Icon(
                 Icons.Outlined.Folder,
                 contentDescription = null,
@@ -463,16 +506,6 @@ private fun FolderManageRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                )
-            }
-            IconButton(
-                onClick = onToggleExpandAll,
-                enabled = folder.childCount > 0,
-            ) {
-                Icon(
-                    imageVector = if (isExpanded) Icons.Outlined.KeyboardArrowDown else Icons.Outlined.KeyboardArrowRight,
-                    contentDescription = if (isExpanded) "收起子文件夹" else "展开子文件夹",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Box {
@@ -804,14 +837,6 @@ private fun buildManageTreeItems(
 
     appendChildren(parentPath, 0)
     return result
-}
-
-private fun descendantFolderPaths(
-    labels: List<String>,
-    parentPath: String,
-): List<String> {
-    val prefix = "$parentPath/"
-    return labels.filter { it.startsWith(prefix) }
 }
 
 private fun directChildFolderPaths(

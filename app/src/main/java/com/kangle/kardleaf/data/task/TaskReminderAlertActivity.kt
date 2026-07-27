@@ -1,18 +1,9 @@
 package com.kangle.kardleaf.data.task
 
-import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.ColorDrawable
-import android.media.AudioAttributes
-import android.media.Ringtone
-import android.media.RingtoneManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -27,10 +18,6 @@ import com.kangle.kardleaf.ui.theme.KardLeafTheme
 private const val TASK_REMINDER_LOG_TAG = "KardLeafTaskReminder"
 
 class TaskReminderAlertActivity : ComponentActivity() {
-    private val stopHandler = Handler(Looper.getMainLooper())
-    private var ringtone: Ringtone? = null
-    private var vibrator: Vibrator? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         showOverLockScreen()
@@ -39,7 +26,6 @@ class TaskReminderAlertActivity : ComponentActivity() {
         val taskId = intent.getLongExtra(TaskReminderScheduler.EXTRA_TASK_ID, 0L)
         val taskText = intent.getStringExtra(TaskReminderScheduler.EXTRA_TASK_TEXT).orEmpty()
         KardLeafLog.i(TASK_REMINDER_LOG_TAG, "alert activity shown id=$taskId")
-        startAlertFeedback(taskId)
 
         setContent {
             KardLeafTheme {
@@ -56,7 +42,10 @@ class TaskReminderAlertActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        stopAlertFeedback()
+        // 铃声/震动由 TaskReminderService 播放；弹窗被关闭即认为用户已知晓，停止提醒反馈
+        if (isFinishing) {
+            stopAlertService()
+        }
         super.onDestroy()
     }
 
@@ -73,62 +62,12 @@ class TaskReminderAlertActivity : ComponentActivity() {
         }
     }
 
-    private fun startAlertFeedback(taskId: Long) {
-        runCatching {
-            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            ringtone = RingtoneManager.getRingtone(this, soundUri)?.apply {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    audioAttributes = AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    isLooping = true
-                    volume = 1f
-                }
-                play()
+    private fun stopAlertService() {
+        runCatching { startService(TaskReminderService.stopIntent(this)) }
+            .onFailure { error ->
+                KardLeafLog.e(TASK_REMINDER_LOG_TAG, "alert stop service failed", error)
+                runCatching { stopService(Intent(this, TaskReminderService::class.java)) }
             }
-            KardLeafLog.i(
-                TASK_REMINDER_LOG_TAG,
-                "alert sound requested id=$taskId hasRingtone=${ringtone != null}",
-            )
-        }.onFailure { error ->
-            KardLeafLog.e(TASK_REMINDER_LOG_TAG, "alert sound failed id=$taskId", error)
-        }
-
-        runCatching {
-            vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                getSystemService(VibratorManager::class.java).defaultVibrator
-            } else {
-                @Suppress("DEPRECATION")
-                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            }
-            val pattern = longArrayOf(0L, 260L, 120L, 260L)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator?.vibrate(VibrationEffect.createWaveform(pattern, -1))
-            } else {
-                @Suppress("DEPRECATION")
-                vibrator?.vibrate(pattern, -1)
-            }
-            KardLeafLog.i(
-                TASK_REMINDER_LOG_TAG,
-                "alert vibration requested id=$taskId hasVibrator=${vibrator != null}",
-            )
-        }.onFailure { error ->
-            KardLeafLog.e(TASK_REMINDER_LOG_TAG, "alert vibration failed id=$taskId", error)
-        }
-
-        stopHandler.postDelayed({ stopAlertFeedback() }, ALERT_FEEDBACK_TIMEOUT_MS)
-    }
-
-    private fun stopAlertFeedback() {
-        stopHandler.removeCallbacksAndMessages(null)
-        runCatching { ringtone?.stop() }
-        runCatching { vibrator?.cancel() }
-        ringtone = null
-        vibrator = null
     }
 
     private fun openApp() {
@@ -139,10 +78,6 @@ class TaskReminderAlertActivity : ComponentActivity() {
                 Intent.FLAG_ACTIVITY_SINGLE_TOP,
         )
         runCatching { startActivity(launchIntent) }
-    }
-
-    companion object {
-        private const val ALERT_FEEDBACK_TIMEOUT_MS = 15_000L
     }
 }
 

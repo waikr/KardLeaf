@@ -15,43 +15,46 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:gravity="center_vertical"
-            android:includeFontPadding="false"
-            android:maxLines="1"
-            android:text="@string/widget_task_list_title"
-            android:textColor="#0F172A"
-            android:textSize="15sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/task_widget_count"
+        <LinearLayout
+            android:id="@+id/task_widget_title_control"
             android:layout_width="wrap_content"
-            android:layout_height="28dp"
-            android:layout_marginStart="8dp"
-            android:background="@drawable/bg_quick_note_logo_chip"
+            android:layout_height="match_parent"
+            android:clickable="true"
+            android:focusable="true"
             android:gravity="center_vertical"
-            android:includeFontPadding="false"
-            android:maxLines="1"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:textColor="#2563EB"
-            android:textSize="12sp"
-            android:visibility="gone" />
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/task_widget_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="@string/widget_task_list_title"
+                android:textColor="#0F172A"
+                android:textSize="15sp" />
+
+            <ImageView
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_marginStart="1dp"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_widget_keyboard_arrow_down" />
+        </LinearLayout>
 
         <TextView
+            android:id="@+id/task_widget_open"
             android:layout_width="0dp"
-            android:layout_height="1dp"
-            android:layout_weight="0" />
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:clickable="true"
+            android:focusable="true" />
 
         <TextView
             android:id="@+id/task_widget_add"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
             android:background="@drawable/bg_quick_note_plus"
             android:clickable="true"
             android:focusable="true"
@@ -59,8 +62,16 @@
             android:includeFontPadding="false"
             android:text="+"
             android:textColor="#FFFFFF"
-            android:textSize="24sp"
+            android:textSize="20sp"
             android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/task_widget_more"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginStart="8dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_widget_more_vert" />
     </LinearLayout>
 
     <TextView
@@ -71,7 +82,7 @@
         android:gravity="center"
         android:text="@string/widget_task_empty"
         android:textColor="#64748B"
-        android:textSize="14sp" />
+        android:textSize="12sp" />
 
     <ListView
         android:id="@+id/task_widget_list"
@@ -81,7 +92,7 @@
         android:layout_weight="1"
         android:cacheColorHint="@android:color/transparent"
         android:divider="@android:color/transparent"
-        android:dividerHeight="6dp"
+        android:dividerHeight="4dp"
         android:fadingEdge="none"
         android:scrollbars="none" />
 </LinearLayout>

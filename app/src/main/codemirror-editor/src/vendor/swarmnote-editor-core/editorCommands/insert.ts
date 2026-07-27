@@ -1,10 +1,10 @@
 /**
  * 插入元素命令
- * 
+ *
  * **功能：**
  * 提供在编辑器中插入各种 Markdown 元素的命令，包括：
  * - 代码块（带语言提示）
- * - 分割线（`---`）
+ * - 分割线（`***`）
  * - 表格（默认结构或基于选区）
  * - 链接（带文本和 URL）
  * - 图片（块级图片，自动处理换行）
@@ -14,12 +14,12 @@ import type { EditorView } from '@codemirror/view';
 
 /**
  * 插入代码块
- * 
+ *
  * **行为：**
  * 1. 如果已有选区，将选区包裹在代码块中
  * 2. 如果没有选区，在当前行后插入空代码块
  * 3. 光标定位到代码块内容区域
- * 
+ *
  * @param view - 编辑器视图
  */
 export function insertCodeBlock(view: EditorView): void {
@@ -43,17 +43,17 @@ export function insertCodeBlock(view: EditorView): void {
 
 /**
  * 插入分割线
- * 
+ *
  * **行为：**
- * 在当前行之后插入 `---` 分割线，并在其后创建新行
- * 
+ * 在当前行之后插入 `***` 分割线，并在其后创建新行
+ *
  * @param view - 编辑器视图
  */
 export function insertHorizontalRule(view: EditorView): void {
   const { from } = view.state.selection.main;
   const line = view.state.doc.lineAt(from);
   const prefix = line.text.length > 0 ? '\n' : '';
-  const insert = `${prefix}---\n`;
+  const insert = `${prefix}***\n`;
 
   view.dispatch({
     changes: { from: line.to, to: line.to, insert },
@@ -63,23 +63,31 @@ export function insertHorizontalRule(view: EditorView): void {
 
 /**
  * 插入表格
- * 
+ *
  * **行为：**
  * 1. 如果有多行选区，将选区转换为表格（每行作为一行数据）
- * 2. 如果没有选区或多行选区不足，插入默认的空表格（2列 x 2行）
+ * 2. 如果没有选区或多行选区不足，插入默认的空表格（3列 x 3行）
  * 3. 光标定位到第一个单元格
- * 
+ *
  * @param view - 编辑器视图
  */
 export function insertTable(view: EditorView): void {
   const { from } = view.state.selection.main;
   const line = view.state.doc.lineAt(from);
   const prefix = line.text.length > 0 ? '\n' : '';
-  const table = `${prefix}| Header 1 | Header 2 | Header 3 |\n| -------- | -------- | -------- |\n| Cell 1   | Cell 2   | Cell 3   |\n`;
+  const table = `${prefix}|  |  |  |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n`;
+  const tableFrom = line.to + prefix.length;
+
+  // Widget 会在本次文档更新后才创建；先把目标单元格记录在当前
+  // EditorView 的 DOM 上，待表格 Widget 挂载时立即进入第一个表头。
+  const editorDom = view.dom as HTMLElement & {
+    kardleafPendingTableFocus?: { tableFrom: number; row: number; col: number };
+  };
+  editorDom.kardleafPendingTableFocus = { tableFrom, row: -1, col: 0 };
 
   view.dispatch({
     changes: { from: line.to, to: line.to, insert: table },
-    selection: EditorSelection.cursor(line.to + prefix.length + 2),
+    selection: EditorSelection.cursor(tableFrom + 2),
   });
 }
 

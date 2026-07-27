@@ -72,6 +72,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 private const val USER_PERF_TRACE_TAG = "KardLeafUserPerf"
 private const val OPEN_PATH_PROBE_TAG = "KardLeafOpenPathProbe"
+private const val PAGER_PROBE_TAG = "KardLeafPagerProbe"
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -92,6 +93,8 @@ fun NoteCard(
     searchMatch: SearchMatch? = null,
     showImagePreview: Boolean = false,
     loadImageThumbnail: suspend (Note) -> Bitmap? = { null },
+    peekImageThumbnail: (Note) -> Bitmap? = { null },
+    thumbnailTraceSource: String = "",
     onSearchJump: (() -> Unit)? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -180,19 +183,50 @@ fun NoteCard(
     val imageReference = note.firstImageReference?.takeIf { it.isNotBlank() }
     val shouldLoadThumbnail = showImagePreview && searchMatch == null && imageReference != null
     val showSearchJump = searchQuery.isNotBlank() && searchMatch != null && searchMatch.startOffset >= 0 && onSearchJump != null
-    var thumbnailBitmap by remember(note.id, imageReference, note.lastModified.time) { mutableStateOf<Bitmap?>(null) }
+    // 首帧同步读内存缓存，命中时直接出图，消除卡片重建后的灰色占位
+    var thumbnailBitmap by remember(note.id, imageReference, note.lastModified.time) {
+        mutableStateOf(if (shouldLoadThumbnail) peekImageThumbnail(note) else null)
+    }
 
     LaunchedEffect(shouldLoadThumbnail, note.id, imageReference, note.lastModified.time, loadImageThumbnail) {
         if (!shouldLoadThumbnail) {
+            if (imageReference != null) {
+                KardLeafLog.d(
+                    PAGER_PROBE_TAG,
+                    "noteThumbSkip source=$thumbnailTraceSource noteHash=${note.file.path.hashCode().toString(16)} " +
+                        "folderHash=${note.folder.hashCode().toString(16)} showPreview=$showImagePreview searchMatch=${searchMatch != null} " +
+                        "refLen=${imageReference.length} ref=${imageReference.take(80)}",
+                )
+            }
             thumbnailBitmap = null
             return@LaunchedEffect
         }
 
+        // 已有同 key 的图（来自 peek 或上一轮加载）就不再重复加载；
+        // 加载被门控暂停时也先试一次内存缓存，滑动中命中即出图
+        if (thumbnailBitmap != null) return@LaunchedEffect
+        peekImageThumbnail(note)?.let {
+            thumbnailBitmap = it
+            return@LaunchedEffect
+        }
+
+        KardLeafLog.d(
+            PAGER_PROBE_TAG,
+            "noteThumbStart source=$thumbnailTraceSource noteHash=${note.file.path.hashCode().toString(16)} " +
+                "folderHash=${note.folder.hashCode().toString(16)} refLen=${imageReference?.length ?: 0} ref=${imageReference?.take(80).orEmpty()} " +
+                "lastModified=${note.lastModified.time} contentLen=${note.content.length} previewLen=${note.contentPreview.length} loaderHash=${System.identityHashCode(loadImageThumbnail)}",
+        )
         val thumbnailStartMs = SystemClock.elapsedRealtime()
         val loadedBitmap = withTimeoutOrNull(2000L) {
             runCatching { loadImageThumbnail(note) }.getOrNull()
         }
         val thumbnailElapsedMs = SystemClock.elapsedRealtime() - thumbnailStartMs
+        KardLeafLog.d(
+            PAGER_PROBE_TAG,
+            "noteThumbDone source=$thumbnailTraceSource noteHash=${note.file.path.hashCode().toString(16)} " +
+                "folderHash=${note.folder.hashCode().toString(16)} ok=${loadedBitmap != null} elapsed=${thumbnailElapsedMs}ms " +
+                "refLen=${imageReference?.length ?: 0} loaderHash=${System.identityHashCode(loadImageThumbnail)}",
+        )
         if (thumbnailElapsedMs >= 32L || loadedBitmap == null) {
             KardLeafLog.d(
                 OPEN_PATH_PROBE_TAG,

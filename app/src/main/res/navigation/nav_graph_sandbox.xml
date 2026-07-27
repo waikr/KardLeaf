@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph_sandbox"
+    app:startDestination="@id/editorFragment">
+
+    <!--
+      Quillpad EditorFragment hosted by KardLeaf. Real file content is supplied
+      through the original `navArgs()` / `EditorFragmentArgs` path.
+    -->
+    <fragment
+        android:id="@+id/editorFragment"
+        android:name="org.qosp.notes.ui.editor.EditorFragment"
+        android:label="KardLeaf Quillpad Editor">
+        <!--
+          actionEditorToTags must exist so the original EditorFragment's
+          `EditorFragmentDirections.actionEditorToTags().setNoteId(...)` compiles.
+          The destination remains a stub until KardLeaf's tag screen has a safe
+          standalone navigation contract; the corresponding menu item is hidden.
+        -->
+        <action
+            android:id="@+id/actionEditorToTags"
+            app:destination="@id/fragment_tags" />
+        <argument
+            android:name="noteId"
+            app:argType="long"
+            android:defaultValue="0L" />
+        <argument
+            android:name="newNoteTitle"
+            app:argType="string"
+            android:defaultValue="" />
+        <argument
+            android:name="newNoteContent"
+            app:argType="string"
+            android:defaultValue="" />
+        <argument
+            android:name="newNoteAttachments"
+            app:argType="org.qosp.notes.data.model.Attachment[]"
+            app:nullable="true"
+            android:defaultValue="@null" />
+        <argument
+            android:name="newNoteIsList"
+            app:argType="boolean"
+            android:defaultValue="false" />
+        <argument
+            android:name="newNoteNotebookId"
+            app:argType="long"
+            android:defaultValue="0L" />
+        <argument
+            android:name="transitionName"
+            app:argType="string"
+            android:defaultValue="kardleaf_quillpad" />
+    </fragment>
+
+    <!-- Stub tags destination so the retained generated navigation API resolves. -->
+    <fragment
+        android:id="@+id/fragment_tags"
+        android:name="org.qosp.notes.ui.tags.TagsFragment">
+        <argument
+            android:name="noteId"
+            android:defaultValue="0L"
+            app:argType="long" />
+    </fragment>
+
+</navigation>

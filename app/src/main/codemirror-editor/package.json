@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/editor.ts --bundle --format=iife --target=chrome96 --outfile=../assets/codemirror-editor/editor.js --legal-comments=linked --loader:.css=text"
+    "build": "esbuild src/editor.ts --bundle --minify --format=iife --target=chrome96 --outfile=../assets/codemirror-editor/editor.js --legal-comments=linked --loader:.css=text"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

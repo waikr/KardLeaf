@@ -5,4 +5,6 @@
     <item name="preview_heading_scroll_token_tag" type="id" />
     <item name="preview_page_ready_tag" type="id" />
     <item name="preview_pending_render_tag" type="id" />
+    <item name="preview_lifecycle_state_tag" type="id" />
+    <item name="codemirror_lifecycle_state_tag" type="id" />
 </resources>

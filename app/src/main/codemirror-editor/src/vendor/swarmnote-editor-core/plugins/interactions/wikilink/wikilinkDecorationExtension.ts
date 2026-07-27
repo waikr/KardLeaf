@@ -9,6 +9,7 @@
  * 增量更新时只重扫此窗口。
  */
 import { Prec, RangeSetBuilder, type Extension } from '@codemirror/state';
+import { syntaxTree } from '@codemirror/language';
 import {
   Decoration,
   type DecorationSet,
@@ -65,6 +66,21 @@ function buildDecorations(view: EditorView): DecorationSet {
     // biome-ignore lint/suspicious/noAssignInExpressions: classic regex iter
     while ((m = WIKILINK_REGEX.exec(text)) !== null) {
       const start = range.from + m.index;
+      let escapedSlashes = 0;
+      for (let i = start - 1; i >= 0 && view.state.doc.sliceString(i, i + 1) === '\\'; i--) escapedSlashes++;
+      if ((start > 0 && view.state.doc.sliceString(start - 1, start) === '!') || escapedSlashes % 2 === 1) {
+        continue;
+      }
+      let context = syntaxTree(view.state).resolveInner(start, -1);
+      let ignored = false;
+      while (context) {
+        if (['FencedCode', 'CodeBlock', 'InlineCode', 'FrontMatter'].includes(context.type.name)) {
+          ignored = true;
+          break;
+        }
+        context = context.parent;
+      }
+      if (ignored) continue;
       const titleStart = start + 2;
       const titleEnd = start + 2 + m[1].length;
       const end = start + m[0].length;

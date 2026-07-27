@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="HH_mm" translatable="false">HH:mm</string>
+    <string name="MMMM_d_yyyy" translatable="false">MMMM d yyyy</string>
+    <string name="MM_d_yyyy" translatable="false">MM/d/yyyy</string>
+    <string name="action_add_task">Task</string>
+    <string name="action_archive">Archive</string>
+    <string name="action_attach_files">Attach files</string>
+    <string name="action_change_color">Change color</string>
+    <string name="action_change_mode">Edit/View mode</string>
+    <string name="action_convert_to_list">Convert to list</string>
+    <string name="action_insert_bullet_list">Bullet list</string>
+    <string name="action_insert_ordered_list">Numbered list</string>
+    <string name="action_insert_code_block">Code block</string>
+    <string name="action_insert_divider">Divider</string>
+    <string name="action_insert_drawing">Drawing</string>
+    <string name="action_insert_heading_1">H1</string>
+    <string name="action_insert_heading_2">H2</string>
+    <string name="action_insert_heading_3">H3</string>
+    <string name="action_insert_math">$</string>
+    <string name="action_insert_underline">Underline</string>
+    <string name="action_indent">Indent</string>
+    <string name="action_outdent">Outdent</string>
+    <string name="action_convert_to_note">Convert to note</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_delete_permanently">Delete permanently</string>
+    <string name="action_disable_markdown">Disable markdown</string>
+    <string name="action_do_not_sync">Do not sync</string>
+    <string name="action_done">Done!</string>
+    <string name="action_enable_markdown">Enable markdown</string>
+    <string name="action_export">Export</string>
+    <string name="action_hide">Hide</string>
+    <string name="action_new_reminder">New reminder</string>
+    <string name="action_pin">Pin</string>
+    <string name="action_preview">Preview</string>
+    <string name="action_redo">Redo</string>
+    <string name="action_record_audio">Record audio</string>
+    <string name="action_remove_all_checked_tasks">Remove all checked tasks</string>
+    <string name="action_restore">Restore</string>
+    <string name="action_screen_always_on">Screen always on</string>
+    <string name="action_share">Share</string>
+    <string name="action_take_photo">Take a photo</string>
+    <string name="action_toggle_check_line">Toggle task</string>
+    <string name="action_complete_check_line">Completed task</string>
+    <string name="action_scroll_to_top">Scroll to top</string>
+    <string name="action_scroll_to_bottom">Scroll to bottom</string>
+    <string name="action_undo">Undo</string>
+    <string name="action_unarchive">Unarchive</string>
+    <string name="action_uncheck_all_tasks">Uncheck all items</string>
+    <string name="action_unpin">Unpin</string>
+    <string name="attachments_edit_description">Edit description</string>
+    <string name="d_MMMM_yyyy" translatable="false">d MMMM yyyy</string>
+    <string name="d_MM_yyyy" translatable="false">d/MM/yyyy</string>
+    <string name="default_string">Default</string>
+    <string name="editor_hint_content">Take a note!</string>
+    <string name="editor_hint_title">Title</string>
+    <string name="hh_mm" translatable="false">hh:mm a</string>
+    <string name="indicator_archive_note">Archived note</string>
+    <string name="indicator_deleted_note_cannot_be_edited">Notes inside the bin cannot be edited.</string>
+    <string name="indicator_deleted_note_permanently">Deleted note permanently.</string>
+    <string name="indicator_moved_note_to_bin">Moved note to bin</string>
+    <string name="indicator_note_date">Created at %1$s\nLast modified at %2$s</string>
+    <string name="indicator_untitled">Untitled</string>
+    <string name="message_cannot_preview_table">Cannot preview table.</string>
+    <string name="nav_tags">Tags</string>
+    <string name="never">Never</string>
+    <string name="no">No</string>
+    <string name="notebooks_unassigned">No Notebook</string>
+    <string name="preferences_background_sync_disabled">Disabled</string>
+    <string name="preferences_background_sync_enabled">Enabled</string>
+    <string name="preferences_backup_strategy_include_files">Backup everything</string>
+    <string name="preferences_backup_strategy_keep_info">Only backup description and local path</string>
+    <string name="preferences_backup_strategy_keep_nothing">Do not backup attachments</string>
+    <string name="preferences_cloud_service_disabled">Disabled</string>
+    <string name="preferences_cloud_service_files">File Storage</string>
+    <string name="preferences_cloud_service_nextcloud">Nextcloud</string>
+    <string name="preferences_color_scheme_blue">Blue</string>
+    <string name="preferences_color_scheme_brown">Brown</string>
+    <string name="preferences_color_scheme_cyan">Cyan</string>
+    <string name="preferences_color_scheme_gray">Gray</string>
+    <string name="preferences_color_scheme_green">Green</string>
+    <string name="preferences_color_scheme_orange">Orange</string>
+    <string name="preferences_color_scheme_pink">Pink</string>
+    <string name="preferences_color_scheme_purple">Purple</string>
+    <string name="preferences_color_scheme_red">Red</string>
+    <string name="preferences_color_scheme_system">Follow system</string>
+    <string name="preferences_color_scheme_teal">Teal</string>
+    <string name="preferences_color_scheme_yellow">Yellow</string>
+    <string name="preferences_default_editor_mode_edit">Edit mode</string>
+    <string name="preferences_default_editor_mode_view">View mode</string>
+    <string name="preferences_fab">Floating button</string>
+    <string name="preferences_font_size_default">Default</string>
+    <string name="preferences_font_size_fifteen" translatable="false">15</string>
+    <string name="preferences_font_size_fifty" translatable="false">50</string>
+    <string name="preferences_font_size_forty" translatable="false">40</string>
+    <string name="preferences_font_size_fortyfive" translatable="false">45</string>
+    <string name="preferences_font_size_ten" translatable="false">10</string>
+    <string name="preferences_font_size_thirty" translatable="false">30</string>
+    <string name="preferences_font_size_thirtyfive" translatable="false">35</string>
+    <string name="preferences_font_size_twenty" translatable="false">20</string>
+    <string name="preferences_font_size_twentyfive" translatable="false">25</string>
+    <string name="preferences_layout_mode_grid">Grid</string>
+    <string name="preferences_layout_mode_list">List</string>
+    <string name="preferences_note_deletion_time_instantly">Instantly</string>
+    <string name="preferences_note_deletion_time_month">After 30 days</string>
+    <string name="preferences_note_deletion_time_two_weeks">After 14 days</string>
+    <string name="preferences_note_deletion_time_week">After 7 days</string>
+    <string name="preferences_open_media_in_external">External player</string>
+    <string name="preferences_open_media_in_internal">Internal player</string>
+    <string name="preferences_sort_method_created_asc">Date created (ascending)</string>
+    <string name="preferences_sort_method_created_desc">Date created (descending)</string>
+    <string name="preferences_sort_method_modified_asc">Date modified (ascending)</string>
+    <string name="preferences_sort_method_modified_desc">Date modified (descending)</string>
+    <string name="preferences_sort_method_title_asc">Title (ascending)</string>
+    <string name="preferences_sort_method_title_desc">Title (descending)</string>
+    <string name="preferences_sync_on_wifi">Wi-Fi</string>
+    <string name="preferences_sync_on_wifi_data">Wi-Fi or Data</string>
+    <string name="preferences_theme_dark_mode_black">Black</string>
+    <string name="preferences_theme_dark_mode_standard">Standard</string>
+    <string name="preferences_theme_mode_dark">Dark</string>
+    <string name="preferences_theme_mode_light">Light</string>
+    <string name="preferences_theme_mode_system">Follow system</string>
+    <string name="preferences_top_bar">Top bar</string>
+    <string name="quillpad_search">搜索与替换</string>
+    <string name="quillpad_search_hint">搜索正文</string>
+    <string name="quillpad_search_previous">上一个结果</string>
+    <string name="quillpad_search_next">下一个结果</string>
+    <string name="quillpad_search_close">关闭搜索</string>
+    <string name="quillpad_replace_hint">替换为</string>
+    <string name="quillpad_replace_current">替换</string>
+    <string name="quillpad_replace_all">全部替换</string>
+    <string name="quillpad_history">历史版本</string>
+    <string name="quillpad_remarks">备注</string>
+    <string name="reminders">Reminders</string>
+    <string name="yes">Yes</string>
+    <string name="yyyy_MM_dd" translatable="false">yyyy-MM-dd</string>
+</resources>
