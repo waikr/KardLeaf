@@ -574,6 +574,7 @@ fun SelectionTopAppBar(
     }
 
     val isTrash = currentFilter is MainViewModel.NoteFilter.Trash
+    val isArchive = currentFilter is MainViewModel.NoteFilter.Archive
 
     if (showMoveMenu) {
         MoveNotesBottomSheet(
@@ -627,7 +628,7 @@ fun SelectionTopAppBar(
         actions = {
             fun isActionAvailable(item: PrefsManager.SelectionToolbarItemId): Boolean =
                 when (item) {
-                    PrefsManager.SelectionToolbarItemId.MOVE -> !isTrash
+                    PrefsManager.SelectionToolbarItemId.MOVE -> !isTrash && !isArchive
                     PrefsManager.SelectionToolbarItemId.COPY -> !isTrash && allSelectedActive
                     PrefsManager.SelectionToolbarItemId.PIN -> !isTrash && allSelectedActive
                     PrefsManager.SelectionToolbarItemId.FAVORITE -> !isTrash

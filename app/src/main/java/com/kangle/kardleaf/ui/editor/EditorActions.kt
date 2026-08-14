@@ -3,8 +3,6 @@ package com.kangle.kardleaf.ui.editor
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.utils.KardLeafContentLimits
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
-import com.kangle.kardleaf.ui.MarkdownHeading
-import com.kangle.kardleaf.ui.extractMarkdownHeadings
 import androidx.compose.ui.text.TextRange
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -254,15 +252,55 @@ private fun formatNoteSidePanelTime(date: Date): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(date)
 
 
+internal enum class MindMapSourceKind {
+    H1,
+    H2,
+    H3,
+    LIST,
+}
+
+internal data class MindMapNode(
+    val index: Int,
+    val depth: Int,
+    val text: String,
+    val sourceOffset: Int,
+    val lineIndex: Int,
+    val parentIndex: Int?,
+    val sourceKind: MindMapSourceKind,
+)
+
+internal data class MindMapDocument(
+    val content: String,
+    val nodes: List<MindMapNode>,
+) {
+    val root: MindMapNode
+        get() = nodes.first()
+}
+
 internal data class MindMapPrepareResult(
-    val headings: List<MarkdownHeading>,
+    val document: MindMapDocument? = null,
     val unavailableTitle: String? = null,
     val unavailableMessage: String? = null,
 )
 
+internal data class MindMapEditResult(
+    val content: String,
+    val selection: TextRange,
+    val nodeTitle: String,
+    val contextTitle: String? = null,
+    val nodeIndex: Int? = null,
+)
+
+private data class MindMapParseResult(
+    val document: MindMapDocument? = null,
+    val error: String? = null,
+)
+
+private val mindMapHeadingRegex = Regex("""^(#{1,6})\s+(.+?)\s*#*\s*$""")
+private val mindMapListRegex = Regex("""^([ \t]*)([-*+])\s+(.+?)\s*$""")
+
 internal fun blockedLargeMindMapResult(contentLength: Int): MindMapPrepareResult =
     MindMapPrepareResult(
-        headings = emptyList(),
         unavailableTitle = "笔记过大",
         unavailableMessage = "当前笔记约 ${contentLength.coerceAtLeast(0)} 字，已停止生成思维导图，避免误触后卡死。",
     )
@@ -271,392 +309,323 @@ internal fun prepareMarkdownMindMap(content: String): MindMapPrepareResult {
     if (content.length > KardLeafContentLimits.MIND_MAP_MAX_CONTENT_CHARS) {
         return blockedLargeMindMapResult(content.length)
     }
-    val headings = extractMarkdownHeadings(content)
-    if (headings.size > KardLeafContentLimits.MIND_MAP_MAX_HEADING_COUNT) {
+    val parsed = parseMindMapDocument(content)
+    val document = parsed.document
+    if (document != null && document.nodes.size > KardLeafContentLimits.MIND_MAP_MAX_NODE_COUNT) {
         return MindMapPrepareResult(
-            headings = emptyList(),
             unavailableTitle = "节点过多",
-            unavailableMessage = "当前笔记检测到 ${headings.size} 个标题节点，已停止生成思维导图，避免 WebView 渲染过重。",
+            unavailableMessage = "当前笔记检测到 ${document.nodes.size} 个思维导图节点，已停止生成，避免 WebView 渲染过重。",
         )
     }
-    val nonStandardReason = validateStandardMindMapHeadings(headings)
-    if (nonStandardReason != null) {
-        return MindMapPrepareResult(
-            headings = emptyList(),
+    return if (document != null) {
+        MindMapPrepareResult(document = document)
+    } else {
+        MindMapPrepareResult(
             unavailableTitle = "非标准思维导图格式",
-            unavailableMessage = nonStandardReason,
+            unavailableMessage = parsed.error,
         )
     }
-    return MindMapPrepareResult(headings = headings)
 }
 
-private fun validateStandardMindMapHeadings(headings: List<MarkdownHeading>): String? {
-    if (headings.isEmpty()) {
-        return "当前笔记没有检测到标准 Markdown 标题。思维导图需要使用 # 一级节点、## 二级节点、### 三级节点这类结构。"
-    }
-    val first = headings.first()
-    if (first.level != 1) {
-        return "第 ${first.lineIndex + 1} 行不是一级标题。标准思维导图需要从 # 一级节点开始。"
-    }
-    headings.zipWithNext().forEach { (previous, current) ->
-        if (current.level > previous.level + 1) {
-            return "第 ${current.lineIndex + 1} 行标题层级跳级。请不要从 H${previous.level} 直接跳到 H${current.level}。"
+private fun parseMindMapDocument(content: String): MindMapParseResult {
+    val nodes = mutableListOf<MindMapNode>()
+    val ancestors = mutableListOf<Int>()
+    var offset = 0
+    var lineIndex = 0
+    var fenceCharacter: Char? = null
+    var fenceLength = 0
+
+    while (offset <= content.length) {
+        val newlineIndex = content.indexOfAny(charArrayOf('\n', '\r'), startIndex = offset)
+        val lineEnd = if (newlineIndex >= 0) newlineIndex else content.length
+        val line = content.substring(offset, lineEnd)
+        val trimmedStart = line.trimStart()
+        val fenceRun = trimmedStart.takeWhile { it == '`' || it == '~' }
+        if (fenceCharacter != null) {
+            if (fenceRun.length >= fenceLength && fenceRun.all { it == fenceCharacter }) {
+                fenceCharacter = null
+                fenceLength = 0
+            }
+        } else if (fenceRun.length >= 3 && fenceRun.all { it == fenceRun.first() }) {
+            fenceCharacter = fenceRun.first()
+            fenceLength = fenceRun.length
+        } else {
+            val headingMatch = mindMapHeadingRegex.matchEntire(trimmedStart)
+            val listMatch = mindMapListRegex.matchEntire(line)
+            val parsedNode = when {
+                headingMatch != null -> {
+                    val indentation = line.length - trimmedStart.length
+                    if (indentation != 0) {
+                        return MindMapParseResult(error = "第 ${lineIndex + 1} 行标题带有缩进。H1-H3 必须从行首开始。")
+                    }
+                    val level = headingMatch.groupValues[1].length
+                    if (level > 3) {
+                        return MindMapParseResult(error = "第 ${lineIndex + 1} 行使用了 H$level。思维导图仅允许 H1-H3，深层节点请使用缩进列表。")
+                    }
+                    Triple(level - 1, headingMatch.groupValues[2].trim(), MindMapSourceKind.entries[level - 1])
+                }
+                listMatch != null -> {
+                    val indentation = listMatch.groupValues[1]
+                    if ('\t' in indentation) {
+                        return MindMapParseResult(error = "第 ${lineIndex + 1} 行列表使用了 Tab。思维导图列表必须使用空格缩进。")
+                    }
+                    if (listMatch.groupValues[2] != "-") {
+                        return MindMapParseResult(error = "第 ${lineIndex + 1} 行列表标记不是 -。思维导图深层节点统一使用 -。")
+                    }
+                    if (indentation.length % 2 != 0) {
+                        return MindMapParseResult(error = "第 ${lineIndex + 1} 行列表缩进不是 2 的倍数。")
+                    }
+                    Triple(3 + indentation.length / 2, listMatch.groupValues[3].trim(), MindMapSourceKind.LIST)
+                }
+                else -> null
+            }
+
+            if (parsedNode != null) {
+                val (depth, text, sourceKind) = parsedNode
+                if (nodes.isEmpty() && depth != 0) {
+                    return MindMapParseResult(error = "第 ${lineIndex + 1} 行是第一条结构节点，但不是 H1 根节点。")
+                }
+                if (depth == 0 && nodes.isNotEmpty()) {
+                    return MindMapParseResult(error = "第 ${lineIndex + 1} 行出现了第二个 H1。思维导图只能有一个根节点。")
+                }
+                if (nodes.isNotEmpty() && depth > nodes.last().depth + 1) {
+                    return MindMapParseResult(error = "第 ${lineIndex + 1} 行层级从 ${nodes.last().depth} 跳到了 $depth。节点层级不能跳级。")
+                }
+                val parentIndex = if (depth == 0) {
+                    null
+                } else {
+                    ancestors.getOrNull(depth - 1)?.takeIf { it >= 0 }
+                        ?: return MindMapParseResult(error = "第 ${lineIndex + 1} 行没有合法的上级节点。")
+                }
+                val nodeIndex = nodes.size
+                nodes += MindMapNode(
+                    index = nodeIndex,
+                    depth = depth,
+                    text = text,
+                    sourceOffset = offset,
+                    lineIndex = lineIndex,
+                    parentIndex = parentIndex,
+                    sourceKind = sourceKind,
+                )
+                while (ancestors.size <= depth) ancestors += -1
+                while (ancestors.size > depth + 1) ancestors.removeAt(ancestors.lastIndex)
+                ancestors[depth] = nodeIndex
+            }
         }
+
+        if (newlineIndex < 0) break
+        offset = if (content[newlineIndex] == '\r' && content.getOrNull(newlineIndex + 1) == '\n') {
+            newlineIndex + 2
+        } else {
+            newlineIndex + 1
+        }
+        lineIndex++
     }
-    return null
+
+    if (nodes.isEmpty()) {
+        return MindMapParseResult(error = "当前笔记没有检测到思维导图结构。第一条结构节点必须是 # 根节点。")
+    }
+    return MindMapParseResult(document = MindMapDocument(content, nodes))
 }
 
+private fun sanitizeMindMapTitle(title: String): String =
+    title.replace('\r', ' ').replace('\n', ' ').trim()
 
-internal data class MindMapReparentResult(
-    val content: String,
-    val selection: TextRange,
-    val movedTitle: String,
-    val parentTitle: String,
-)
+private fun mindMapNodePrefix(depth: Int): String {
+    require(depth >= 0)
+    return if (depth <= 2) "#".repeat(depth + 1) + " " else "  ".repeat(depth - 3) + "- "
+}
 
-internal data class MindMapAddChildResult(
-    val content: String,
-    val selection: TextRange,
-    val parentTitle: String,
-)
+internal fun formatMindMapNodeLine(depth: Int, title: String): String = mindMapNodePrefix(depth) + title
 
-internal data class MindMapDeleteResult(
-    val content: String,
-    val selection: TextRange,
-    val deletedTitle: String,
-)
+internal fun createMindMapRoot(title: String = "中心主题"): MindMapEditResult? {
+    val rootTitle = sanitizeMindMapTitle(title)
+    if (rootTitle.isEmpty()) return null
+    val content = formatMindMapNodeLine(0, rootTitle)
+    return MindMapEditResult(content, TextRange(2, content.length), rootTitle)
+}
 
-internal data class MindMapRenameResult(
-    val content: String,
-    val selection: TextRange,
-    val renamedTitle: String,
-)
+private fun insertMindMapNode(
+    document: MindMapDocument,
+    insertAt: Int,
+    depth: Int,
+    title: String,
+    contextTitle: String,
+): MindMapEditResult {
+    val content = document.content
+    val prefix = if (insertAt > 0 && content[insertAt - 1] != '\n' && content[insertAt - 1] != '\r') "\n" else ""
+    val suffix = if (insertAt >= content.length || (content[insertAt] != '\n' && content[insertAt] != '\r')) "\n" else ""
+    val line = formatMindMapNodeLine(depth, title)
+    val insertion = prefix + line + suffix
+    val updatedContent = content.substring(0, insertAt) + insertion + content.substring(insertAt)
+    val titleStart = insertAt + prefix.length + mindMapNodePrefix(depth).length
+    return MindMapEditResult(
+        content = updatedContent,
+        selection = TextRange(titleStart, titleStart + title.length),
+        nodeTitle = title,
+        contextTitle = contextTitle,
+        nodeIndex = document.nodes.count { it.sourceOffset < insertAt },
+    )
+}
 
-internal data class MindMapAddSiblingResult(
-    val content: String,
-    val selection: TextRange,
-    val anchorTitle: String,
-)
-
-internal data class MindMapMoveResult(
-    val content: String,
-    val selection: TextRange,
-    val movedTitle: String,
-)
-
-internal fun addMarkdownHeadingChild(
-    content: String,
-    headings: List<MarkdownHeading>,
+internal fun addMindMapChild(
+    document: MindMapDocument,
     parentIndex: Int,
     title: String,
-): MindMapAddChildResult? {
-    val parent = if (parentIndex >= 0) headings.getOrNull(parentIndex) ?: return null else null
-    val childLevel = ((parent?.level ?: 0) + 1).coerceIn(1, 6)
-    if (parent != null && parent.level >= 6) return null
-    val newTitle = title
-        .replace('\r', ' ')
-        .replace('\n', ' ')
-        .trim()
+): MindMapEditResult? {
+    val parent = document.nodes.getOrNull(parentIndex) ?: return null
+    val newTitle = sanitizeMindMapTitle(title)
     if (newTitle.isEmpty()) return null
-
-    val parentSubtreeEnd = if (parent == null) headings.size else findMarkdownHeadingSubtreeEnd(headings, parentIndex)
-    val insertAt = if (parent == null) {
-        content.length
-    } else {
-        headings.getOrNull(parentSubtreeEnd)
-            ?.let { findLineStart(content, it.startOffset) }
-            ?: content.length
-    }.coerceIn(0, content.length)
-
-    val marker = "#".repeat(childLevel) + " "
-    val prefix = when {
-        insertAt == 0 -> ""
-        content.getOrNull(insertAt - 1) == '\n' || content.getOrNull(insertAt - 1) == '\r' -> ""
-        else -> "\n"
-    }
-    val suffix = when {
-        insertAt >= content.length -> "\n"
-        content.getOrNull(insertAt) == '\n' || content.getOrNull(insertAt) == '\r' -> ""
-        else -> "\n"
-    }
-    val insertion = prefix + marker + newTitle + suffix
-    val updatedContent = content.substring(0, insertAt) + insertion + content.substring(insertAt)
-    val titleStart = insertAt + prefix.length + marker.length
-    val titleEnd = titleStart + newTitle.length
-
-    return MindMapAddChildResult(
-        content = updatedContent,
-        selection = TextRange(titleStart, titleEnd),
-        parentTitle = parent?.text?.ifBlank { "未命名节点" } ?: "根节点",
-    )
+    val subtreeEnd = findMindMapSubtreeEnd(document.nodes, parentIndex)
+    val insertAt = document.nodes.getOrNull(subtreeEnd)?.sourceOffset ?: document.content.length
+    return insertMindMapNode(document, insertAt, parent.depth + 1, newTitle, parent.text)
 }
 
-internal fun addMarkdownHeadingSiblingAfter(
-    content: String,
-    headings: List<MarkdownHeading>,
+internal fun addMindMapSibling(
+    document: MindMapDocument,
     anchorIndex: Int,
     title: String,
-): MindMapAddSiblingResult? {
-    val anchor = headings.getOrNull(anchorIndex) ?: return null
-    val newTitle = title
-        .replace('\r', ' ')
-        .replace('\n', ' ')
-        .trim()
+): MindMapEditResult? {
+    val anchor = document.nodes.getOrNull(anchorIndex)?.takeIf { it.depth > 0 } ?: return null
+    val newTitle = sanitizeMindMapTitle(title)
     if (newTitle.isEmpty()) return null
-
-    val level = anchor.level.coerceIn(1, 6)
-    val anchorSubtreeEnd = findMarkdownHeadingSubtreeEnd(headings, anchorIndex)
-    val insertAt = (
-        headings.getOrNull(anchorSubtreeEnd)
-            ?.let { findLineStart(content, it.startOffset) }
-            ?: content.length
-        ).coerceIn(0, content.length)
-
-    val marker = "#".repeat(level) + " "
-    val prefix = when {
-        insertAt == 0 -> ""
-        content.getOrNull(insertAt - 1) == '\n' || content.getOrNull(insertAt - 1) == '\r' -> ""
-        else -> "\n"
-    }
-    val suffix = when {
-        insertAt >= content.length -> "\n"
-        content.getOrNull(insertAt) == '\n' || content.getOrNull(insertAt) == '\r' -> ""
-        else -> "\n"
-    }
-    val insertion = prefix + marker + newTitle + suffix
-    val updatedContent = content.substring(0, insertAt) + insertion + content.substring(insertAt)
-    val titleStart = insertAt + prefix.length + marker.length
-
-    return MindMapAddSiblingResult(
-        content = updatedContent,
-        selection = TextRange(titleStart, titleStart + newTitle.length),
-        anchorTitle = anchor.text.ifBlank { "未命名节点" },
-    )
+    val subtreeEnd = findMindMapSubtreeEnd(document.nodes, anchorIndex)
+    val insertAt = document.nodes.getOrNull(subtreeEnd)?.sourceOffset ?: document.content.length
+    return insertMindMapNode(document, insertAt, anchor.depth, newTitle, anchor.text)
 }
 
-internal fun moveMarkdownHeadingSubtree(
-    content: String,
-    headings: List<MarkdownHeading>,
+internal fun moveMindMapSubtree(
+    document: MindMapDocument,
     nodeIndex: Int,
     moveUp: Boolean,
-): MindMapMoveResult? {
-    val moving = headings.getOrNull(nodeIndex) ?: return null
-    val movingSubtreeEnd = findMarkdownHeadingSubtreeEnd(headings, nodeIndex)
-    val movingStart = findLineStart(content, moving.startOffset)
-    val movingEnd = headings.getOrNull(movingSubtreeEnd)
-        ?.let { findLineStart(content, it.startOffset) }
-        ?: content.length
-
+): MindMapEditResult? {
+    val nodes = document.nodes
+    val moving = nodes.getOrNull(nodeIndex)?.takeIf { it.depth > 0 } ?: return null
+    val siblings = nodes.filter { it.parentIndex == moving.parentIndex }
+    val siblingPosition = siblings.indexOfFirst { it.index == nodeIndex }
+    val other = siblings.getOrNull(siblingPosition + if (moveUp) -1 else 1) ?: return null
+    val movingEnd = nodes.getOrNull(findMindMapSubtreeEnd(nodes, nodeIndex))?.sourceOffset ?: document.content.length
+    val otherEnd = nodes.getOrNull(findMindMapSubtreeEnd(nodes, other.index))?.sourceOffset ?: document.content.length
     val blockStart: Int
     val blockMid: Int
     val blockEnd: Int
     val movingBlockIsFirst: Boolean
     if (moveUp) {
-        var previousSiblingIndex = -1
-        for (cursor in nodeIndex - 1 downTo 0) {
-            val level = headings[cursor].level
-            if (level == moving.level) {
-                previousSiblingIndex = cursor
-                break
-            }
-            if (level < moving.level) break
-        }
-        if (previousSiblingIndex < 0) return null
-        blockStart = findLineStart(content, headings[previousSiblingIndex].startOffset)
-        blockMid = movingStart
+        blockStart = other.sourceOffset
+        blockMid = moving.sourceOffset
         blockEnd = movingEnd
         movingBlockIsFirst = false
     } else {
-        val nextSibling = headings.getOrNull(movingSubtreeEnd) ?: return null
-        if (nextSibling.level != moving.level) return null
-        val nextSubtreeEnd = findMarkdownHeadingSubtreeEnd(headings, movingSubtreeEnd)
-        blockStart = movingStart
+        blockStart = moving.sourceOffset
         blockMid = movingEnd
-        blockEnd = headings.getOrNull(nextSubtreeEnd)
-            ?.let { findLineStart(content, it.startOffset) }
-            ?: content.length
+        blockEnd = otherEnd
         movingBlockIsFirst = true
     }
-    if (blockStart !in 0..blockMid || blockMid > blockEnd || blockEnd > content.length) return null
-
-    val firstBlock = content.substring(blockStart, blockMid)
-    val secondBlock = content.substring(blockMid, blockEnd)
-    // 交换后原第二块排在前面；若它原本止于文件末尾且缺少换行，需补一个换行避免两块拼在同一行。
+    val firstBlock = document.content.substring(blockStart, blockMid)
+    val secondBlock = document.content.substring(blockMid, blockEnd)
     val needsNewline = !secondBlock.endsWith("\n") && !secondBlock.endsWith("\r")
     val swapped = if (needsNewline) secondBlock + "\n" + firstBlock else secondBlock + firstBlock
-    val updatedContent = content.substring(0, blockStart) + swapped + content.substring(blockEnd)
-
+    val updatedContent = document.content.substring(0, blockStart) + swapped + document.content.substring(blockEnd)
     val newMovingStart = if (movingBlockIsFirst) {
-        blockStart + secondBlock.length + (if (needsNewline) 1 else 0) + (moving.startOffset - blockStart)
+        blockStart + secondBlock.length + (if (needsNewline) 1 else 0)
     } else {
-        blockStart + (moving.startOffset - blockMid)
+        blockStart
     }
-    val selection = newMovingStart.coerceIn(0, updatedContent.length)
-    return MindMapMoveResult(
-        content = updatedContent,
-        selection = TextRange(selection, selection),
-        movedTitle = moving.text.ifBlank { "未命名节点" },
-    )
+    return MindMapEditResult(updatedContent, TextRange(newMovingStart), moving.text)
 }
 
-internal fun deleteMarkdownHeadingSubtree(
-    content: String,
-    headings: List<MarkdownHeading>,
+internal fun deleteMindMapSubtree(
+    document: MindMapDocument,
     nodeIndex: Int,
-): MindMapDeleteResult? {
-    val heading = headings.getOrNull(nodeIndex) ?: return null
-    val subtreeEnd = findMarkdownHeadingSubtreeEnd(headings, nodeIndex)
-    val blockStart = findLineStart(content, heading.startOffset)
-    val blockEnd = headings.getOrNull(subtreeEnd)
-        ?.let { findLineStart(content, it.startOffset) }
-        ?: content.length
-    if (blockStart !in 0..blockEnd || blockEnd > content.length) return null
-
-    val updatedContent = content.removeRange(blockStart, blockEnd)
-    val selection = blockStart.coerceAtMost(updatedContent.length)
-    return MindMapDeleteResult(
-        content = updatedContent,
-        selection = TextRange(selection, selection),
-        deletedTitle = heading.text.ifBlank { "未命名节点" },
-    )
+): MindMapEditResult? {
+    val node = document.nodes.getOrNull(nodeIndex)?.takeIf { it.depth > 0 } ?: return null
+    val subtreeEnd = findMindMapSubtreeEnd(document.nodes, nodeIndex)
+    val blockEnd = document.nodes.getOrNull(subtreeEnd)?.sourceOffset ?: document.content.length
+    val updatedContent = document.content.removeRange(node.sourceOffset, blockEnd)
+    val selection = node.sourceOffset.coerceAtMost(updatedContent.length)
+    return MindMapEditResult(updatedContent, TextRange(selection), node.text)
 }
 
-internal fun renameMarkdownHeading(
-    content: String,
-    headings: List<MarkdownHeading>,
+internal fun renameMindMapNode(
+    document: MindMapDocument,
     nodeIndex: Int,
     title: String,
-): MindMapRenameResult? {
-    val heading = headings.getOrNull(nodeIndex) ?: return null
-    val renamedTitle = title
-        .replace('\r', ' ')
-        .replace('\n', ' ')
-        .trim()
-    if (renamedTitle.isEmpty() || renamedTitle == heading.text) return null
-
-    val lineStart = findLineStart(content, heading.startOffset)
-    val lineEnd = content.indexOfAny(charArrayOf('\n', '\r'), startIndex = heading.startOffset)
-        .let { if (it >= 0) it else content.length }
-    if (lineStart !in 0..lineEnd || lineEnd > content.length) return null
-
-    val indentation = content.substring(lineStart, heading.startOffset)
-    val replacement = indentation + "#".repeat(heading.level.coerceIn(1, 6)) + " " + renamedTitle
-    val updatedContent = content.replaceRange(lineStart, lineEnd, replacement)
-    val titleStart = lineStart + indentation.length + heading.level + 1
-    return MindMapRenameResult(
+): MindMapEditResult? {
+    val node = document.nodes.getOrNull(nodeIndex) ?: return null
+    val renamedTitle = sanitizeMindMapTitle(title)
+    if (renamedTitle.isEmpty() || renamedTitle == node.text) return null
+    val lineEnd = document.content.indexOfAny(charArrayOf('\n', '\r'), startIndex = node.sourceOffset)
+        .let { if (it >= 0) it else document.content.length }
+    val replacement = formatMindMapNodeLine(node.depth, renamedTitle)
+    val updatedContent = document.content.replaceRange(node.sourceOffset, lineEnd, replacement)
+    val titleStart = node.sourceOffset + mindMapNodePrefix(node.depth).length
+    return MindMapEditResult(
         content = updatedContent,
         selection = TextRange(titleStart, titleStart + renamedTitle.length),
-        renamedTitle = renamedTitle,
+        nodeTitle = renamedTitle,
     )
 }
 
-internal fun reparentMarkdownHeading(
-    content: String,
-    headings: List<MarkdownHeading>,
+internal fun reparentMindMapSubtree(
+    document: MindMapDocument,
     movingIndex: Int,
     parentIndex: Int,
-): MindMapReparentResult? {
-    val moving = headings.getOrNull(movingIndex) ?: return null
-    val parent = if (parentIndex >= 0) headings.getOrNull(parentIndex) else null
-    if (parentIndex == movingIndex) return null
-
-    val movingSubtreeEnd = findMarkdownHeadingSubtreeEnd(headings, movingIndex)
+): MindMapEditResult? {
+    val nodes = document.nodes
+    val moving = nodes.getOrNull(movingIndex)?.takeIf { it.depth > 0 } ?: return null
+    val parent = nodes.getOrNull(parentIndex) ?: return null
+    if (moving.parentIndex == parentIndex) return null
+    val movingSubtreeEnd = findMindMapSubtreeEnd(nodes, movingIndex)
     if (parentIndex in movingIndex until movingSubtreeEnd) return null
 
-    val blockStart = findLineStart(content, moving.startOffset)
-    val blockEnd = headings.getOrNull(movingSubtreeEnd)
-        ?.let { findLineStart(content, it.startOffset) }
-        ?: content.length
-    if (blockStart !in 0..blockEnd || blockEnd > content.length) return null
-
-    val targetSubtreeEnd = if (parent == null) {
-        headings.size
-    } else {
-        findMarkdownHeadingSubtreeEnd(headings, parentIndex)
-    }
-    val targetEnd = if (parent == null) {
-        content.length
-    } else {
-        headings.getOrNull(targetSubtreeEnd)
-            ?.let { findLineStart(content, it.startOffset) }
-            ?: content.length
-    }
-    if (targetEnd in (blockStart + 1) until blockEnd) return null
-
-    val targetLevel = ((parent?.level ?: 0) + 1).coerceIn(1, 6)
-    val levelDelta = targetLevel - moving.level
-    val originalBlock = content.substring(blockStart, blockEnd)
-    val updatedBlock = if (levelDelta == 0) {
-        originalBlock
-    } else {
-        adjustMarkdownHeadingLevelsInBlock(
-            block = originalBlock,
-            contentBlockStart = blockStart,
-            headings = headings.subList(movingIndex, movingSubtreeEnd),
-            levelDelta = levelDelta,
-        )
-    }
-
-    val withoutBlock = content.removeRange(blockStart, blockEnd)
-    val blockLength = blockEnd - blockStart
-    val insertAt = (if (targetEnd > blockStart) targetEnd - blockLength else targetEnd)
+    val blockStart = moving.sourceOffset
+    val blockEnd = nodes.getOrNull(movingSubtreeEnd)?.sourceOffset ?: document.content.length
+    val targetEnd = nodes.getOrNull(findMindMapSubtreeEnd(nodes, parentIndex))?.sourceOffset ?: document.content.length
+    val originalBlock = document.content.substring(blockStart, blockEnd)
+    val depthDelta = parent.depth + 1 - moving.depth
+    val adjustedBlock = adjustMindMapDepthsInBlock(
+        block = originalBlock,
+        contentBlockStart = blockStart,
+        nodes = nodes.subList(movingIndex, movingSubtreeEnd),
+        depthDelta = depthDelta,
+    )
+    val withoutBlock = document.content.removeRange(blockStart, blockEnd)
+    val insertAt = (if (targetEnd > blockStart) targetEnd - originalBlock.length else targetEnd)
         .coerceIn(0, withoutBlock.length)
-    if (insertAt == blockStart && updatedBlock == originalBlock) return null
-
-    val updatedContent = buildString(content.length - originalBlock.length + updatedBlock.length) {
-        append(withoutBlock.substring(0, insertAt))
-        append(updatedBlock)
-        append(withoutBlock.substring(insertAt))
-    }
-    val movedHeadingOffsetInBlock = moving.startOffset - blockStart
-    val newHeadingStart = (insertAt + movedHeadingOffsetInBlock).coerceIn(0, updatedContent.length)
-    return MindMapReparentResult(
+    val prefix = if (insertAt > 0 && withoutBlock[insertAt - 1] != '\n' && withoutBlock[insertAt - 1] != '\r') "\n" else ""
+    val suffix = if (insertAt < withoutBlock.length && !adjustedBlock.endsWith("\n") && !adjustedBlock.endsWith("\r")) "\n" else ""
+    val insertedBlock = prefix + adjustedBlock + suffix
+    val updatedContent = withoutBlock.substring(0, insertAt) + insertedBlock + withoutBlock.substring(insertAt)
+    val newNodeStart = insertAt + prefix.length
+    return MindMapEditResult(
         content = updatedContent,
-        selection = TextRange(newHeadingStart, newHeadingStart),
-        movedTitle = moving.text.ifBlank { "未命名节点" },
-        parentTitle = parent?.text?.ifBlank { "未命名节点" } ?: "根节点",
+        selection = TextRange(newNodeStart),
+        nodeTitle = moving.text,
+        contextTitle = parent.text,
     )
 }
 
-private fun findMarkdownHeadingSubtreeEnd(
-    headings: List<MarkdownHeading>,
-    index: Int,
-): Int {
-    val heading = headings.getOrNull(index) ?: return headings.size
-    for (cursor in index + 1 until headings.size) {
-        if (headings[cursor].level <= heading.level) return cursor
+private fun findMindMapSubtreeEnd(nodes: List<MindMapNode>, index: Int): Int {
+    val node = nodes.getOrNull(index) ?: return nodes.size
+    for (cursor in index + 1 until nodes.size) {
+        if (nodes[cursor].depth <= node.depth) return cursor
     }
-    return headings.size
+    return nodes.size
 }
 
-private fun findLineStart(
-    content: String,
-    offset: Int,
-): Int {
-    var cursor = offset.coerceIn(0, content.length)
-    while (cursor > 0 && content[cursor - 1] != '\n' && content[cursor - 1] != '\r') {
-        cursor--
-    }
-    return cursor
-}
-
-private fun adjustMarkdownHeadingLevelsInBlock(
+private fun adjustMindMapDepthsInBlock(
     block: String,
     contentBlockStart: Int,
-    headings: List<MarkdownHeading>,
-    levelDelta: Int,
+    nodes: List<MindMapNode>,
+    depthDelta: Int,
 ): String {
+    if (depthDelta == 0) return block
     val builder = StringBuilder(block)
-    headings.sortedByDescending { it.startOffset }.forEach { heading ->
-        val markerStart = (heading.startOffset - contentBlockStart).coerceIn(0, builder.length)
-        var markerEnd = markerStart
-        while (markerEnd < builder.length && builder[markerEnd] == '#') {
-            markerEnd++
-        }
-        if (markerEnd > markerStart) {
-            val targetLevel = (heading.level + levelDelta).coerceIn(1, 6)
-            builder.replace(markerStart, markerEnd, "#".repeat(targetLevel))
-        }
+    nodes.asReversed().forEach { node ->
+        val lineStart = node.sourceOffset - contentBlockStart
+        val lineEnd = builder.indexOfAny(charArrayOf('\n', '\r'), startIndex = lineStart)
+            .let { if (it >= 0) it else builder.length }
+        builder.replace(lineStart, lineEnd, formatMindMapNodeLine(node.depth + depthDelta, node.text))
     }
     return builder.toString()
 }

@@ -4,8 +4,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -48,10 +48,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.RowScope
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
@@ -68,12 +71,15 @@ internal fun drawerItemColors() =
         unselectedBadgeColor = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun ThemedDrawerItem(
     label: String,
-    icon: ImageVector,
+    icon: ImageVector?,
     selected: Boolean,
     onClick: () -> Unit,
+    onLongClick: ((Offset) -> Unit)? = null,
+    content: (@Composable RowScope.() -> Unit)? = null,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
 ) {
@@ -85,10 +91,49 @@ internal fun ThemedDrawerItem(
     val isDracula = themeStyle == PrefsManager.AppThemeStyle.DRACULA
     val isCleanList = themeStyle == PrefsManager.AppThemeStyle.CLEAN_LIST
     val cleanListFeatureIconStyle = prefsManager.getCleanListFeatureIconStyle()
+    if (!isModern && (onLongClick != null || content != null)) {
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .then(if (compact) Modifier.height(40.dp) else Modifier)
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
+                .then(
+                    if (onLongClick == null) {
+                        Modifier.combinedClickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onClick,
+                        )
+                    } else {
+                        Modifier.pointerInput(onClick, onLongClick) {
+                            detectTapGestures(
+                                onTap = { onClick() },
+                                onLongPress = onLongClick,
+                            )
+                        }
+                    },
+                )
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            icon?.let {
+                Icon(
+                    imageVector = it,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 12.dp),
+                )
+            }
+            if (content != null) content() else Text(label, color = MaterialTheme.colorScheme.onSurface)
+        }
+        return
+    }
     if (!isModern) {
         NavigationDrawerItem(
             label = { Text(label) },
-            icon = { Icon(icon, contentDescription = null) },
+            icon = icon?.let { imageVector -> { Icon(imageVector, contentDescription = null) } },
             selected = selected,
             onClick = onClick,
             modifier = modifier.padding(horizontal = 12.dp).then(if (compact) Modifier.height(40.dp) else Modifier),
@@ -177,10 +222,21 @@ internal fun ThemedDrawerItem(
             .clip(itemShape)
             .background(backgroundColor)
             .border(1.dp, borderColor, itemShape)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
+            .then(
+                if (onLongClick == null) {
+                    Modifier.combinedClickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        onClick = onClick,
+                    )
+                } else {
+                    Modifier.pointerInput(onClick, onLongClick) {
+                        detectTapGestures(
+                            onTap = { onClick() },
+                            onLongPress = onLongClick,
+                        )
+                    }
+                },
             )
             .padding(horizontal = itemHorizontalPadding, vertical = effectiveItemVerticalPadding),
         verticalAlignment = Alignment.CenterVertically,
@@ -195,47 +251,53 @@ internal fun ThemedDrawerItem(
         if (drawerStyle != PrefsManager.DrawerStyle.DATA_CARD) {
             Spacer(modifier = Modifier.width(if (selected || drawerStyle == PrefsManager.DrawerStyle.ICON_BOX) 10.dp else 4.dp))
         }
-        if (showIconBox) {
-            Box(
-                modifier = Modifier
-                    .size(effectiveIconSize)
-                    .clip(RoundedCornerShape(iconCorner))
-                    .background(iconBackgroundColor),
-                contentAlignment = Alignment.Center,
-            ) {
+        if (icon != null) {
+            if (showIconBox) {
+                Box(
+                    modifier = Modifier
+                        .size(effectiveIconSize)
+                        .clip(RoundedCornerShape(iconCorner))
+                        .background(iconBackgroundColor),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = if (isCleanList && drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) {
+                            if (cleanListFeatureIconStyle == PrefsManager.CleanListFeatureIconStyle.MODERN) {
+                                cleanListDrawerIconColor(label)
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            }
+                        } else if (selected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.size(if (compact) 18.dp else if (isCleanList && drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) 24.dp else 21.dp),
+                    )
+                }
+            } else {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = if (isCleanList && drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) {
-                        if (cleanListFeatureIconStyle == PrefsManager.CleanListFeatureIconStyle.MODERN) {
-                            cleanListDrawerIconColor(label)
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        }
-                    } else if (selected) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.size(if (compact) 18.dp else if (isCleanList && drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) 24.dp else 21.dp),
+                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(21.dp),
                 )
             }
+            Spacer(modifier = Modifier.width(if (compact) 8.dp else 12.dp))
+        }
+        if (content != null) {
+            content()
         } else {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(21.dp),
+            Text(
+                text = label,
+                style = if (drawerStyle == PrefsManager.DrawerStyle.MINIMAL_TEXT) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.titleSmall,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
-        Spacer(modifier = Modifier.width(if (compact) 8.dp else 12.dp))
-        Text(
-            text = label,
-            style = if (drawerStyle == PrefsManager.DrawerStyle.MINIMAL_TEXT) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.titleSmall,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
 

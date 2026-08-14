@@ -345,3 +345,19 @@ val MIGRATION_17_18 = object : Migration(17, 18) {
         db.execSQL("ALTER TABLE `tasks` ADD COLUMN `reminderVibrate` INTEGER NOT NULL DEFAULT 1")
     }
 }
+
+/* version 18 -> 19: task recycle bin. */
+val MIGRATION_18_19 = object : Migration(18, 19) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `isTrashed` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/* version 19 -> 20: Markdown-derived hierarchy and manual order. */
+val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `parentTaskId` INTEGER DEFAULT NULL")
+        db.execSQL("ALTER TABLE `tasks` ADD COLUMN `manualOrder` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_tasks_parentTaskId` ON `tasks` (`parentTaskId`)")
+    }
+}

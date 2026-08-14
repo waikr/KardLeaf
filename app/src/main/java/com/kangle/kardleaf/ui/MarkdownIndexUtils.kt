@@ -2,6 +2,7 @@ package com.kangle.kardleaf.ui
 
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.model.NoteHistory
+import com.kangle.kardleaf.data.model.NoteSearchOptions
 import java.util.Locale
 
 data class MarkdownHeading(
@@ -236,24 +237,76 @@ fun findSearchMatch(
     note: Note,
     query: String,
     histories: List<NoteHistory> = emptyList(),
+    options: NoteSearchOptions = NoteSearchOptions(),
+    compiledRegex: Regex? = null,
 ): SearchMatch? {
     val q = query.trim()
-    if (q.isBlank()) return null
-    val tags by lazy { extractObsidianTags(note.content) }
+    val folder = note.folder.replace("\\", "/")
+    if (options.folder != null && folder != options.folder) return null
+    if (options.tag != null && note.tags.none { it.equals(options.tag, ignoreCase = true) }) return null
+    if (q.isBlank()) {
+        return when {
+            options.tag != null -> SearchMatch("标签", "#${options.tag}")
+            options.folder != null -> SearchMatch("文件夹", folder)
+            else -> null
+        }
+    }
+    val regex =
+        if (options.useRegex) {
+            compiledRegex ?: runCatching {
+                Regex(q, if (options.matchCase) emptySet() else setOf(RegexOption.IGNORE_CASE))
+            }.getOrNull() ?: return null
+        } else {
+            null
+        }
+
+    fun matchRange(text: String): IntRange? {
+        regex?.find(text)?.let { return it.range }
+        val start = text.indexOf(q, ignoreCase = !options.matchCase)
+        return start.takeIf { it >= 0 }?.let { it until (it + q.length) }
+    }
+
+    val titleMatch = options.matchTitle.then { matchRange(note.title) }
+    val contentMatch = options.matchContent.then { matchRange(note.content) }
     val matchedHistory by lazy {
-        histories.firstOrNull { it.noteId == note.id && (it.title.contains(q, true) || it.content.contains(q, true)) }
+        histories.firstOrNull {
+            it.noteId == note.id &&
+                (
+                    options.matchTitle.then { matchRange(it.title) } != null ||
+                        options.matchContent.then { matchRange(it.content) } != null
+                )
+        }
     }
     return when {
-        note.title.contains(q, ignoreCase = true) -> SearchMatch("标题", note.title)
-        note.folder.replace("\\", "/").contains(q, ignoreCase = true) -> SearchMatch("文件夹", note.folder.replace("\\", "/"))
-        tags.any { it.contains(q.removePrefix("#"), ignoreCase = true) } ->
-            SearchMatch("标签", tags.joinToString(" ") { "#$it" })
-        note.content.contains(q, ignoreCase = true) -> SearchMatch("正文", buildSearchSnippet(note.content, q), note.content.indexOf(q, ignoreCase = true))
+        titleMatch != null -> SearchMatch("标题", note.title)
+        contentMatch != null ->
+            SearchMatch(
+                "正文",
+                buildSearchSnippetAt(note.content, contentMatch.first, contentMatch.last - contentMatch.first + 1),
+                if (options.useRegex) -1 else contentMatch.first,
+            )
         matchedHistory != null -> {
-            val history = matchedHistory!!
+            val history =
+                matchedHistory!!
             SearchMatch("历史版本", buildSearchSnippet("${history.title}\n${history.content}", q))
         }
         else -> null
+    }
+}
+
+private inline fun <T> Boolean.then(block: () -> T): T? = if (this) block() else null
+
+private fun buildSearchSnippetAt(
+    content: String,
+    startOffset: Int,
+    matchLength: Int,
+): String {
+    val start = (startOffset - 60).coerceAtLeast(0)
+    val end = (startOffset + matchLength.coerceAtLeast(1) + 90).coerceAtMost(content.length)
+    return buildString {
+        if (start > 0) append("...")
+        append(content.substring(start, end).replace('\r', ' ').replace('\n', ' ').trim())
+        if (end < content.length) append("...")
     }
 }
 

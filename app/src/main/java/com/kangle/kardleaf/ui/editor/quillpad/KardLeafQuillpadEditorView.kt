@@ -52,6 +52,8 @@ import com.kangle.kardleaf.BuildConfig
 import com.kangle.kardleaf.data.utils.EditorOpenSession
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
+import com.kangle.kardleaf.ui.editor.EditorViewportAnchor
+import com.kangle.kardleaf.ui.editor.EditorViewportEdge
 import com.kangle.kardleaf.ui.editor.api.EditorFastScrollMetrics
 import com.kangle.kardleaf.ui.editor.api.KardLeafEditorKernelView
 import com.kangle.kardleaf.ui.editor.buildNoteSearchMatches
@@ -457,7 +459,14 @@ private class KernelExtendedEditText(
     }
 
     override fun onDraw(canvas: Canvas) {
+        val startedAt = SystemClock.elapsedRealtimeNanos()
         super.onDraw(canvas)
+        val drawDurationUs = (SystemClock.elapsedRealtimeNanos() - startedAt) / 1_000
+        if (drawDurationUs >= 2_000 || imagePreviewItems.isNotEmpty()) {
+            diagnostic?.invoke(
+                "editTextDraw role=$role durationUs=$drawDurationUs imagePreviewCount=${imagePreviewItems.size}",
+            )
+        }
         val layout = layout ?: return
         if (imagePreviewItems.isEmpty()) return
 
@@ -1201,6 +1210,7 @@ internal class KardLeafQuillpadEditorView
         private var preDrawGenerationSequence = -1L
         private var committedGenerationSequence = -1L
         private var pendingPreDrawListener: ViewTreeObserver.OnPreDrawListener? = null
+        private var initialViewportAnchor: EditorViewportAnchor? = null
         private var appliedConfig: QuillpadEditorConfig? = null
         private var cachedTypefaceFamily: String? = null
         private var cachedTypeface: Typeface? = null
@@ -1217,21 +1227,86 @@ internal class KardLeafQuillpadEditorView
         private var imeBottom = 0
         private var imeFrameTracing = false
         private var lastImeFrameNanos = 0L
+        private var imeAnimationSequence = 0L
+        private var imeAnimationStartNanos = 0L
+        private var imeAnimationFrameCount = 0
+        private var imeAnimationProgressCount = 0
+        private var imeAnimationSlowFrameCount = 0
+        private var composeImeTraceActive = false
+        private var composeImeTraceSequence = 0L
+        private var composeImeFirstVisibleNanos = 0L
+        private var composeImeLastProgressNanos = 0L
+        private var composeImeLastBottom = 0
+        private var composeImeProgressCount = 0
+        private var composeImeFrameCount = 0
+        private var composeImeLastFrameNanos = 0L
+        private var composeImeSlowFrameOver24Count = 0
+        private var composeImeSlowFrameOver32Count = 0
+        private var composeImeMaxFrameGapMs = 0f
+        private var composeImeMaxProgressGapMs = 0f
+        private var composeImeScrollEventCount = 0
+        private var composeImeScrollStartNanos = 0L
+        private var composeImeScrollLastNanos = 0L
+        private var composeImeScrollStartY = 0
+        private var composeImeScrollEndY = 0
+        private var composeImeMaxScrollStepPx = 0
+        private var composeImeMaxScrollGapMs = 0f
         private var lastRootSize = ""
         private var lastScrollSize = ""
+        private var lastSelectionStart = -1
+        private var lastSelectionEnd = -1
 
         private val imeFrameCallback =
             object : Choreographer.FrameCallback {
                 override fun doFrame(frameTimeNanos: Long) {
                     if (!imeFrameTracing) return
+                    imeAnimationFrameCount++
+                    val elapsedFromStartMs =
+                        if (imeAnimationStartNanos == 0L) -1f else (frameTimeNanos - imeAnimationStartNanos) / 1_000_000f
                     if (lastImeFrameNanos != 0L) {
                         val durationMs = (frameTimeNanos - lastImeFrameNanos) / 1_000_000f
-                        logIme("frameDuration durationMs=$durationMs slowFrame=${durationMs > 32f}")
+                        val slowFrame = durationMs > 32f
+                        if (slowFrame) imeAnimationSlowFrameCount++
+                        logIme(
+                            "imeFrame sequence=$imeAnimationSequence index=$imeAnimationFrameCount " +
+                                "elapsedFromStartMs=$elapsedFromStartMs durationMs=$durationMs slowFrame=$slowFrame " +
+                                "slowFrameCount=$imeAnimationSlowFrameCount",
+                        )
+                    } else {
+                        logIme(
+                            "imeFrame sequence=$imeAnimationSequence index=$imeAnimationFrameCount " +
+                                "elapsedFromStartMs=$elapsedFromStartMs durationMs=-1 slowFrame=false slowFrameCount=0",
+                        )
                     }
                     lastImeFrameNanos = frameTimeNanos
                     Choreographer.getInstance().postFrameCallback(this)
                 }
             }
+
+        private val composeImeFrameCallback =
+            object : Choreographer.FrameCallback {
+                override fun doFrame(frameTimeNanos: Long) {
+                    if (!composeImeTraceActive) return
+                    composeImeFrameCount++
+                    if (composeImeLastFrameNanos != 0L) {
+                        val frameGapMs = (frameTimeNanos - composeImeLastFrameNanos) / 1_000_000f
+                        composeImeMaxFrameGapMs = maxOf(composeImeMaxFrameGapMs, frameGapMs)
+                        if (frameGapMs > 24f) composeImeSlowFrameOver24Count++
+                        if (frameGapMs > 32f) composeImeSlowFrameOver32Count++
+                        if (frameGapMs > 24f) {
+                            logIme(
+                                "imeVisualSlowFrame sequence=$composeImeTraceSequence " +
+                                    "frameIndex=$composeImeFrameCount gapMs=$frameGapMs " +
+                                    "over24Count=$composeImeSlowFrameOver24Count over32Count=$composeImeSlowFrameOver32Count",
+                            )
+                        }
+                    }
+                    composeImeLastFrameNanos = frameTimeNanos
+                    Choreographer.getInstance().postFrameCallback(this)
+                }
+            }
+
+        private val composeImeFinishRunnable = Runnable { finishComposeImeTraceIfStable() }
 
         override var boundDocumentKey: String? = null
             private set
@@ -1296,7 +1371,10 @@ internal class KardLeafQuillpadEditorView
                 isVerticalScrollBarEnabled = false
                 layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
                 setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
-                    if (scrollY != oldScrollY) logIme("scrollYChanged before=$oldScrollY after=$scrollY")
+                    if (scrollY != oldScrollY) {
+                        recordComposeImeScroll(scrollY, oldScrollY)
+                        logIme("scrollYChanged before=$oldScrollY after=$scrollY")
+                    }
                     scrollChangedCallback?.invoke()
                 }
             }
@@ -1331,8 +1409,28 @@ internal class KardLeafQuillpadEditorView
                 setOnCanUndoRedoListener { _, _ -> undoRedoChangedCallback?.invoke() }
                 onSelectionChangedListener = { start, end ->
                     updateInlineImagePreviewSelection()
-                    if (!programmaticChange) selectionChangedCallback?.invoke(start, end)
+                    val activeOffset =
+                        when {
+                            start != lastSelectionStart && end == lastSelectionEnd -> start
+                            end != lastSelectionEnd && start == lastSelectionStart -> end
+                            else -> end
+                        }
+                    lastSelectionStart = start
+                    lastSelectionEnd = end
+                    if (!programmaticChange) {
+                        if (start != end) {
+                            requestCursorRectangle(
+                                source = "SELECTION_CHANGED",
+                                offset = activeOffset,
+                                edgePaddingPx = dp(8),
+                            )
+                        }
+                        selectionChangedCallback?.invoke(start, end)
+                    }
                 }
+            }
+            contentEditText.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                if (imeBottom > 0) requestCursorRectangle("CONTENT_LAYOUT")
             }
             val interactionListener =
                 View.OnTouchListener { _, event ->
@@ -1377,11 +1475,18 @@ internal class KardLeafQuillpadEditorView
                 object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
                     override fun onPrepare(animation: WindowInsetsAnimationCompat) {
                         if (animation.typeMask and WindowInsetsCompat.Type.ime() != 0) {
+                            imeAnimationSequence++
+                            imeAnimationStartNanos = SystemClock.elapsedRealtimeNanos()
+                            imeAnimationFrameCount = 0
+                            imeAnimationProgressCount = 0
+                            imeAnimationSlowFrameCount = 0
                             imeVisibleOrAnimating = true
                             imeFrameTracing = true
                             lastImeFrameNanos = 0L
                             Choreographer.getInstance().postFrameCallback(imeFrameCallback)
-                            logIme("imeAnimationStart imeBottom=$imeBottom")
+                            logIme(
+                                "imeAnimationStart sequence=$imeAnimationSequence imeBottom=$imeBottom",
+                            )
                         }
                     }
 
@@ -1390,8 +1495,12 @@ internal class KardLeafQuillpadEditorView
                         runningAnimations: MutableList<WindowInsetsAnimationCompat>,
                     ): WindowInsetsCompat {
                         if (runningAnimations.any { it.typeMask and WindowInsetsCompat.Type.ime() != 0 }) {
+                            imeAnimationProgressCount++
                             imeBottom = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-                            logIme("imeInsetProgress source=animation imeBottom=$imeBottom")
+                            logIme(
+                                "imeInsetProgress source=animation sequence=$imeAnimationSequence " +
+                                    "progressIndex=$imeAnimationProgressCount imeBottom=$imeBottom",
+                            )
                         }
                         return insets
                     }
@@ -1401,7 +1510,15 @@ internal class KardLeafQuillpadEditorView
                             imeVisibleOrAnimating = imeBottom > 0
                             imeFrameTracing = false
                             Choreographer.getInstance().removeFrameCallback(imeFrameCallback)
-                            logIme("imeStable imeBottom=$imeBottom visible=$imeVisibleOrAnimating")
+                            val animationDurationMs =
+                                if (imeAnimationStartNanos == 0L) -1f else
+                                    (SystemClock.elapsedRealtimeNanos() - imeAnimationStartNanos) / 1_000_000f
+                            logIme(
+                                "imeStable sequence=$imeAnimationSequence imeBottom=$imeBottom " +
+                                    "visible=$imeVisibleOrAnimating durationMs=$animationDurationMs " +
+                                    "progressCount=$imeAnimationProgressCount frameCount=$imeAnimationFrameCount " +
+                                    "slowFrameCount=$imeAnimationSlowFrameCount",
+                            )
                         }
                     }
                 },
@@ -1426,11 +1543,142 @@ internal class KardLeafQuillpadEditorView
         }
 
         fun updateComposeImeBottom(bottom: Int) {
+            recordComposeImeBottom(bottom)
             if (imeBottom == bottom) return
             imeBottom = bottom
             imeVisibleOrAnimating = bottom > 0
+            scrollView.setPadding(
+                scrollView.paddingLeft,
+                scrollView.paddingTop,
+                scrollView.paddingRight,
+                bottom,
+            )
             if (bottom <= 0 || !contentEditText.hasFocus()) return
             requestCursorRectangle("RECTANGLE_REQUEST")
+        }
+
+        private fun recordComposeImeBottom(bottom: Int) {
+            val nowNanos = SystemClock.elapsedRealtimeNanos()
+            val previousBottom = composeImeLastBottom
+            if (bottom <= 0) {
+                if (previousBottom > 0 && composeImeTraceActive) finishComposeImeTrace("hide")
+                composeImeLastBottom = 0
+                return
+            }
+            if (previousBottom <= 0) {
+                composeImeTraceActive = true
+                composeImeTraceSequence++
+                composeImeFirstVisibleNanos = nowNanos
+                composeImeLastProgressNanos = 0L
+                composeImeProgressCount = 0
+                composeImeFrameCount = 0
+                composeImeLastFrameNanos = 0L
+                composeImeSlowFrameOver24Count = 0
+                composeImeSlowFrameOver32Count = 0
+                composeImeMaxFrameGapMs = 0f
+                composeImeMaxProgressGapMs = 0f
+                composeImeScrollEventCount = 0
+                composeImeScrollStartNanos = 0L
+                composeImeScrollLastNanos = 0L
+                composeImeScrollStartY = scrollView.scrollY
+                composeImeScrollEndY = scrollView.scrollY
+                composeImeMaxScrollStepPx = 0
+                composeImeMaxScrollGapMs = 0f
+                lastImeFrameNanos = 0L
+                Choreographer.getInstance().postFrameCallback(composeImeFrameCallback)
+                logIme(
+                    "imeVisualStart source=compose sequence=$composeImeTraceSequence " +
+                        "firstBottom=$bottom initialScrollY=${scrollView.scrollY}",
+                )
+            }
+            if (composeImeTraceActive && bottom != previousBottom) {
+                composeImeProgressCount++
+                val progressGapMs =
+                    if (composeImeLastProgressNanos == 0L) 0f
+                    else (nowNanos - composeImeLastProgressNanos) / 1_000_000f
+                composeImeMaxProgressGapMs = maxOf(composeImeMaxProgressGapMs, progressGapMs)
+                composeImeLastProgressNanos = nowNanos
+                logIme(
+                    "imeVisualProgress source=compose sequence=$composeImeTraceSequence " +
+                        "index=$composeImeProgressCount bottom=$bottom progressGapMs=$progressGapMs",
+                )
+            }
+            composeImeLastBottom = bottom
+            removeCallbacks(composeImeFinishRunnable)
+            postDelayed(composeImeFinishRunnable, 180L)
+        }
+
+        private fun recordComposeImeScroll(
+            scrollY: Int,
+            oldScrollY: Int,
+        ) {
+            if (!composeImeTraceActive) return
+            val nowNanos = SystemClock.elapsedRealtimeNanos()
+            composeImeScrollEventCount++
+            if (composeImeScrollStartNanos == 0L) {
+                composeImeScrollStartNanos = nowNanos
+                composeImeScrollStartY = oldScrollY
+            } else {
+                val gapMs = (nowNanos - composeImeScrollLastNanos) / 1_000_000f
+                composeImeMaxScrollGapMs = maxOf(composeImeMaxScrollGapMs, gapMs)
+            }
+            composeImeScrollLastNanos = nowNanos
+            composeImeScrollEndY = scrollY
+            composeImeMaxScrollStepPx = maxOf(composeImeMaxScrollStepPx, kotlin.math.abs(scrollY - oldScrollY))
+            logIme(
+                "cursorRevealStep source=compose-ime sequence=$composeImeTraceSequence " +
+                    "index=$composeImeScrollEventCount before=$oldScrollY after=$scrollY",
+            )
+        }
+
+        private fun finishComposeImeTraceIfStable() {
+            if (!composeImeTraceActive) return
+            val remainingNanos = 180_000_000L - (SystemClock.elapsedRealtimeNanos() - composeImeLastProgressNanos)
+            if (remainingNanos > 0) {
+                postDelayed(composeImeFinishRunnable, (remainingNanos / 1_000_000L).coerceAtLeast(16L))
+                return
+            }
+            finishComposeImeTrace("show")
+        }
+
+        private fun finishComposeImeTrace(direction: String) {
+            if (!composeImeTraceActive) return
+            composeImeTraceActive = false
+            removeCallbacks(composeImeFinishRunnable)
+            Choreographer.getInstance().removeFrameCallback(composeImeFrameCallback)
+            val nowNanos = SystemClock.elapsedRealtimeNanos()
+            val animationMs =
+                if (composeImeLastProgressNanos == 0L) 0f
+                else (composeImeLastProgressNanos - composeImeFirstVisibleNanos) / 1_000_000f
+            val settledMs = (nowNanos - composeImeFirstVisibleNanos) / 1_000_000f
+            val frameQuality =
+                when {
+                    composeImeFrameCount < 2 -> "insufficient_frames"
+                    composeImeSlowFrameOver32Count > 0 -> "stutter_over_32ms"
+                    composeImeSlowFrameOver24Count > 0 -> "frame_gap_over_24ms"
+                    else -> "smooth_under_24ms"
+                }
+            val cursorQuality =
+                when {
+                    composeImeScrollEventCount == 0 -> "no_cursor_scroll"
+                    composeImeMaxScrollGapMs > 32f -> "scroll_update_gap_over_32ms"
+                    else -> "scroll_updates_continuous"
+                }
+            logIme(
+                "imeVisualComplete source=compose direction=$direction sequence=$composeImeTraceSequence " +
+                    "finalBottom=$composeImeLastBottom animationMs=$animationMs settledMs=$settledMs " +
+                    "progressCount=$composeImeProgressCount maxProgressGapMs=$composeImeMaxProgressGapMs " +
+                    "frameCount=$composeImeFrameCount maxFrameGapMs=$composeImeMaxFrameGapMs " +
+                    "slowFrameOver24=$composeImeSlowFrameOver24Count slowFrameOver32=$composeImeSlowFrameOver32Count " +
+                    "frameQuality=$frameQuality cursorScrollEvents=$composeImeScrollEventCount " +
+                    "cursorScrollStartY=$composeImeScrollStartY cursorScrollEndY=$composeImeScrollEndY " +
+                    "cursorScrollDeltaPx=${composeImeScrollEndY - composeImeScrollStartY} " +
+                    "cursorScrollDurationMs=" +
+                    (if (composeImeScrollStartNanos == 0L) "0 " else
+                        "${(composeImeScrollLastNanos - composeImeScrollStartNanos) / 1_000_000f} ") +
+                    "maxScrollStepPx=$composeImeMaxScrollStepPx maxScrollGapMs=$composeImeMaxScrollGapMs " +
+                    "cursorQuality=$cursorQuality",
+            )
         }
 
         internal fun debugCounters(): QuillpadDebugCounters =
@@ -1633,6 +1881,10 @@ internal class KardLeafQuillpadEditorView
             loadedContent = initialContent
         }
 
+        fun setInitialViewportAnchor(anchor: EditorViewportAnchor?) {
+            initialViewportAnchor = anchor
+        }
+
         private fun setInitialSnapshot(
             title: String,
             content: String,
@@ -1686,6 +1938,7 @@ internal class KardLeafQuillpadEditorView
                         if (viewTreeObserver.isAlive) viewTreeObserver.removeOnPreDrawListener(this)
                         pendingPreDrawListener = null
                         preDrawGenerationSequence = generation.sequence
+                        restoreInitialViewportAnchor()
                         logUserStage("newTextPreDraw", generation)
                         registerCurrentFrameCommit(generation)
                         return true
@@ -1695,6 +1948,34 @@ internal class KardLeafQuillpadEditorView
             viewTreeObserver.addOnPreDrawListener(listener)
             requestLayout()
             invalidate()
+        }
+
+        private fun restoreInitialViewportAnchor() {
+            val anchor = initialViewportAnchor ?: return
+            val layout = contentEditText.layout ?: return
+            val before = scrollView.scrollY
+            val max = maxScrollY()
+            val target =
+                when (anchor.edge) {
+                    EditorViewportEdge.START -> 0
+                    EditorViewportEdge.END -> max
+                    EditorViewportEdge.CENTER -> {
+                        val offset = anchor.offset.coerceIn(0, contentLength())
+                        val line = layout.getLineForOffset(offset)
+                        val anchorY = contentEditText.top + contentEditText.totalPaddingTop + layout.getLineTop(line)
+                        (anchorY - scrollView.height * anchor.viewportFraction.coerceIn(0f, 1f)).roundToInt()
+                            .coerceIn(0, max)
+                    }
+                }
+            scrollView.scrollTo(0, target)
+            initialViewportAnchor = null
+            logIme(
+                "initialViewportRestored offset=${anchor.offset} edge=${anchor.edge} " +
+                    "viewportFraction=${anchor.viewportFraction} layoutReady=true scrollBefore=$before " +
+                    "scrollTarget=$target scrollAfter=${scrollView.scrollY} maxScrollY=$max " +
+                    "editorHeight=${contentEditText.height} viewportHeight=${scrollView.height} " +
+                    "focused=${contentEditText.hasFocus()} imeVisible=$imeVisibleOrAnimating",
+            )
         }
 
         private fun registerCurrentFrameCommit(generation: TextGeneration) {
@@ -1754,14 +2035,22 @@ internal class KardLeafQuillpadEditorView
             }
         }
 
-        private fun requestCursorRectangle(source: String) {
+        private fun requestCursorRectangle(
+            source: String,
+            offset: Int = contentEditText.selectionEnd,
+            edgePaddingPx: Int = 0,
+        ) {
+            val startedAt = SystemClock.elapsedRealtimeNanos()
             if (!contentEditText.hasFocus()) {
                 logIme("requestRectangleOnScreen skipped=focus source=$source")
                 return
             }
-            val layout = contentEditText.layout ?: return
-            val offset = contentEditText.selectionEnd.coerceIn(0, contentLength())
-            val line = layout.getLineForOffset(offset)
+            val layout = contentEditText.layout ?: run {
+                logIme("cursorRevealSkipped reason=layout source=$source")
+                return
+            }
+            val safeOffset = offset.coerceIn(0, contentLength())
+            val line = layout.getLineForOffset(safeOffset)
             revealScheduledCount++
             val rect =
                 Rect(
@@ -1771,11 +2060,27 @@ internal class KardLeafQuillpadEditorView
                     contentEditText.totalPaddingTop + layout.getLineBottom(line),
                 )
             val before = scrollView.scrollY
-            val requested = contentEditText.requestRectangleOnScreen(rect, true)
-            if (requested) revealExecutedCount++
+            val cursorTop = contentEditText.top + rect.top
+            val cursorBottom = contentEditText.top + rect.bottom
+            val visibleTop = scrollView.scrollY
+            val visibleBottom = visibleTop + scrollView.height - imeBottom - edgePaddingPx
+            val maxScrollY = maxScrollY()
+            val targetScrollY =
+                when {
+                    cursorBottom > visibleBottom -> visibleTop + cursorBottom - visibleBottom
+                    cursorTop < visibleTop -> cursorTop
+                    else -> visibleTop
+                }.coerceIn(0, maxScrollY)
+            if (targetScrollY != visibleTop) {
+                scrollView.scrollTo(0, targetScrollY)
+                revealExecutedCount++
+            }
             logIme(
-                "requestRectangleOnScreen source=$source requested=$requested scrollBefore=$before " +
-                    "scrollAfter=${scrollView.scrollY} cursorTop=${rect.top} cursorBottom=${rect.bottom}",
+                "requestRectangleOnScreen source=$source requested=${targetScrollY != visibleTop} scrollBefore=$before " +
+                    "scrollAfter=${scrollView.scrollY} cursorTop=${rect.top} cursorBottom=${rect.bottom} " +
+                    "line=$line lineCount=${layout.lineCount} visibleTop=$visibleTop visibleBottom=$visibleBottom " +
+                    "maxScrollY=$maxScrollY imeSequence=$imeAnimationSequence " +
+                    "imeAnimating=$imeFrameTracing durationUs=${(SystemClock.elapsedRealtimeNanos() - startedAt) / 1_000}",
             )
         }
 
@@ -2002,6 +2307,9 @@ internal class KardLeafQuillpadEditorView
             frameCommittedCallback = null
             imeFrameTracing = false
             Choreographer.getInstance().removeFrameCallback(imeFrameCallback)
+            composeImeTraceActive = false
+            Choreographer.getInstance().removeFrameCallback(composeImeFrameCallback)
+            removeCallbacks(composeImeFinishRunnable)
             pendingPreDrawListener?.let { listener ->
                 if (viewTreeObserver.isAlive) viewTreeObserver.removeOnPreDrawListener(listener)
             }
@@ -2018,7 +2326,8 @@ internal class KardLeafQuillpadEditorView
 
         private fun hasEditorFocus(): Boolean = titleEditText.hasFocus() || contentEditText.hasFocus()
 
-        private fun maxScrollY(): Int = ((scrollView.getChildAt(0)?.height ?: 0) - scrollView.height).coerceAtLeast(0)
+        private fun maxScrollY(): Int =
+            ((scrollView.getChildAt(0)?.height ?: 0) + scrollView.paddingBottom - scrollView.height).coerceAtLeast(0)
 
         private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 
@@ -2042,7 +2351,7 @@ internal class KardLeafQuillpadEditorView
     }
 
 @Composable
-fun KardLeafQuillpadEditor(
+internal fun KardLeafQuillpadEditor(
     initialTitle: String,
     initialContent: String,
     documentKey: String,
@@ -2064,8 +2373,11 @@ fun KardLeafQuillpadEditor(
     contentLetterSpacingSp: Float = 0f,
     contentParagraphSpacingDp: Float = 8f,
     contentFontFamily: String = "system",
+    active: Boolean = true,
     requestFocusToken: Int = 0,
+    onFocusRequestHandled: (Int) -> Unit = {},
     initialSelection: TextRange? = null,
+    initialViewportAnchor: EditorViewportAnchor? = null,
     showTitle: Boolean = true,
     currentFolder: String = "",
     inlineImagePreviewEnabled: Boolean = true,
@@ -2084,6 +2396,7 @@ fun KardLeafQuillpadEditor(
     val currentOnFastScrollSourceScrolled = rememberUpdatedState(onFastScrollSourceScrolled)
     val currentOnInlineImageClicked = rememberUpdatedState(onInlineImageClicked)
     val currentOnFrameCommitted = rememberUpdatedState(onFrameCommitted)
+    val currentOnFocusRequestHandled = rememberUpdatedState(onFocusRequestHandled)
     val viewRef = remember { AtomicReference<KardLeafQuillpadEditorView?>(null) }
     val handledFocusToken = remember { AtomicInteger(-1) }
 
@@ -2097,6 +2410,7 @@ fun KardLeafQuillpadEditor(
             val start = SystemClock.elapsedRealtime()
             KardLeafQuillpadEditorView(context).also { view ->
                 viewRef.set(view)
+                view.setInitialViewportAnchor(initialViewportAnchor)
                 KardLeafLog.d(
                     QUILLPAD_PERF_TAG,
                     "editorOpen androidViewCreated durationMs=${SystemClock.elapsedRealtime() - start} " +
@@ -2106,6 +2420,11 @@ fun KardLeafQuillpadEditor(
         },
         update = { view ->
             viewRef.set(view)
+            view.visibility = if (active) View.VISIBLE else View.INVISIBLE
+            view.isEnabled = active
+            view.importantForAccessibility =
+                if (active) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            if (!active) view.clearFocus()
             val titleSize = if (titleTextSize == TextUnit.Unspecified) 22f else titleTextSize.value
             val contentSize = if (contentTextSize == TextUnit.Unspecified) 16f else contentTextSize.value
             view.configureUserPerf(
@@ -2142,7 +2461,10 @@ fun KardLeafQuillpadEditor(
             view.bindDocument(documentKey, initialTitle, initialContent, controller.getCachedSnapshot())
             if (controller.editorView !== view) controller.attach(view, documentKey, initialTitle, initialContent)
             if (handledFocusToken.getAndSet(requestFocusToken) != requestFocusToken && requestFocusToken > 0) {
-                view.post { view.focusContent() }
+                view.post {
+                    view.focusContent()
+                    currentOnFocusRequestHandled.value(requestFocusToken)
+                }
             }
         },
     )

@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
+import com.kangle.kardleaf.data.utils.KardLeafLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -29,9 +30,7 @@ class VaultChangeObserver(
     private var pendingChangedUri: Uri? = null
 
     fun start(rootUri: Uri) {
-        if (observer != null && activeRootUri == rootUri) {
-            return
-        }
+        if (observer != null && activeRootUri == rootUri) return
 
         stop()
         activeRootUri = rootUri
@@ -51,7 +50,8 @@ class VaultChangeObserver(
             }
 
         observer = newObserver
-        buildObserverUris(rootUri).forEach { uri ->
+        val observerUris = buildObserverUris(rootUri)
+        observerUris.forEachIndexed { index, uri ->
             runCatching {
                 context.contentResolver.registerContentObserver(
                     uri,
@@ -59,6 +59,7 @@ class VaultChangeObserver(
                     newObserver,
                 )
             }.onFailure { error ->
+                KardLeafLog.e(LOG_TAG, "register failed index=$index", error)
             }
         }
     }
@@ -71,6 +72,7 @@ class VaultChangeObserver(
             uris += DocumentsContract.buildDocumentUriUsingTree(rootUri, treeDocumentId)
             uris += DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, treeDocumentId)
         }.onFailure { error ->
+            KardLeafLog.e(LOG_TAG, "build observer URIs failed", error)
         }
 
         return uris.toList()
@@ -91,8 +93,6 @@ class VaultChangeObserver(
     }
 
     fun stop() {
-        if (observer != null || debounceJob != null) {
-        }
         debounceJob?.cancel()
         debounceJob = null
         pendingChangedUri = null
@@ -102,7 +102,7 @@ class VaultChangeObserver(
     }
 
     companion object {
-        private const val TAG = "VaultChangeObserver"
+        private const val LOG_TAG = "VaultChangeObserver"
         private const val DEBOUNCE_MS = 800L
     }
 }

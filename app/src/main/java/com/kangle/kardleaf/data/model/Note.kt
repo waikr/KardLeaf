@@ -21,6 +21,7 @@ data class Note(
     val tags: List<String> = emptyList(),
     val sourceType: String? = null,
     val sourceUrl: String? = null,
+    val noteType: String? = null,
 ) {
     val folder: String
         get() = file.parent ?: ""

@@ -2085,6 +2085,7 @@ fun KardLeafNativeEditor(
     contentParagraphSpacingDp: Float = 8f,
     contentFontFamily: String = "system",
     requestFocusToken: Int = 0,
+    onFocusRequestHandled: (Int) -> Unit = {},
     initialSelection: TextRange? = null,
     showTitle: Boolean = true,
     currentFolder: String = "",
@@ -2104,6 +2105,7 @@ fun KardLeafNativeEditor(
     val currentOnFastScrollSourceScrolled = rememberUpdatedState(onFastScrollSourceScrolled)
     val currentOnInlineImageClicked = rememberUpdatedState(onInlineImageClicked)
     val currentOnFrameCommitted = rememberUpdatedState(onFrameCommitted)
+    val currentOnFocusRequestHandled = rememberUpdatedState(onFocusRequestHandled)
     val handledFocusToken = remember { AtomicInteger(-1) }
     val lastAppliedUpdateSignature = remember { AtomicReference("") }
     val skippedUpdateCount = remember { AtomicInteger(0) }
@@ -2252,6 +2254,7 @@ fun KardLeafNativeEditor(
                                 "native focus token handled token=$requestFocusToken key=$documentKey ${nativeEditorMemorySummary()}",
                             )
                             view.focusContent()
+                            currentOnFocusRequestHandled.value(requestFocusToken)
                         } else {
                             KardLeafLog.w(
                                 EDITOR_TRACE_TAG,

@@ -27,10 +27,12 @@ class TaskListWidgetService : RemoteViewsService() {
         private val appWidgetId: Int,
     ) : RemoteViewsFactory {
         private var rows: List<TaskWidgetRow> = emptyList()
+        private var palette = WidgetTheme.configuredPalette(context, WidgetTheme.Kind.TASK, appWidgetId)
 
         override fun onCreate() = Unit
 
         override fun onDataSetChanged() {
+            palette = WidgetTheme.configuredPalette(context, WidgetTheme.Kind.TASK, appWidgetId)
             val tasks =
                 runBlocking {
                     AppDatabase.getDatabase(context)
@@ -56,6 +58,9 @@ class TaskListWidgetService : RemoteViewsService() {
                     context.packageName,
                     R.layout.widget_task_list_group_header,
                 ).apply {
+                    palette?.let { setInt(R.id.task_widget_group_header, "setBackgroundColor", it.background) }
+                    WidgetTheme.applyText(this, R.id.task_widget_group_title, palette?.onSurface)
+                    WidgetTheme.applyText(this, R.id.task_widget_group_count, palette?.muted)
                     setTextViewText(R.id.task_widget_group_title, row.title)
                     setTextViewText(R.id.task_widget_group_count, row.count.toString())
                 }
@@ -64,6 +69,13 @@ class TaskListWidgetService : RemoteViewsService() {
                     context.packageName,
                     R.layout.widget_task_list_item,
                 ).apply {
+                    KardLeafLog.i(
+                        WIDGET_CLICK_LOG_TAG,
+                        "task row bind widgetId=$appWidgetId position=$position taskId=${row.task.id} " +
+                            "toggleTarget=${TaskQuickAddActivity.CLICK_ACTION_TOGGLE}",
+                    )
+                    WidgetTheme.applyBackground(this, R.id.task_widget_item, palette?.surface)
+                    WidgetTheme.applyText(this, R.id.task_widget_item_text, palette?.onSurface)
                     setTextViewText(
                         R.id.task_widget_item_text,
                         TaskListWidgetProvider.compactTaskText(row.task.taskText),

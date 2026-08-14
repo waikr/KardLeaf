@@ -14,6 +14,8 @@ object NoteFormatUtils {
     const val TAGS_KEY = "tags"
     const val SOURCE_TYPE_KEY = "source_type"
     const val SOURCE_URL_KEY = "source_url"
+    const val NOTE_TYPE_KEY = "note_type"
+    const val NOTE_TYPE_MINDMAP = "mindmap"
     private val REMOVED_LEGACY_FRONT_MATTER_KEYS = setOf("color", "reminder")
 
     internal val obsidianImageReferenceRegex = Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
@@ -215,6 +217,15 @@ object NoteFormatUtils {
             ?.let(::normalizeTags)
             .orEmpty()
 
+    fun extractNoteType(frontMatter: FrontMatterData): String? =
+        frontMatter.properties
+            .firstOrNull { it.key.equals(NOTE_TYPE_KEY, ignoreCase = true) }
+            ?.values
+            ?.firstOrNull()
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?.takeIf { it.isNotBlank() }
+
     /** Menu-time check that stops at the first remote Markdown image. */
     fun hasRemoteMarkdownImage(content: CharSequence): Boolean {
         var searchFrom = 0
@@ -407,6 +418,9 @@ object NoteFormatUtils {
         }
         note.sourceUrl?.trim()?.takeIf { it.isNotBlank() }?.let { sourceUrl ->
             upsertTopLevelValue(frontMatterLines, SOURCE_URL_KEY, escapeYamlScalar(sourceUrl))
+        }
+        note.noteType?.trim()?.takeIf { it.isNotBlank() }?.let { noteType ->
+            upsertTopLevelValue(frontMatterLines, NOTE_TYPE_KEY, escapeYamlScalar(noteType))
         }
 
         return frontMatterLines

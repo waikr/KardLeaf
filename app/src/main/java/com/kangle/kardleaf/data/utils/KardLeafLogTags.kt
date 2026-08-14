@@ -9,6 +9,9 @@ object KardLeafLogTags {
     const val USER_PERF = "KardLeafUserPerf"
     const val DASHBOARD_SCROLL = "KardLeafDashboardScroll"
     const val GESTURE_TRACE = "KardLeafGestureTrace"
+    const val FOLDER_NAVIGATION = "KardLeafFolderNavigation"
+    const val TASK_SAVE = "KardLeafTaskSave"
+    const val TASK_MARKDOWN = "KardLeafTaskMarkdown"
 }
 
 object KardLeafPerfLog {

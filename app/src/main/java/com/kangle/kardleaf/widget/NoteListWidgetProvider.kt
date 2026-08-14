@@ -13,6 +13,7 @@ import com.kangle.kardleaf.MainActivity
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.database.AppDatabase
 import com.kangle.kardleaf.data.database.NoteEntity
+import com.kangle.kardleaf.data.utils.KardLeafLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,6 +42,7 @@ class NoteListWidgetProvider : AppWidgetProvider() {
             editor.remove(folderPrefKey(appWidgetId))
             editor.remove(hideTitlePrefKey(appWidgetId))
             editor.remove(previewLinesPrefKey(appWidgetId))
+            WidgetTheme.clear(context, WidgetTheme.Kind.NOTE, appWidgetId)
         }
         editor.apply()
         super.onDeleted(context, appWidgetIds)
@@ -70,6 +72,20 @@ class NoteListWidgetProvider : AppWidgetProvider() {
         folder: String?,
         hasNotes: Boolean,
     ): RemoteViews = RemoteViews(context.packageName, R.layout.widget_note_list).apply {
+        val palette = WidgetTheme.configuredPalette(context, WidgetTheme.Kind.NOTE, appWidgetId)
+        KardLeafLog.i(
+            WIDGET_THEME_LOG_TAG,
+            "widget palette kind=NOTE widgetId=$appWidgetId configured=${palette != null} " +
+                "background=${palette?.background?.let(Integer::toHexString) ?: "layout"} " +
+                "surface=${palette?.surface?.let(Integer::toHexString) ?: "layout"} " +
+                "accent=${palette?.accent?.let(Integer::toHexString) ?: "layout"}",
+        )
+        WidgetTheme.applyBackground(this, R.id.note_widget_root, palette?.background)
+        WidgetTheme.applyText(this, R.id.note_widget_folder, palette?.onSurface)
+        WidgetTheme.applyText(this, R.id.note_widget_empty, palette?.muted)
+        WidgetTheme.applyBackground(this, R.id.note_widget_add, palette?.accent)
+        WidgetTheme.applyIcon(this, R.id.note_widget_more, palette?.onSurface)
+        WidgetTheme.applyIcon(this, R.id.note_widget_folder_arrow, palette?.muted)
         setTextViewText(R.id.note_widget_folder, folderTitle(context, folder))
         setOnClickPendingIntent(R.id.note_widget_folder_control, folderPickerPendingIntent(context, appWidgetId))
         setOnClickPendingIntent(R.id.note_widget_open_folder, openFolderPendingIntent(context, appWidgetId, folder))
@@ -139,6 +155,7 @@ class NoteListWidgetProvider : AppWidgetProvider() {
             data = Uri.parse("kardleaf://note-widget/settings/$appWidgetId")
             putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
             putExtra(NoteWidgetFolderPickerActivity.EXTRA_OPEN_SETTINGS, true)
+            putExtra(NoteWidgetFolderPickerActivity.EXTRA_WIDGET_KIND, WidgetTheme.Kind.NOTE.name)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION
         }
         return PendingIntent.getActivity(

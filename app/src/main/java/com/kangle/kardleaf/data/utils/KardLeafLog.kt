@@ -113,6 +113,9 @@ object KardLeafLog {
 
     fun readFileLogs(): String {
         val dir = logDir ?: return ""
+        runCatching {
+            fileLogExecutor.submit {}.get(2, TimeUnit.SECONDS)
+        }
         return synchronized(fileLock) {
             appLogFiles(dir)
                 .filter(File::exists)

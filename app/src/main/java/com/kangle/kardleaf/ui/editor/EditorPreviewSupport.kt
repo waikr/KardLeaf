@@ -45,10 +45,86 @@ import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.ui.editor.api.EditorFastScrollMetrics
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 import java.util.Locale
 
 private const val PREVIEW_CHUNK_CHARS = 300
 private const val USER_PERF_TRACE_TAG = "KardLeafUserPerf"
+
+internal enum class EditorViewportEdge {
+    START,
+    CENTER,
+    END,
+}
+
+internal data class EditorViewportAnchor(
+    val offset: Int,
+    val viewportFraction: Float,
+    val edge: EditorViewportEdge,
+)
+
+internal fun EditorViewportAnchor.shifted(
+    delta: Int,
+    targetLength: Int,
+): EditorViewportAnchor =
+    copy(
+        offset = when (edge) {
+            EditorViewportEdge.START -> 0
+            EditorViewportEdge.CENTER -> (offset + delta).coerceIn(0, targetLength)
+            EditorViewportEdge.END -> targetLength
+        },
+        viewportFraction = viewportFraction.coerceIn(0f, 1f),
+    )
+
+internal fun codeMirrorCrLfCount(content: String): Int {
+    var count = 0
+    var index = 0
+    while (index + 1 < content.length) {
+        if (content[index] == '\r' && content[index + 1] == '\n') count++
+        index++
+    }
+    return count
+}
+
+internal fun codeMirrorNormalizedLength(content: String): Int =
+    content.length - codeMirrorCrLfCount(content)
+
+internal fun EditorViewportAnchor.toCodeMirrorAnchor(content: String): EditorViewportAnchor {
+    val normalizedLength = codeMirrorNormalizedLength(content)
+    val rawOffset = when (edge) {
+        EditorViewportEdge.START -> 0
+        EditorViewportEdge.CENTER -> offset.coerceIn(0, content.length)
+        EditorViewportEdge.END -> content.length
+    }
+    var normalizedOffset = 0
+    var index = 0
+    while (index < rawOffset) {
+        if (content[index] == '\r' && content.getOrNull(index + 1) == '\n') {
+            index += 2
+        } else {
+            index++
+        }
+        normalizedOffset++
+    }
+    return copy(offset = normalizedOffset.coerceIn(0, normalizedLength))
+}
+
+internal fun parseEditorViewportAnchor(raw: String?): EditorViewportAnchor? =
+    runCatching {
+        val json = JSONObject(raw ?: return null)
+        EditorViewportAnchor(
+            offset = json.getInt("offset").coerceAtLeast(0),
+            viewportFraction = json.optDouble("viewportFraction", 0.5).toFloat().coerceIn(0f, 1f),
+            edge = EditorViewportEdge.valueOf(json.optString("edge", "center").uppercase(Locale.ROOT)),
+        )
+    }.getOrNull()
+
+internal fun EditorViewportAnchor.toJson(): String =
+    JSONObject()
+        .put("offset", offset.coerceAtLeast(0))
+        .put("viewportFraction", viewportFraction.coerceIn(0f, 1f))
+        .put("edge", edge.name.lowercase(Locale.ROOT))
+        .toString()
 
 internal fun editorMemorySummary(): String {
     val runtime = Runtime.getRuntime()

@@ -3,7 +3,6 @@ package com.kangle.kardleaf.ui
 import android.content.Context
 import android.os.Build
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -35,7 +34,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import com.kangle.kardleaf.AppIconManager
 import com.kangle.kardleaf.BuildConfig
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.utils.KardLeafLog
@@ -54,7 +52,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -528,82 +525,6 @@ internal fun parseThemeHexColor(raw: String): Int? {
 
 internal val ThemeCornerRadiusOptions =
     listOf(PrefsManager.THEME_CORNER_RADIUS_FOLLOW, 0, 8, 16, 24, 32)
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-internal fun AppIconChoiceGrid(
-    selectedIcon: AppIconManager.AppIcon,
-    onIconClick: (AppIconManager.AppIcon) -> Unit,
-) {
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        AppIconManager.AppIcon.values().forEach { icon ->
-            AppIconChoiceBlock(
-                icon = icon,
-                selected = selectedIcon == icon,
-                onClick = { onIconClick(icon) },
-            )
-        }
-    }
-}
-
-@Composable
-internal fun AppIconChoiceBlock(
-    icon: AppIconManager.AppIcon,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val shape = RoundedCornerShape(20.dp)
-    val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-    Column(
-        modifier = Modifier
-            .width(112.dp)
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(if (selected) 2.dp else 1.dp, borderColor, shape)
-            .clickable(onClick = onClick)
-            .padding(10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Image(
-                painter = painterResource(id = icon.iconResId),
-                contentDescription = icon.label,
-                modifier = Modifier
-                    .size(54.dp)
-                    .clip(RoundedCornerShape(14.dp)),
-            )
-            if (selected) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .size(22.dp)
-                        .clip(RoundedCornerShape(11.dp))
-                        .background(MaterialTheme.colorScheme.primary),
-                    contentAlignment = Alignment.Center,
-
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Check,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-        }
-        Text(
-            text = icon.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

@@ -2,8 +2,6 @@ package com.kangle.kardleaf.ui
 
 import android.net.Uri
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +22,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -78,6 +80,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -86,10 +90,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -103,6 +109,9 @@ import com.kangle.kardleaf.localizedText
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 import java.util.Locale
 import kotlin.math.roundToInt
+import sh.calvin.reorderable.ReorderableColumn
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyGridState
 
 private const val SETTINGS_TRACE_TAG = "KardLeafSettingsTrace"
 
@@ -144,9 +153,11 @@ internal fun settingsPageTitle(page: String): String {
             "webDav" -> "WebDAV"
             "autoBackup" -> "Auto backup"
             "taskReminders" -> "Tasks & reminders"
+            "taskFolder" -> "Task list location"
             "remarkRecords" -> "Remark records"
             "historyRecords" -> "Version history"
             "about" -> "About"
+            "changedFiles" -> "Changed files"
             else -> "Settings"
         }
     }
@@ -186,9 +197,11 @@ internal fun settingsPageTitle(page: String): String {
         "webDav" -> "WebDAV 云同步"
         "autoBackup" -> "自动备份"
         "taskReminders" -> "任务与提醒"
+        "taskFolder" -> "任务清单位置"
         "remarkRecords" -> "备注记录"
         "historyRecords" -> "历史版本记录"
         "about" -> "关于"
+        "changedFiles" -> "修改文件"
         else -> "设置"
     }
 }
@@ -337,101 +350,64 @@ internal fun SettingsToolbarGrid(
 ) {
     val columns = 4
     val spacing = 10.dp
-    val density = LocalDensity.current
-    var draggingItem by remember { mutableStateOf<KardLeafCustomFeatures.ToolbarItem?>(null) }
-    var draggingStartIndex by remember { mutableStateOf(-1) }
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
-    var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
+    val haptic = LocalHapticFeedback.current
+    val itemsKey = remember(items) { items.joinToString("|") { it.name } }
+    val orderedItems = remember(itemsKey) {
+        mutableStateListOf<KardLeafCustomFeatures.ToolbarItem>().apply { addAll(items) }
+    }
+    val dragMoved = remember(itemsKey) { mutableStateOf(false) }
 
-    fun clearDragState() {
-        draggingItem = null
-        draggingStartIndex = -1
-        dragOffset = Offset.Zero
-        dragTargetIndex = null
+    val lazyGridState = rememberLazyGridState()
+    val reorderableState = rememberReorderableLazyGridState(lazyGridState) { from, to ->
+        if (from.index == to.index) return@rememberReorderableLazyGridState
+        orderedItems.add(to.index, orderedItems.removeAt(from.index))
+        dragMoved.value = true
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val itemSize = (maxWidth - spacing * (columns - 1).toFloat()) / columns
-        val itemSizePx = with(density) { itemSize.toPx() }
-        val spacingPx = with(density) { spacing.toPx() }
-        val rows = items.chunked(columns)
+        val rowCount = (orderedItems.size + columns - 1) / columns
+        val gridHeight =
+            itemSize * rowCount.toFloat() + spacing * (rowCount - 1).coerceAtLeast(0).toFloat()
 
-        Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
-            rows.forEachIndexed { rowIndex, rowItems ->
-                Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-                    rowItems.forEachIndexed { columnIndex, item ->
-                        val index = rowIndex * columns + columnIndex
-                        val isDragging = draggingItem == item
-                        val targetIndex = dragTargetIndex
-                        val isDropTarget = targetIndex == index && draggingItem != null && !isDragging
-                        val avoidanceOffset = if (!isDragging && targetIndex != null) {
-                            calculateToolbarAvoidanceOffset(
-                                index = index,
-                                fromIndex = draggingStartIndex,
-                                toIndex = targetIndex,
-                                columns = columns,
-                                cellSizePx = itemSizePx + spacingPx,
-                            )
-                        } else {
-                            IntOffset.Zero
-                        }
-
-                        SettingsToolbarGridItem(
-                            icon = toolbarItemIcon(item),
-                            title = item.label,
-                            isDragging = isDragging,
-                            isDropTarget = isDropTarget,
-                            modifier = Modifier
-                                .size(itemSize)
-                                .zIndex(if (isDragging) 1f else 0f)
-                                .offset {
-                                    if (isDragging) {
-                                        IntOffset(dragOffset.x.roundToInt(), dragOffset.y.roundToInt())
-                                    } else {
-                                        avoidanceOffset
-                                    }
-                                }
-                                .pointerInput(item, items.size, itemSizePx, spacingPx) {
-                                    detectDragGesturesAfterLongPress(
-                                        onDragStart = {
-                                            draggingItem = item
-                                            draggingStartIndex = index
-                                            dragOffset = Offset.Zero
-                                            dragTargetIndex = index
-                                        },
-                                        onDragCancel = { clearDragState() },
-                                        onDragEnd = {
-                                            val dragged = draggingItem
-                                            val fromIndex = if (dragged == null) -1 else items.indexOf(dragged)
-                                            val toIndex = dragTargetIndex
-                                            if (fromIndex >= 0 && toIndex != null && toIndex != fromIndex) {
-                                                val newOrder = items.toMutableList().also { list ->
-                                                    val moved = list.removeAt(fromIndex)
-                                                    list.add(toIndex.coerceIn(0, list.size), moved)
-                                                }
-                                                onOrderChange(newOrder)
-                                            }
-                                            clearDragState()
-                                        },
-                                        onDrag = { change, dragAmount ->
-                                            change.consume()
-                                            dragOffset += dragAmount
-                                            dragTargetIndex = calculateToolbarDragTarget(
-                                                startIndex = draggingStartIndex,
-                                                dragOffset = dragOffset,
-                                                columns = columns,
-                                                itemSizePx = itemSizePx,
-                                                spacingPx = spacingPx,
-                                                itemCount = items.size,
-                                            )
-                                        },
-                                    )
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            state = lazyGridState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(gridHeight),
+            horizontalArrangement = Arrangement.spacedBy(spacing),
+            verticalArrangement = Arrangement.spacedBy(spacing),
+            userScrollEnabled = false,
+        ) {
+            items(
+                items = orderedItems,
+                key = { it },
+            ) { item ->
+                ReorderableItem(
+                    state = reorderableState,
+                    key = item,
+                ) { isDragging ->
+                    SettingsToolbarGridItem(
+                        icon = toolbarItemIcon(item),
+                        title = item.label,
+                        isDragging = isDragging,
+                        isDropTarget = false,
+                        modifier = Modifier
+                            .size(itemSize)
+                            .longPressDraggableHandle(
+                                onDragStarted = {
+                                    dragMoved.value = false
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 },
-                        )
-                    }
-                    repeat(columns - rowItems.size) {
-                        Spacer(modifier = Modifier.size(itemSize))
-                    }
+                                onDragStopped = {
+                                    if (dragMoved.value) {
+                                        onOrderChange(orderedItems.toList())
+                                    }
+                                    dragMoved.value = false
+                                },
+                            ),
+                    )
                 }
             }
         }
@@ -485,52 +461,7 @@ internal fun SettingsToolbarGridItem(
     }
 }
 
-internal fun calculateToolbarDragTarget(
-    startIndex: Int,
-    dragOffset: Offset,
-    columns: Int,
-    itemSizePx: Float,
-    spacingPx: Float,
-    itemCount: Int,
-): Int {
-    if (startIndex !in 0 until itemCount) return 0
 
-    val cellSizePx = itemSizePx + spacingPx
-    val startColumn = startIndex % columns
-    val startRow = startIndex / columns
-    val centerX = startColumn * cellSizePx + itemSizePx / 2f + dragOffset.x
-    val centerY = startRow * cellSizePx + itemSizePx / 2f + dragOffset.y
-    val targetColumn = (centerX / cellSizePx).toInt().coerceIn(0, columns - 1)
-    val targetRow = (centerY / cellSizePx).toInt().coerceIn(0, (itemCount - 1) / columns)
-
-    return (targetRow * columns + targetColumn).coerceIn(0, itemCount - 1)
-}
-
-internal fun calculateToolbarAvoidanceOffset(
-    index: Int,
-    fromIndex: Int,
-    toIndex: Int,
-    columns: Int,
-    cellSizePx: Float,
-): IntOffset {
-    if (fromIndex == toIndex || fromIndex < 0) return IntOffset.Zero
-
-    val visualIndex = when {
-        fromIndex < toIndex && index in (fromIndex + 1)..toIndex -> index - 1
-        fromIndex > toIndex && index in toIndex until fromIndex -> index + 1
-        else -> index
-    }
-    if (visualIndex == index) return IntOffset.Zero
-
-    val originalColumn = index % columns
-    val originalRow = index / columns
-    val visualColumn = visualIndex % columns
-    val visualRow = visualIndex / columns
-    return IntOffset(
-        x = ((visualColumn - originalColumn) * cellSizePx).roundToInt(),
-        y = ((visualRow - originalRow) * cellSizePx).roundToInt(),
-    )
-}
 
 internal fun editorTopToolbarAvailableItems(
     noteSidePanelsEnabled: Boolean,
@@ -590,92 +521,43 @@ internal fun SettingsEditorTopToolbarDragList(
     onToggleArea: (PrefsManager.EditorTopToolbarItemId) -> Unit,
     onToggleHidden: (PrefsManager.EditorTopToolbarItemId) -> Unit,
 ) {
-    val rowHeight = 64.dp
-    val rowSpacing = 6.dp
-    val rowStepPx = with(LocalDensity.current) { (rowHeight + rowSpacing).toPx() }
-    var draggingItem by remember { mutableStateOf<PrefsManager.EditorTopToolbarItemId?>(null) }
-    var draggingStartIndex by remember { mutableStateOf(-1) }
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
-    var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
+    val haptic = LocalHapticFeedback.current
 
-    fun clearDragState() {
-        draggingItem = null
-        draggingStartIndex = -1
-        dragOffset = Offset.Zero
-        dragTargetIndex = null
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(rowSpacing)) {
-        items.forEachIndexed { index, itemId ->
-            val itemIsDragging = draggingItem == itemId
-            val targetIndex = dragTargetIndex
-            val isDropTarget = targetIndex == index && draggingItem != null && !itemIsDragging
-            val avoidanceOffset = if (!itemIsDragging && targetIndex != null) {
-                calculateDrawerAvoidanceOffset(
-                    index = index,
-                    fromIndex = draggingStartIndex,
-                    toIndex = targetIndex,
-                    rowStepPx = rowStepPx,
-                )
-            } else {
-                IntOffset.Zero
-            }
-
-            SettingsEditorTopToolbarEditRow(
-                icon = editorTopToolbarItemIcon(itemId),
-                title = editorTopToolbarItemLabel(itemId),
-                isMore = itemId in moreItems,
-                isHidden = itemId in hiddenItems,
-                canToggleArea = itemId != PrefsManager.EditorTopToolbarItemId.MORE && itemId !in hiddenItems,
-                canToggleHidden = itemId != PrefsManager.EditorTopToolbarItemId.MORE,
-                isDragging = itemIsDragging,
-                isDropTarget = isDropTarget,
-                onToggleArea = { onToggleArea(itemId) },
-                onToggleHidden = { onToggleHidden(itemId) },
-                modifier = Modifier
-                    .zIndex(if (itemIsDragging) 1f else 0f)
-                    .offset {
-                        if (itemIsDragging) {
-                            IntOffset(0, dragOffset.y.roundToInt())
-                        } else {
-                            avoidanceOffset
-                        }
-                    }
-                    .pointerInput(itemId, items.size, rowStepPx) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = {
-                                draggingItem = itemId
-                                draggingStartIndex = index
-                                dragOffset = Offset.Zero
-                                dragTargetIndex = index
-                            },
-                            onDragCancel = { clearDragState() },
-                            onDragEnd = {
-                                val dragged = draggingItem
-                                val fromIndex = if (dragged == null) -1 else items.indexOf(dragged)
-                                val toIndex = dragTargetIndex
-                                if (fromIndex >= 0 && toIndex != null && toIndex != fromIndex) {
-                                    val newOrder = items.toMutableList().also { list ->
-                                        val moved = list.removeAt(fromIndex)
-                                        list.add(toIndex.coerceIn(0, list.size), moved)
-                                    }
-                                    onOrderChange(newOrder)
-                                }
-                                clearDragState()
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                dragOffset += dragAmount
-                                dragTargetIndex = calculateDrawerDragTarget(
-                                    startIndex = draggingStartIndex,
-                                    dragOffset = dragOffset,
-                                    rowHeightPx = rowStepPx,
-                                    itemCount = items.size,
-                                )
-                            },
-                        )
+    ReorderableColumn(
+        list = items,
+        onSettle = { fromIndex, toIndex ->
+            if (fromIndex != toIndex) {
+                onOrderChange(
+                    items.toMutableList().apply {
+                        add(toIndex, removeAt(fromIndex))
                     },
-            )
+                )
+            }
+        },
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) { _, itemId, isDragging ->
+        key(itemId) {
+            ReorderableItem {
+                SettingsEditorTopToolbarEditRow(
+                    icon = editorTopToolbarItemIcon(itemId),
+                    title = editorTopToolbarItemLabel(itemId),
+                    isMore = itemId in moreItems,
+                    isHidden = itemId in hiddenItems,
+                    canToggleArea = itemId != PrefsManager.EditorTopToolbarItemId.MORE && itemId !in hiddenItems,
+                    canToggleHidden = itemId != PrefsManager.EditorTopToolbarItemId.MORE,
+                    isDragging = isDragging,
+                    isDropTarget = false,
+                    onToggleArea = { onToggleArea(itemId) },
+                    onToggleHidden = { onToggleHidden(itemId) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .longPressDraggableHandle(
+                            onDragStarted = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            },
+                        ),
+                )
+            }
         }
     }
 }
@@ -770,90 +652,41 @@ internal fun SettingsSelectionToolbarDragList(
     onToggleArea: (PrefsManager.SelectionToolbarItemId) -> Unit,
     onToggleHidden: (PrefsManager.SelectionToolbarItemId) -> Unit,
 ) {
-    val rowHeight = 64.dp
-    val rowSpacing = 6.dp
-    val rowStepPx = with(LocalDensity.current) { (rowHeight + rowSpacing).toPx() }
-    var draggingItem by remember { mutableStateOf<PrefsManager.SelectionToolbarItemId?>(null) }
-    var draggingStartIndex by remember { mutableStateOf(-1) }
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
-    var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
+    val haptic = LocalHapticFeedback.current
 
-    fun clearDragState() {
-        draggingItem = null
-        draggingStartIndex = -1
-        dragOffset = Offset.Zero
-        dragTargetIndex = null
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(rowSpacing)) {
-        items.forEachIndexed { index, itemId ->
-            val itemIsDragging = draggingItem == itemId
-            val targetIndex = dragTargetIndex
-            val isDropTarget = targetIndex == index && draggingItem != null && !itemIsDragging
-            val avoidanceOffset = if (!itemIsDragging && targetIndex != null) {
-                calculateDrawerAvoidanceOffset(
-                    index = index,
-                    fromIndex = draggingStartIndex,
-                    toIndex = targetIndex,
-                    rowStepPx = rowStepPx,
-                )
-            } else {
-                IntOffset.Zero
-            }
-
-            SettingsSelectionToolbarEditRow(
-                icon = selectionToolbarItemIcon(itemId),
-                title = selectionToolbarItemLabel(itemId),
-                isMore = itemId in moreItems,
-                isHidden = itemId in hiddenItems,
-                isDragging = itemIsDragging,
-                isDropTarget = isDropTarget,
-                onToggleArea = { onToggleArea(itemId) },
-                onToggleHidden = { onToggleHidden(itemId) },
-                modifier = Modifier
-                    .zIndex(if (itemIsDragging) 1f else 0f)
-                    .offset {
-                        if (itemIsDragging) {
-                            IntOffset(0, dragOffset.y.roundToInt())
-                        } else {
-                            avoidanceOffset
-                        }
-                    }
-                    .pointerInput(itemId, items.size, rowStepPx) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = {
-                                draggingItem = itemId
-                                draggingStartIndex = index
-                                dragOffset = Offset.Zero
-                                dragTargetIndex = index
-                            },
-                            onDragCancel = { clearDragState() },
-                            onDragEnd = {
-                                val dragged = draggingItem
-                                val fromIndex = if (dragged == null) -1 else items.indexOf(dragged)
-                                val toIndex = dragTargetIndex
-                                if (fromIndex >= 0 && toIndex != null && toIndex != fromIndex) {
-                                    val newOrder = items.toMutableList().also { list ->
-                                        val moved = list.removeAt(fromIndex)
-                                        list.add(toIndex.coerceIn(0, list.size), moved)
-                                    }
-                                    onOrderChange(newOrder)
-                                }
-                                clearDragState()
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                dragOffset += dragAmount
-                                dragTargetIndex = calculateDrawerDragTarget(
-                                    startIndex = draggingStartIndex,
-                                    dragOffset = dragOffset,
-                                    rowHeightPx = rowStepPx,
-                                    itemCount = items.size,
-                                )
-                            },
-                        )
+    ReorderableColumn(
+        list = items,
+        onSettle = { fromIndex, toIndex ->
+            if (fromIndex != toIndex) {
+                onOrderChange(
+                    items.toMutableList().apply {
+                        add(toIndex, removeAt(fromIndex))
                     },
-            )
+                )
+            }
+        },
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) { _, itemId, isDragging ->
+        key(itemId) {
+            ReorderableItem {
+                SettingsSelectionToolbarEditRow(
+                    icon = selectionToolbarItemIcon(itemId),
+                    title = selectionToolbarItemLabel(itemId),
+                    isMore = itemId in moreItems,
+                    isHidden = itemId in hiddenItems,
+                    isDragging = isDragging,
+                    isDropTarget = false,
+                    onToggleArea = { onToggleArea(itemId) },
+                    onToggleHidden = { onToggleHidden(itemId) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .longPressDraggableHandle(
+                            onDragStarted = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            },
+                        ),
+                )
+            }
         }
     }
 }
@@ -913,21 +746,11 @@ internal fun SettingsDrawerDragList(
     val rowHeight = 64.dp
     val rowSpacing = 6.dp
     val rowStepPx = with(LocalDensity.current) { (rowHeight + rowSpacing).toPx() }
-    var draggingItem by remember { mutableStateOf<PrefsManager.DrawerItemId?>(null) }
-    var draggingStartIndex by remember { mutableStateOf(-1) }
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
-    var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
+    val haptic = LocalHapticFeedback.current
     var draggingGroupStart by remember { mutableStateOf<PrefsManager.DrawerItemId?>(null) }
     var groupDragStartIndex by remember { mutableStateOf(-1) }
     var groupDragOffset by remember { mutableStateOf(Offset.Zero) }
     var groupDragTargetIndex by remember { mutableStateOf<Int?>(null) }
-
-    fun clearDragState() {
-        draggingItem = null
-        draggingStartIndex = -1
-        dragOffset = Offset.Zero
-        dragTargetIndex = null
-    }
 
     fun clearGroupDragState() {
         draggingGroupStart = null
@@ -936,143 +759,105 @@ internal fun SettingsDrawerDragList(
         groupDragTargetIndex = null
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(rowSpacing)) {
-        items.forEachIndexed { index, itemId ->
-            val title = prefsManager.getDrawerItemLabel(itemId, drawerItemLabel(itemId))
-            val itemIsDragging = draggingItem == itemId
-            val targetIndex = dragTargetIndex
-            val isDropTarget = targetIndex == index && draggingItem != null && !itemIsDragging
-            val avoidanceOffset = if (!itemIsDragging && targetIndex != null) {
-                calculateDrawerAvoidanceOffset(
-                    index = index,
-                    fromIndex = draggingStartIndex,
-                    toIndex = targetIndex,
-                    rowStepPx = rowStepPx,
+    ReorderableColumn(
+        list = items,
+        onSettle = { fromIndex, toIndex ->
+            if (fromIndex != toIndex) {
+                onOrderChange(
+                    items.toMutableList().apply {
+                        add(toIndex, removeAt(fromIndex))
+                    },
                 )
-            } else {
-                IntOffset.Zero
             }
+        },
+        verticalArrangement = Arrangement.spacedBy(rowSpacing),
+    ) { index, itemId, isDragging ->
+        key(itemId) {
+            ReorderableItem {
+                val title = prefsManager.getDrawerItemLabel(itemId, drawerItemLabel(itemId))
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    SettingsDrawerEditRow(
+                        icon = drawerItemIcon(itemId),
+                        title = title,
+                        isHidden = itemId in hiddenItems,
+                        isDragging = isDragging,
+                        isDropTarget = false,
+                        onRename = { onRename(itemId, title) },
+                        canToggleVisible = itemId != PrefsManager.DrawerItemId.SETTINGS,
+                        onToggleVisible = { onToggleVisible(itemId) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .longPressDraggableHandle(
+                                onDragStarted = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                },
+                            ),
+                    )
 
-            Box {
-                SettingsDrawerEditRow(
-                    icon = drawerItemIcon(itemId),
-                    title = title,
-                    isHidden = itemId in hiddenItems,
-                    isDragging = itemIsDragging,
-                    isDropTarget = isDropTarget,
-                    onRename = { onRename(itemId, title) },
-                    canToggleVisible = itemId != PrefsManager.DrawerItemId.SETTINGS,
-                    onToggleVisible = { onToggleVisible(itemId) },
-                    modifier = Modifier
-                        .zIndex(if (itemIsDragging) 1f else 0f)
-                        .offset {
-                            if (itemIsDragging) {
-                                IntOffset(0, dragOffset.y.roundToInt())
-                            } else {
-                                avoidanceOffset
-                            }
-                        }
-                        .pointerInput(itemId, items.size, rowStepPx) {
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = {
-                                    draggingItem = itemId
-                                    draggingStartIndex = index
-                                    dragOffset = Offset.Zero
-                                    dragTargetIndex = index
-                                },
-                                onDragCancel = { clearDragState() },
-                                onDragEnd = {
-                                    val dragged = draggingItem
-                                    val fromIndex = if (dragged == null) -1 else items.indexOf(dragged)
-                                    val toIndex = dragTargetIndex
-                                    if (fromIndex >= 0 && toIndex != null && toIndex != fromIndex) {
-                                        val newOrder = items.toMutableList().also { list ->
-                                            val moved = list.removeAt(fromIndex)
-                                            list.add(toIndex.coerceIn(0, list.size), moved)
-                                        }
-                                        onOrderChange(newOrder)
+                    if (itemId in groupStartItems) {
+                        val groupLineIsDragging = draggingGroupStart == itemId
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .zIndex(2f)
+                                .offset(y = (-12).dp)
+                                .offset {
+                                    if (groupLineIsDragging) {
+                                        IntOffset(0, groupDragOffset.y.roundToInt())
+                                    } else {
+                                        IntOffset.Zero
                                     }
-                                    clearDragState()
-                                },
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    dragOffset += dragAmount
-                                    dragTargetIndex = calculateDrawerDragTarget(
-                                        startIndex = draggingStartIndex,
-                                        dragOffset = dragOffset,
-                                        rowHeightPx = rowStepPx,
-                                        itemCount = items.size,
+                                }
+                                .fillMaxWidth()
+                                .height(18.dp)
+                                .pointerInput(itemId, items.size, rowStepPx) {
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = {
+                                            draggingGroupStart = itemId
+                                            groupDragStartIndex = index
+                                            groupDragOffset = Offset.Zero
+                                            groupDragTargetIndex = index
+                                        },
+                                        onDragCancel = { clearGroupDragState() },
+                                        onDragEnd = {
+                                            val dragged = draggingGroupStart
+                                            val targetIndex = groupDragTargetIndex
+                                            if (dragged != null && targetIndex != null) {
+                                                onMoveGroupStart(dragged, items.getOrNull(targetIndex))
+                                            }
+                                            clearGroupDragState()
+                                        },
+                                        onDrag = { change, dragAmount ->
+                                            change.consume()
+                                            groupDragOffset += dragAmount
+                                            groupDragTargetIndex = calculateDrawerGroupLineTarget(
+                                                startIndex = groupDragStartIndex,
+                                                dragOffset = groupDragOffset,
+                                                rowHeightPx = rowStepPx,
+                                                itemCount = items.size,
+                                            )
+                                        },
                                     )
                                 },
-                            )
-                        },
-                )
-
-                if (index > 0 && itemId in groupStartItems) {
-                    val groupLineIsDragging = draggingGroupStart == itemId
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .zIndex(2f)
-                            .offset(y = (-12).dp)
-                            .offset {
-                                if (groupLineIsDragging) {
-                                    IntOffset(0, groupDragOffset.y.roundToInt())
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                                thickness = 2.dp,
+                                color = if (groupLineIsDragging) {
+                                    MaterialTheme.colorScheme.primary
                                 } else {
-                                    IntOffset.Zero
-                                }
-                            }
-                            .fillMaxWidth()
-                            .height(18.dp)
-                            .pointerInput(itemId, items.size, rowStepPx) {
-                                detectDragGesturesAfterLongPress(
-                                    onDragStart = {
-                                        draggingGroupStart = itemId
-                                        groupDragStartIndex = index
-                                        groupDragOffset = Offset.Zero
-                                        groupDragTargetIndex = index
-                                    },
-                                    onDragCancel = { clearGroupDragState() },
-                                    onDragEnd = {
-                                        val dragged = draggingGroupStart
-                                        val targetIndex = groupDragTargetIndex
-                                        if (dragged != null && targetIndex != null) {
-                                            onMoveGroupStart(
-                                                dragged,
-                                                items.getOrNull(targetIndex)?.takeIf { targetIndex > 0 },
-                                            )
-                                        }
-                                        clearGroupDragState()
-                                    },
-                                    onDrag = { change, dragAmount ->
-                                        change.consume()
-                                        groupDragOffset += dragAmount
-                                        groupDragTargetIndex = calculateDrawerGroupLineTarget(
-                                            startIndex = groupDragStartIndex,
-                                            dragOffset = groupDragOffset,
-                                            rowHeightPx = rowStepPx,
-                                            itemCount = items.size,
-                                        )
-                                    },
-                                )
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 12.dp),
-                            thickness = 1.dp,
-                            color = if (groupLineIsDragging) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.outlineVariant
-                            },
-                        )
+                                    MaterialTheme.colorScheme.outlineVariant
+                                },
+                            )
+                        }
                     }
                 }
             }
         }
     }
 }
+
 @Composable
 internal fun SettingsDrawerEditRow(
     icon: ImageVector,
@@ -1113,47 +898,14 @@ internal fun SettingsDrawerEditRow(
     )
 }
 
-internal fun calculateDrawerDragTarget(
-    startIndex: Int,
-    dragOffset: Offset,
-    rowHeightPx: Float,
-    itemCount: Int,
-): Int {
-    if (startIndex !in 0 until itemCount) return 0
-
-    val centerY = startIndex * rowHeightPx + rowHeightPx / 2f + dragOffset.y
-    return (centerY / rowHeightPx).toInt().coerceIn(0, itemCount - 1)
-}
-
 internal fun calculateDrawerGroupLineTarget(
     startIndex: Int,
     dragOffset: Offset,
     rowHeightPx: Float,
     itemCount: Int,
 ): Int {
-    if (startIndex !in 0 until itemCount) return 0
-    return (startIndex + (dragOffset.y / rowHeightPx).roundToInt()).coerceIn(0, itemCount - 1)
-}
-
-internal fun calculateDrawerAvoidanceOffset(
-    index: Int,
-    fromIndex: Int,
-    toIndex: Int,
-    rowStepPx: Float,
-): IntOffset {
-    if (fromIndex == toIndex || fromIndex < 0) return IntOffset.Zero
-
-    val visualIndex = when {
-        fromIndex < toIndex && index in (fromIndex + 1)..toIndex -> index - 1
-        fromIndex > toIndex && index in toIndex until fromIndex -> index + 1
-        else -> index
-    }
-    if (visualIndex == index) return IntOffset.Zero
-
-    return IntOffset(
-        x = 0,
-        y = ((visualIndex - index) * rowStepPx).roundToInt(),
-    )
+    if (startIndex !in 0 until itemCount) return -1
+    return (startIndex + (dragOffset.y / rowHeightPx).roundToInt()).coerceIn(-1, itemCount - 1)
 }
 
 internal fun homeBottomToolbarItemLabel(itemId: PrefsManager.HomeBottomToolbarItemId): String =
@@ -1205,90 +957,40 @@ internal fun SettingsHomeBottomToolbarDragList(
     onOrderChange: (List<PrefsManager.HomeBottomToolbarItemId>) -> Unit,
     onToggleVisible: (PrefsManager.HomeBottomToolbarItemId) -> Unit,
 ) {
-    val rowHeight = 64.dp
-    val rowSpacing = 6.dp
-    val rowStepPx = with(LocalDensity.current) { (rowHeight + rowSpacing).toPx() }
-    var draggingItem by remember { mutableStateOf<PrefsManager.HomeBottomToolbarItemId?>(null) }
-    var draggingStartIndex by remember { mutableStateOf(-1) }
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
-    var dragTargetIndex by remember { mutableStateOf<Int?>(null) }
+    val haptic = LocalHapticFeedback.current
 
-    fun clearDragState() {
-        draggingItem = null
-        draggingStartIndex = -1
-        dragOffset = Offset.Zero
-        dragTargetIndex = null
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(rowSpacing)) {
-        items.forEachIndexed { index, itemId ->
-            val title = homeBottomToolbarItemLabel(itemId)
-            val itemIsDragging = draggingItem == itemId
-            val targetIndex = dragTargetIndex
-            val isDropTarget = targetIndex == index && draggingItem != null && !itemIsDragging
-            val avoidanceOffset = if (!itemIsDragging && targetIndex != null) {
-                calculateDrawerAvoidanceOffset(
-                    index = index,
-                    fromIndex = draggingStartIndex,
-                    toIndex = targetIndex,
-                    rowStepPx = rowStepPx,
-                )
-            } else {
-                IntOffset.Zero
-            }
-
-            SettingsHomeBottomToolbarEditRow(
-                icon = homeBottomToolbarItemIcon(itemId),
-                title = title,
-                subtitle = if (itemId.name.startsWith("NEW_")) "新建功能" else "侧边栏功能",
-                isHidden = itemId in hiddenItems,
-                isDragging = itemIsDragging,
-                isDropTarget = isDropTarget,
-                onToggleVisible = { onToggleVisible(itemId) },
-                modifier = Modifier
-                    .zIndex(if (itemIsDragging) 1f else 0f)
-                    .offset {
-                        if (itemIsDragging) {
-                            IntOffset(0, dragOffset.y.roundToInt())
-                        } else {
-                            avoidanceOffset
-                        }
-                    }
-                    .pointerInput(itemId, items.size, rowStepPx) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = {
-                                draggingItem = itemId
-                                draggingStartIndex = index
-                                dragOffset = Offset.Zero
-                                dragTargetIndex = index
-                            },
-                            onDragCancel = { clearDragState() },
-                            onDragEnd = {
-                                val dragged = draggingItem
-                                val fromIndex = if (dragged == null) -1 else items.indexOf(dragged)
-                                val toIndex = dragTargetIndex
-                                if (fromIndex >= 0 && toIndex != null && toIndex != fromIndex) {
-                                    val newOrder = items.toMutableList().also { list ->
-                                        val moved = list.removeAt(fromIndex)
-                                        list.add(toIndex.coerceIn(0, list.size), moved)
-                                    }
-                                    onOrderChange(newOrder)
-                                }
-                                clearDragState()
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                dragOffset += dragAmount
-                                dragTargetIndex = calculateDrawerDragTarget(
-                                    startIndex = draggingStartIndex,
-                                    dragOffset = dragOffset,
-                                    rowHeightPx = rowStepPx,
-                                    itemCount = items.size,
-                                )
-                            },
-                        )
+    ReorderableColumn(
+        list = items,
+        onSettle = { fromIndex, toIndex ->
+            if (fromIndex != toIndex) {
+                onOrderChange(
+                    items.toMutableList().apply {
+                        add(toIndex, removeAt(fromIndex))
                     },
-            )
+                )
+            }
+        },
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) { _, itemId, isDragging ->
+        key(itemId) {
+            ReorderableItem {
+                SettingsHomeBottomToolbarEditRow(
+                    icon = homeBottomToolbarItemIcon(itemId),
+                    title = homeBottomToolbarItemLabel(itemId),
+                    subtitle = if (itemId.name.startsWith("NEW_")) "新建功能" else "侧边栏功能",
+                    isHidden = itemId in hiddenItems,
+                    isDragging = isDragging,
+                    isDropTarget = false,
+                    onToggleVisible = { onToggleVisible(itemId) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .longPressDraggableHandle(
+                            onDragStarted = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            },
+                        ),
+                )
+            }
         }
     }
 }

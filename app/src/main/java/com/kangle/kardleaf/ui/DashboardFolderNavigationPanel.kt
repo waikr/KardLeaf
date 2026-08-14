@@ -3,6 +3,7 @@ package com.kangle.kardleaf.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -71,7 +72,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.kangle.kardleaf.data.model.Note
+import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.KardLeafLogTags
 import com.kangle.kardleaf.localizedText
+
+private val FOLDER_NAVIGATION_TRACE_TAG = KardLeafLogTags.FOLDER_NAVIGATION
+
+private inline fun logFolderNavigationTrace(message: () -> String) {
+    if (KardLeafLog.isEnabled(FOLDER_NAVIGATION_TRACE_TAG)) {
+        KardLeafLog.d(FOLDER_NAVIGATION_TRACE_TAG, message())
+    }
+}
+
+private fun folderNavigationPathSummary(paths: Collection<String>): String =
+    paths.joinToString(prefix = "[", postfix = "]")
 
 @Composable
 internal fun FolderNavigationPanel(
@@ -226,10 +240,18 @@ internal fun FolderNavigationPanel(
                 val orderedEditItems = remember { mutableStateListOf<FolderNavigationEditItem>() }
                 val editItemsKey = remember(editItems) { editItems.joinToString("|") { it.path } }
                 LaunchedEffect(editItemsKey) {
+                    logFolderNavigationTrace {
+                        "editItems sync start key=$editItemsKey source=${folderNavigationPathSummary(editItems.map { it.path })} " +
+                            "orderVersion=$folderOrderVersion"
+                    }
                     orderedEditItems.clear()
                     orderedEditItems.addAll(editItems)
+                    logFolderNavigationTrace {
+                        "editItems sync done order=${folderNavigationPathSummary(orderedEditItems.map { it.path })}"
+                    }
                 }
                 val dragItemBounds = remember { mutableMapOf<String, Rect>() }
+                val dragItemLayoutBounds = remember { mutableMapOf<String, Rect>() }
                 var draggingPath by remember { mutableStateOf<String?>(null) }
                 var draggingParentPath by remember { mutableStateOf<String?>(null) }
                 var dragTargetPath by remember { mutableStateOf<String?>(null) }
@@ -238,11 +260,31 @@ internal fun FolderNavigationPanel(
                 fun moveEditItemImmediately(fromPath: String, toPath: String) {
                     val fromIndex = orderedEditItems.indexOfFirst { it.path == fromPath }
                     val toIndex = orderedEditItems.indexOfFirst { it.path == toPath }
-                    val fromItem = orderedEditItems.getOrNull(fromIndex) ?: return
-                    val toItem = orderedEditItems.getOrNull(toIndex) ?: return
-                    if (fromIndex == toIndex || fromItem.parentPath != toItem.parentPath) return
+                    val fromItem = orderedEditItems.getOrNull(fromIndex)
+                    val toItem = orderedEditItems.getOrNull(toIndex)
+                    logFolderNavigationTrace {
+                        "move request from=$fromPath to=$toPath fromIndex=$fromIndex toIndex=$toIndex " +
+                            "order=${folderNavigationPathSummary(orderedEditItems.map { it.path })}"
+                    }
+                    if (fromItem == null || toItem == null) {
+                        logFolderNavigationTrace { "move skipped missingItem from=$fromPath to=$toPath" }
+                        return
+                    }
+                    if (fromIndex == toIndex) {
+                        logFolderNavigationTrace { "move skipped sameIndex path=$fromPath index=$fromIndex" }
+                        return
+                    }
+                    if (fromItem.parentPath != toItem.parentPath) {
+                        logFolderNavigationTrace {
+                            "move skipped differentParent fromParent=${fromItem.parentPath} toParent=${toItem.parentPath}"
+                        }
+                        return
+                    }
                     val fromOrigin = dragItemBounds[fromPath]?.topLeft
                     val targetOrigin = dragItemBounds[toPath]?.topLeft
+                    logFolderNavigationTrace {
+                        "move bounds from=$fromOrigin target=$targetOrigin placeAfter=${fromIndex < toIndex}"
+                    }
                     moveFolderEditItemBlock(
                         items = orderedEditItems,
                         fromItem = fromItem,
@@ -250,15 +292,40 @@ internal fun FolderNavigationPanel(
                         placeAfterTarget = fromIndex < toIndex,
                     )
                     if (fromOrigin != null && targetOrigin != null) {
-                        dragOffset += fromOrigin - targetOrigin
+                        val offsetDelta = fromOrigin - targetOrigin
+                        dragOffset += offsetDelta
+                        logFolderNavigationTrace {
+                            "move applied from=$fromPath to=$toPath order=${folderNavigationPathSummary(orderedEditItems.map { it.path })} " +
+                                "offsetDelta=$offsetDelta dragOffset=$dragOffset"
+                        }
+                    } else {
+                        logFolderNavigationTrace {
+                            "move applied withoutOffsetBounds from=$fromPath to=$toPath " +
+                                "order=${folderNavigationPathSummary(orderedEditItems.map { it.path })}"
+                        }
                     }
                 }
 
                 fun saveDraggedOrder() {
-                    val parentPath = draggingParentPath ?: return
+                    val parentPath = draggingParentPath
+                    if (parentPath == null) {
+                        logFolderNavigationTrace { "save skipped noDraggingParent" }
+                        return
+                    }
+                    val movingPath = draggingPath
+                    val targetPath = dragTargetPath
+                    // Keep the active pointer layout stable; reordering here cancels the gesture.
+                    if (movingPath != null && targetPath != null && movingPath != targetPath) {
+                        moveEditItemImmediately(movingPath, targetPath)
+                    }
+                    val order = orderedEditItems.filter { it.parentPath == parentPath }.map { it.path }
+                    logFolderNavigationTrace {
+                        "save request parent=$parentPath order=${folderNavigationPathSummary(order)} " +
+                            "fullOrder=${folderNavigationPathSummary(orderedEditItems.map { it.path })}"
+                    }
                     onSaveFolderDisplayOrder(
                         parentPath,
-                        orderedEditItems.filter { it.parentPath == parentPath }.map { it.path },
+                        order,
                     )
                 }
 
@@ -317,7 +384,12 @@ internal fun FolderNavigationPanel(
                                 focusedParentPath = navigationParentFolderPath(focusedParentPath)
                             },
                             onEditToggle = {
-                                editMode = !editMode
+                                val nextEditMode = !editMode
+                                logFolderNavigationTrace {
+                                    "editMode toggle from=$editMode to=$nextEditMode parent=$focusedParentPath " +
+                                        "order=${folderNavigationPathSummary(orderedEditItems.map { it.path })}"
+                                }
+                                editMode = nextEditMode
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             },
                             onDismiss = onDismiss,
@@ -342,6 +414,7 @@ internal fun FolderNavigationPanel(
                             selectedPath = currentPath,
                             editMode = editMode,
                             dragItemBounds = dragItemBounds,
+                            dragItemLayoutBounds = dragItemLayoutBounds,
                             draggingPath = draggingPath,
                             dragTargetPath = dragTargetPath,
                             dragOffset = dragOffset,
@@ -350,15 +423,27 @@ internal fun FolderNavigationPanel(
                                 draggingParentPath = orderedEditItems.firstOrNull { it.path == path }?.parentPath
                                 dragTargetPath = null
                                 dragOffset = Offset.Zero
+                                logFolderNavigationTrace {
+                                    "drag state started path=$path parent=$draggingParentPath " +
+                                        "order=${folderNavigationPathSummary(orderedEditItems.map { it.path })}"
+                                }
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             },
                             onDragCancelled = {
+                                logFolderNavigationTrace {
+                                    "drag state cancelled path=$draggingPath parent=$draggingParentPath target=$dragTargetPath " +
+                                        "offset=$dragOffset order=${folderNavigationPathSummary(orderedEditItems.map { it.path })}"
+                                }
                                 draggingPath = null
                                 draggingParentPath = null
                                 dragTargetPath = null
                                 dragOffset = Offset.Zero
                             },
                             onDragEnded = {
+                                logFolderNavigationTrace {
+                                    "drag state ended path=$draggingPath parent=$draggingParentPath target=$dragTargetPath " +
+                                        "offset=$dragOffset order=${folderNavigationPathSummary(orderedEditItems.map { it.path })}"
+                                }
                                 saveDraggedOrder()
                                 draggingPath = null
                                 draggingParentPath = null
@@ -366,13 +451,20 @@ internal fun FolderNavigationPanel(
                                 dragOffset = Offset.Zero
                             },
                             onDragDelta = { path, delta ->
-                                if (draggingPath == path) dragOffset += delta
+                                if (draggingPath == path) {
+                                    dragOffset += delta
+                                } else {
+                                    logFolderNavigationTrace {
+                                        "drag delta ignored path=$path activePath=$draggingPath delta=$delta"
+                                    }
+                                }
                             },
                             onDragOver = { path, targetPath ->
-                                dragTargetPath = targetPath
-                                if (targetPath != null && targetPath != path) {
-                                    moveEditItemImmediately(path, targetPath)
+                                logFolderNavigationTrace {
+                                    "drag over path=$path target=$targetPath activePath=$draggingPath " +
+                                        "offset=$dragOffset"
                                 }
+                                dragTargetPath = targetPath
                             },
                             onSelectPath = { path -> onSelect(MainViewModel.NoteFilter.Label(path)) },
                             onRenamePath = ::openRenameDialog,
@@ -665,6 +757,7 @@ private fun FolderNavigationSectionView(
     modifier: Modifier = Modifier,
     editMode: Boolean = false,
     dragItemBounds: MutableMap<String, Rect>,
+    dragItemLayoutBounds: MutableMap<String, Rect>,
     draggingPath: String?,
     dragTargetPath: String?,
     dragOffset: Offset,
@@ -680,12 +773,27 @@ private fun FolderNavigationSectionView(
     val palette = folderNavigationPalette()
     val selected = section.path == selectedPath
     val shape = RoundedCornerShape(20.dp)
+    val avoidanceOffset = folderNavigationAnimatedAvoidanceOffset(
+        target = folderNavigationSectionAvoidanceOffset(
+            path = section.path,
+            siblingPaths = section.siblingPaths,
+            draggingPath = draggingPath,
+            dragTargetPath = dragTargetPath,
+            itemBounds = dragItemLayoutBounds,
+        ),
+        animate = draggingPath != null,
+    )
     Surface(
         shape = shape,
         color = palette.section,
         modifier =
             modifier
                 .fillMaxWidth()
+                .onGloballyPositioned { coordinates ->
+                    if (draggingPath == null) {
+                        dragItemLayoutBounds[section.path] = coordinates.boundsInRoot()
+                    }
+                }
                 .zIndex(
                     if (draggingPath == section.path) 1f else 0f,
                 )
@@ -697,9 +805,13 @@ private fun FolderNavigationSectionView(
                             scaleX = 0.99f
                             scaleY = 0.99f
                         }
-                        dragTargetPath == section.path -> {
-                            scaleX = 1.01f
-                            scaleY = 1.01f
+                        else -> {
+                            translationX = avoidanceOffset.x
+                            translationY = avoidanceOffset.y
+                            if (dragTargetPath == section.path) {
+                                scaleX = 1.01f
+                                scaleY = 1.01f
+                            }
                         }
                     }
                 }
@@ -720,6 +832,7 @@ private fun FolderNavigationSectionView(
                                 path = section.path,
                                 siblingPaths = section.siblingPaths,
                                 itemBounds = dragItemBounds,
+                                boundsFrozen = draggingPath != null,
                                 onDragStarted = onDragStarted,
                                 onDragCancelled = onDragCancelled,
                                 onDragEnded = onDragEnded,
@@ -841,8 +954,33 @@ private fun FolderNavigationChipGrid(
     onSelectPath: (String) -> Unit,
     onRenamePath: (String) -> Unit,
 ) {
+    val siblingPaths = items.map { it.path }
+    val density = LocalDensity.current
+    val horizontalSpacingPx = with(density) { 6.dp.toPx() }
+    val verticalSpacingPx = with(density) { 8.dp.toPx() }
+    var chipGridBounds by remember { mutableStateOf(Rect.Zero) }
+    val avoidanceOffsetByPath = items.associate { item ->
+        item.path to folderNavigationAnimatedAvoidanceOffset(
+            target = folderNavigationChipAvoidanceOffset(
+                path = item.path,
+                siblingPaths = siblingPaths,
+                draggingPath = draggingPath,
+                dragTargetPath = dragTargetPath,
+                itemBounds = dragItemBounds,
+                containerBounds = chipGridBounds,
+                horizontalSpacingPx = horizontalSpacingPx,
+                verticalSpacingPx = verticalSpacingPx,
+            ),
+            animate = draggingPath != null,
+        )
+    }
     FlowRow(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coordinates ->
+                val bounds = coordinates.boundsInRoot()
+                if (chipGridBounds != bounds) chipGridBounds = bounds
+            },
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -857,8 +995,9 @@ private fun FolderNavigationChipGrid(
                         .folderNavigationDragTarget(
                             enabled = editMode,
                             path = item.path,
-                            siblingPaths = items.map { it.path },
+                            siblingPaths = siblingPaths,
                             itemBounds = dragItemBounds,
+                            boundsFrozen = draggingPath != null,
                             onDragStarted = onDragStarted,
                             onDragCancelled = onDragCancelled,
                             onDragEnded = onDragEnded,
@@ -873,9 +1012,14 @@ private fun FolderNavigationChipGrid(
                                     scaleX = 0.98f
                                     scaleY = 0.98f
                                 }
-                                dragTargetPath == item.path -> {
-                                    scaleX = 1.02f
-                                    scaleY = 1.02f
+                                else -> {
+                                    val avoidanceOffset = avoidanceOffsetByPath[item.path] ?: Offset.Zero
+                                    translationX = avoidanceOffset.x
+                                    translationY = avoidanceOffset.y
+                                    if (dragTargetPath == item.path) {
+                                        scaleX = 1.02f
+                                        scaleY = 1.02f
+                                    }
                                 }
                             }
                         },
@@ -889,6 +1033,134 @@ private fun FolderNavigationChipGrid(
             )
         }
     }
+}
+
+@Composable
+private fun folderNavigationAnimatedAvoidanceOffset(
+    target: Offset,
+    animate: Boolean,
+): Offset {
+    val x by animateFloatAsState(
+        targetValue = target.x,
+        animationSpec =
+            if (animate) {
+                tween(durationMillis = 160, easing = FastOutSlowInEasing)
+            } else {
+                snap()
+            },
+        label = "FolderNavigationAvoidanceX",
+    )
+    val y by animateFloatAsState(
+        targetValue = target.y,
+        animationSpec =
+            if (animate) {
+                tween(durationMillis = 160, easing = FastOutSlowInEasing)
+            } else {
+                snap()
+            },
+        label = "FolderNavigationAvoidanceY",
+    )
+    return Offset(x, y)
+}
+
+private fun folderNavigationSectionAvoidanceOffset(
+    path: String,
+    siblingPaths: List<String>,
+    draggingPath: String?,
+    dragTargetPath: String?,
+    itemBounds: Map<String, Rect>,
+): Offset {
+    val fromIndex = siblingPaths.indexOf(draggingPath)
+    val targetIndex = siblingPaths.indexOf(dragTargetPath)
+    val itemIndex = siblingPaths.indexOf(path)
+    if (fromIndex < 0 || targetIndex < 0 || itemIndex < 0 || fromIndex == targetIndex) {
+        return Offset.Zero
+    }
+
+    val movingDown = fromIndex < targetIndex
+    val isBetween = if (movingDown) {
+        itemIndex in (fromIndex + 1)..targetIndex
+    } else {
+        itemIndex in targetIndex until fromIndex
+    }
+    if (!isBetween) return Offset.Zero
+
+    val sourcePath = draggingPath ?: return Offset.Zero
+    val sourceBounds = itemBounds[sourcePath] ?: return Offset.Zero
+    val adjacentIndex = if (movingDown) fromIndex + 1 else fromIndex - 1
+    val adjacentBounds = itemBounds[siblingPaths[adjacentIndex]] ?: return Offset.Zero
+    val spacing = if (movingDown) {
+        (adjacentBounds.top - sourceBounds.bottom).coerceAtLeast(0f)
+    } else {
+        (sourceBounds.top - adjacentBounds.bottom).coerceAtLeast(0f)
+    }
+    val shift = sourceBounds.height + spacing
+    return Offset(0f, if (movingDown) -shift else shift)
+}
+
+private fun folderNavigationChipAvoidanceOffset(
+    path: String,
+    siblingPaths: List<String>,
+    draggingPath: String?,
+    dragTargetPath: String?,
+    itemBounds: Map<String, Rect>,
+    containerBounds: Rect,
+    horizontalSpacingPx: Float,
+    verticalSpacingPx: Float,
+): Offset {
+    val fromIndex = siblingPaths.indexOf(draggingPath)
+    val targetIndex = siblingPaths.indexOf(dragTargetPath)
+    val itemIndex = siblingPaths.indexOf(path)
+    if (fromIndex < 0 || targetIndex < 0 || itemIndex < 0 || fromIndex == targetIndex) {
+        return Offset.Zero
+    }
+    if (path == draggingPath || containerBounds.width <= 0f) return Offset.Zero
+
+    val basePositions = folderNavigationFlowPositions(
+        paths = siblingPaths,
+        itemBounds = itemBounds,
+        containerBounds = containerBounds,
+        horizontalSpacingPx = horizontalSpacingPx,
+        verticalSpacingPx = verticalSpacingPx,
+    ) ?: return Offset.Zero
+    val temporaryOrder = siblingPaths.toMutableList().apply {
+        add(targetIndex, removeAt(fromIndex))
+    }
+    val temporaryPositions = folderNavigationFlowPositions(
+        paths = temporaryOrder,
+        itemBounds = itemBounds,
+        containerBounds = containerBounds,
+        horizontalSpacingPx = horizontalSpacingPx,
+        verticalSpacingPx = verticalSpacingPx,
+    ) ?: return Offset.Zero
+    val basePosition = basePositions[path] ?: return Offset.Zero
+    val temporaryPosition = temporaryPositions[path] ?: return Offset.Zero
+    return temporaryPosition - basePosition
+}
+
+private fun folderNavigationFlowPositions(
+    paths: List<String>,
+    itemBounds: Map<String, Rect>,
+    containerBounds: Rect,
+    horizontalSpacingPx: Float,
+    verticalSpacingPx: Float,
+): Map<String, Offset>? {
+    val positions = mutableMapOf<String, Offset>()
+    var x = containerBounds.left
+    var y = containerBounds.top
+    var rowHeight = 0f
+    for (path in paths) {
+        val bounds = itemBounds[path] ?: return null
+        if (x > containerBounds.left && x + bounds.width > containerBounds.right) {
+            x = containerBounds.left
+            y += rowHeight + verticalSpacingPx
+            rowHeight = 0f
+        }
+        positions[path] = Offset(x, y)
+        x += bounds.width + horizontalSpacingPx
+        rowHeight = maxOf(rowHeight, bounds.height)
+    }
+    return positions
 }
 
 @Composable
@@ -953,6 +1225,7 @@ private fun Modifier.folderNavigationDragTarget(
     path: String,
     siblingPaths: List<String>,
     itemBounds: MutableMap<String, Rect>,
+    boundsFrozen: Boolean,
     onDragStarted: (String) -> Unit,
     onDragCancelled: () -> Unit,
     onDragEnded: () -> Unit,
@@ -962,40 +1235,73 @@ private fun Modifier.folderNavigationDragTarget(
     if (!enabled) return this
     return this
         .onGloballyPositioned { coordinates ->
-            itemBounds[path] = coordinates.boundsInRoot()
+            if (!boundsFrozen) {
+                val bounds = coordinates.boundsInRoot()
+                val previousBounds = itemBounds.put(path, bounds)
+                if (previousBounds != bounds) {
+                    logFolderNavigationTrace {
+                        "bounds updated path=$path bounds=$bounds previous=$previousBounds"
+                    }
+                }
+            }
         }
         .pointerInput(path, siblingPaths.sorted()) {
             var lastTargetPath: String? = null
             var pointerInRoot: Offset? = null
+            var dragMoveCount = 0
             detectDragGesturesAfterLongPress(
                 onDragStart = { startPosition ->
                     lastTargetPath = null
+                    dragMoveCount = 0
                     pointerInRoot = itemBounds[path]?.topLeft?.plus(startPosition)
+                    logFolderNavigationTrace {
+                        "pointer dragStart path=$path start=$startPosition bounds=${itemBounds[path]} " +
+                            "pointerInRoot=$pointerInRoot"
+                    }
                     onDragStarted(path)
                 },
                 onDragCancel = {
+                    logFolderNavigationTrace {
+                        "pointer dragCancel path=$path moves=$dragMoveCount lastTarget=$lastTargetPath " +
+                            "pointerInRoot=$pointerInRoot"
+                    }
                     lastTargetPath = null
                     pointerInRoot = null
                     onDragCancelled()
                 },
                 onDragEnd = {
+                    logFolderNavigationTrace {
+                        "pointer dragEnd path=$path moves=$dragMoveCount lastTarget=$lastTargetPath " +
+                            "pointerInRoot=$pointerInRoot"
+                    }
                     lastTargetPath = null
                     pointerInRoot = null
                     onDragEnded()
                 },
                 onDrag = { change, dragAmount ->
                     change.consume()
+                    dragMoveCount += 1
                     onDragDelta(path, dragAmount)
                     pointerInRoot = pointerInRoot?.plus(dragAmount)
                     val currentPointer = pointerInRoot
-                    if (currentPointer != null) {
-                        val targetPath = siblingPaths.firstOrNull { siblingPath ->
-                            siblingPath != path && itemBounds[siblingPath]?.contains(currentPointer) == true
+                    val targetPath = currentPointer?.let { pointer ->
+                        siblingPaths.firstOrNull { siblingPath ->
+                            siblingPath != path && itemBounds[siblingPath]?.contains(pointer) == true
                         }
-                        if (targetPath != lastTargetPath) {
-                            lastTargetPath = targetPath
-                            onDragOver(path, targetPath)
+                    }
+                    if (dragMoveCount == 1 || dragMoveCount % 10 == 0) {
+                        logFolderNavigationTrace {
+                            "pointer dragMove path=$path count=$dragMoveCount delta=$dragAmount " +
+                                "pointerInRoot=$currentPointer target=$targetPath boundsKnown=${itemBounds.size}"
                         }
+                    }
+                    if (targetPath != lastTargetPath) {
+                        logFolderNavigationTrace {
+                            "pointer targetChanged path=$path previous=$lastTargetPath target=$targetPath " +
+                                "pointerInRoot=$currentPointer"
+                        }
+                        lastTargetPath = targetPath
+                        onDragOver(path, targetPath)
                     }
                 },
             )
@@ -1088,6 +1394,9 @@ private fun buildFolderNavigationEditItems(
     }
 
     addChildren(parent = "", depth = 0)
+    logFolderNavigationTrace {
+        "build editItems labels=${labels.size} count=${items.size} order=${folderNavigationPathSummary(items.map { it.path })}"
+    }
     return items
 }
 
@@ -1099,11 +1408,20 @@ private fun moveFolderEditItemBlock(
 ) {
     val movingPrefix = "${fromItem.path}/"
     val movingBlock = items.filter { it.path == fromItem.path || it.path.startsWith(movingPrefix) }
-    if (movingBlock.isEmpty()) return
+    if (movingBlock.isEmpty()) {
+        logFolderNavigationTrace { "moveBlock skipped empty from=${fromItem.path} to=${toItem.path}" }
+        return
+    }
 
     val remaining = items.filterNot { it.path == fromItem.path || it.path.startsWith(movingPrefix) }
     val targetIndex = remaining.indexOfFirst { it.path == toItem.path }
-    if (targetIndex < 0) return
+    if (targetIndex < 0) {
+        logFolderNavigationTrace {
+            "moveBlock skipped targetMissing from=${fromItem.path} to=${toItem.path} " +
+                "remaining=${folderNavigationPathSummary(remaining.map { it.path })}"
+        }
+        return
+    }
 
     val insertIndex = if (placeAfterTarget) {
         val targetPrefix = "${toItem.path}/"
@@ -1114,6 +1432,10 @@ private fun moveFolderEditItemBlock(
     val reordered = remaining.take(insertIndex) + movingBlock + remaining.drop(insertIndex)
     items.clear()
     items.addAll(reordered)
+    logFolderNavigationTrace {
+        "moveBlock applied from=${fromItem.path} to=${toItem.path} placeAfter=$placeAfterTarget " +
+            "insertIndex=$insertIndex result=${folderNavigationPathSummary(items.map { it.path })}"
+    }
 }
 
 private fun buildFolderNavigationSections(
@@ -1194,8 +1516,10 @@ private fun panelDirectChildFolders(
     parent: String,
     savedOrderFor: (String) -> List<String>,
 ): List<FolderChipData> {
-    val orderIndex = savedOrderFor(parent).withIndex().associate { it.value to it.index }
-    return navigationDirectChildFolderPaths(labels, parent)
+    val savedOrder = savedOrderFor(parent)
+    val actualChildPaths = navigationDirectChildFolderPaths(labels, parent)
+    val orderIndex = savedOrder.withIndex().associate { it.value to it.index }
+    val result = actualChildPaths
         .sortedWith(
             compareBy<String> { orderIndex[it] ?: Int.MAX_VALUE }
                 .thenBy { it.substringAfterLast('/').lowercase() },
@@ -1206,6 +1530,11 @@ private fun panelDirectChildFolders(
                 path = path,
             )
         }
+    logFolderNavigationTrace {
+        "resolve children parent=$parent saved=${folderNavigationPathSummary(savedOrder)} " +
+            "actual=${folderNavigationPathSummary(actualChildPaths)} result=${folderNavigationPathSummary(result.map { it.path })}"
+    }
+    return result
 }
 
 private fun navigationDirectChildFolderPaths(

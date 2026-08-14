@@ -116,7 +116,7 @@ internal fun buildFolderPagerPreviewItems(
         }
     return FolderPagerPreviewItems(
         items = buildGesturePreviewItemsForFolderNotes(
-            notes = notes.filter { !it.isTrashed && it.folder == path },
+            notes = notes.filter { !it.isTrashed && !it.isArchived && it.folder == path },
             folder = path,
             sortOrder = order,
             sortDirection = direction,

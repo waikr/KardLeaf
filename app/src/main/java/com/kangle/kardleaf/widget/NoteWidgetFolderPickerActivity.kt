@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,10 +18,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,6 +39,10 @@ import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.database.AppDatabase
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.ui.ThemeColorPickerDialog
+import com.kangle.kardleaf.ui.ThemeCustomAccentColorPalette
+import com.kangle.kardleaf.ui.ThemeCustomBackgroundColorPalette
 import com.kangle.kardleaf.ui.theme.KardLeafTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -56,6 +65,15 @@ class NoteWidgetFolderPickerActivity : ComponentActivity() {
         }
 
         val openSettings = intent.getBooleanExtra(EXTRA_OPEN_SETTINGS, false)
+        val widgetKind = runCatching {
+            WidgetTheme.Kind.valueOf(intent.getStringExtra(EXTRA_WIDGET_KIND).orEmpty())
+        }.getOrDefault(WidgetTheme.Kind.NOTE)
+        val initialWidgetTheme = WidgetTheme.load(this, widgetKind, appWidgetId)
+        KardLeafLog.i(
+            WIDGET_THEME_LOG_TAG,
+            "theme settings opened kind=${widgetKind.name} widgetId=$appWidgetId openSettings=$openSettings " +
+                "initialPreset=${initialWidgetTheme.preset.name} action=${intent.action} data=${intent.data}",
+        )
 
         setContent {
             KardLeafTheme(styleSystemBars = false) {
@@ -66,22 +84,108 @@ class NoteWidgetFolderPickerActivity : ComponentActivity() {
                     var previewLines by remember(appWidgetId) {
                         mutableStateOf(NoteListWidgetProvider.previewLineCount(this, appWidgetId))
                     }
-                    NoteWidgetSettingsDialog(
+                    var widgetTheme by remember(appWidgetId, widgetKind) {
+                        mutableStateOf(initialWidgetTheme)
+                    }
+                    var dailyFolder by remember(appWidgetId) {
+                        mutableStateOf(PrefsManager(this).getDailyNoteFolder())
+                    }
+                    var dailyFolderPaths by remember { mutableStateOf<List<String>?>(null) }
+                    var showDailyFolderPicker by remember { mutableStateOf(false) }
+                    var showCustomAccentDialog by remember { mutableStateOf(false) }
+                    var showCustomBackgroundDialog by remember { mutableStateOf(false) }
+
+                    LaunchedEffect(appWidgetId, widgetKind) {
+                        if (widgetKind == WidgetTheme.Kind.DAILY) {
+                            dailyFolderPaths = loadFolderPaths()
+                        }
+                    }
+
+                    WidgetSettingsDialog(
+                        widgetKind = widgetKind,
                         hideTitle = hideTitle,
                         previewLines = previewLines,
+                        dailyFolder = dailyFolder,
+                        widgetTheme = widgetTheme,
                         onHideTitleChange = { hideTitle = it },
                         onPreviewLinesChange = { previewLines = it },
-                        onConfirm = {
-                            NoteListWidgetProvider.setDisplayOptions(
-                                context = this,
-                                appWidgetId = appWidgetId,
-                                hideTitle = hideTitle,
-                                previewLines = previewLines,
+                        onDailyFolderChange = { dailyFolder = it },
+                        onPickDailyFolder = { showDailyFolderPicker = true },
+                        onThemePresetChange = { preset ->
+                            KardLeafLog.i(
+                                WIDGET_THEME_LOG_TAG,
+                                "theme preset selected kind=${widgetKind.name} widgetId=$appWidgetId " +
+                                    "from=${widgetTheme.preset.name} to=${preset.name}",
                             )
+                            widgetTheme = widgetTheme.copy(preset = preset)
+                        },
+                        onPickCustomAccent = { showCustomAccentDialog = true },
+                        onPickCustomBackground = { showCustomBackgroundDialog = true },
+                        onConfirm = {
+                            KardLeafLog.i(
+                                WIDGET_THEME_LOG_TAG,
+                                "theme settings confirm kind=${widgetKind.name} widgetId=$appWidgetId " +
+                                    "preset=${widgetTheme.preset.name}",
+                            )
+                            WidgetTheme.save(this, widgetKind, appWidgetId, widgetTheme)
+                            when (widgetKind) {
+                                WidgetTheme.Kind.NOTE -> {
+                                    NoteListWidgetProvider.setDisplayOptions(
+                                        context = this,
+                                        appWidgetId = appWidgetId,
+                                        hideTitle = hideTitle,
+                                        previewLines = previewLines,
+                                    )
+                                }
+                                WidgetTheme.Kind.TASK -> TaskListWidgetProvider.refreshAllWidgets(this)
+                                WidgetTheme.Kind.DAILY -> {
+                                    PrefsManager(this).saveDailyNoteFolder(dailyFolder)
+                                    DailyNoteWidgetProvider.refreshAllWidgets(this)
+                                }
+                            }
                             finish()
                         },
                         onDismiss = { finish() },
                     )
+                    if (showCustomAccentDialog) {
+                        ThemeColorPickerDialog(
+                            title = "自定义小部件强调色",
+                            presets = ThemeCustomAccentColorPalette,
+                            selectedArgb = widgetTheme.customAccent,
+                            onApply = { color ->
+                                widgetTheme = widgetTheme.copy(customAccent = color)
+                                showCustomAccentDialog = false
+                            },
+                            onDismiss = { showCustomAccentDialog = false },
+                        )
+                    }
+                    if (showCustomBackgroundDialog) {
+                        ThemeColorPickerDialog(
+                            title = "自定义小部件背景色",
+                            presets = ThemeCustomBackgroundColorPalette,
+                            selectedArgb = widgetTheme.customBackground,
+                            onApply = { color ->
+                                widgetTheme = widgetTheme.copy(customBackground = color)
+                                showCustomBackgroundDialog = false
+                            },
+                            onDismiss = { showCustomBackgroundDialog = false },
+                        )
+                    }
+                    if (showDailyFolderPicker) {
+                        NoteWidgetFolderPickerDialog(
+                            folderChoices = dailyFolderPaths
+                                ?.let { buildExpandedFolderChoices(it + dailyFolder) }
+                                ?.filter { it.folder != null },
+                            selectedFolder = dailyFolder,
+                            onSelect = { folder ->
+                                if (folder != null) {
+                                    dailyFolder = folder
+                                    showDailyFolderPicker = false
+                                }
+                            },
+                            onDismiss = { showDailyFolderPicker = false },
+                        )
+                    }
                     return@KardLeafTheme
                 }
 
@@ -91,21 +195,7 @@ class NoteWidgetFolderPickerActivity : ComponentActivity() {
                 }
 
                 LaunchedEffect(appWidgetId) {
-                    folderPaths = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val appContext = applicationContext
-                            val hiddenFolders = PrefsManager(appContext).getHiddenFolderPaths()
-                            AppDatabase.getDatabase(appContext)
-                                .labelDao()
-                                .getAllLabels()
-                                .first()
-                                .filterNot { path ->
-                                    hiddenFolders.any { hidden ->
-                                        path == hidden || path.startsWith("$hidden/")
-                                    }
-                                }
-                        }.getOrDefault(emptyList())
-                    }
+                    folderPaths = loadFolderPaths()
                 }
 
                 NoteWidgetFolderPickerDialog(
@@ -127,56 +217,149 @@ class NoteWidgetFolderPickerActivity : ComponentActivity() {
         overridePendingTransition(0, 0)
     }
 
+    private suspend fun loadFolderPaths(): List<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val appContext = applicationContext
+            val hiddenFolders = PrefsManager(appContext).getHiddenFolderPaths()
+            AppDatabase.getDatabase(appContext)
+                .labelDao()
+                .getAllLabels()
+                .first()
+                .filterNot { path ->
+                    hiddenFolders.any { hidden ->
+                        path == hidden || path.startsWith("$hidden/")
+                    }
+                }
+        }.getOrDefault(emptyList())
+    }
+
     companion object {
         internal const val EXTRA_OPEN_SETTINGS = "kardleaf_widget_open_settings"
+        internal const val EXTRA_WIDGET_KIND = "kardleaf_widget_kind"
     }
 }
 
 @Composable
-private fun NoteWidgetSettingsDialog(
+private fun WidgetSettingsDialog(
+    widgetKind: WidgetTheme.Kind,
     hideTitle: Boolean,
     previewLines: Int,
+    dailyFolder: String,
+    widgetTheme: WidgetTheme.Settings,
     onHideTitleChange: (Boolean) -> Unit,
     onPreviewLinesChange: (Int) -> Unit,
+    onDailyFolderChange: (String) -> Unit,
+    onPickDailyFolder: () -> Unit,
+    onThemePresetChange: (WidgetTheme.Preset) -> Unit,
+    onPickCustomAccent: () -> Unit,
+    onPickCustomBackground: () -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("笔记列表设置") },
+        title = {
+            Text(
+                when (widgetKind) {
+                    WidgetTheme.Kind.NOTE -> "笔记列表设置"
+                    WidgetTheme.Kind.TASK -> "任务清单设置"
+                    WidgetTheme.Kind.DAILY -> "每日笔记设置"
+                },
+            )
+        },
         text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onHideTitleChange(!hideTitle) }
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("隐藏标题", modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = hideTitle,
-                        onCheckedChange = onHideTitleChange,
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (widgetKind == WidgetTheme.Kind.NOTE) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onHideTitleChange(!hideTitle) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("隐藏标题", modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = hideTitle,
+                            onCheckedChange = onHideTitleChange,
+                        )
+                    }
+
+                    Text(
+                        text = "正文显示行数",
+                        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                    )
+                    (1..3).forEach { lineCount ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onPreviewLinesChange(lineCount) }
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = previewLines == lineCount,
+                                onClick = null,
+                            )
+                            Text(text = "${lineCount} 行")
+                        }
+                    }
+                }
+
+                if (widgetKind == WidgetTheme.Kind.DAILY) {
+                    Text("每日笔记存放目录")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedTextField(
+                            value = dailyFolder,
+                            onValueChange = onDailyFolderChange,
+                            label = { Text("相对笔记库路径") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = onPickDailyFolder) {
+                            androidx.compose.material3.Icon(
+                                imageVector = Icons.Outlined.Folder,
+                                contentDescription = "选择目录",
+                            )
+                        }
+                    }
+                    Text(
+                        text = "留空表示笔记库根目录，文件名使用今天的日期。",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
 
                 Text(
-                    text = "正文显示行数",
-                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                    text = "小部件主题",
+                    modifier = Modifier.padding(top = 8.dp),
                 )
-                (1..3).forEach { lineCount ->
+                WidgetTheme.Preset.values().forEach { preset ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onPreviewLinesChange(lineCount) }
-                            .padding(vertical = 4.dp),
+                            .clickable { onThemePresetChange(preset) }
+                            .padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(
-                            selected = previewLines == lineCount,
+                            selected = widgetTheme.preset == preset,
                             onClick = null,
                         )
-                        Text(text = "${lineCount} 行")
+                        Text(preset.label)
+                    }
+                }
+                if (widgetTheme.preset == WidgetTheme.Preset.CUSTOM) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = onPickCustomAccent) { Text("强调色") }
+                        TextButton(onClick = onPickCustomBackground) { Text("背景色") }
                     }
                 }
             }

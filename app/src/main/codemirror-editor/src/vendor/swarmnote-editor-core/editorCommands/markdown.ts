@@ -117,16 +117,28 @@ export function toggleHeading(view: EditorView, level = 2): void {
   const prefix = `${'#'.repeat(level)} `;
 
   if (line.text.startsWith(prefix)) {
+    const changeSet = view.state.changes({
+      from: line.from,
+      to: line.from + prefix.length,
+      insert: '',
+    });
     view.dispatch({
-      changes: { from: line.from, to: line.from + prefix.length, insert: '' },
+      changes: changeSet,
+      selection: view.state.selection.map(changeSet, 1),
     });
     return;
   }
 
   const existingMatch = line.text.match(/^#{1,6}\s/);
   const removeLen = existingMatch ? existingMatch[0].length : 0;
+  const changeSet = view.state.changes({
+    from: line.from,
+    to: line.from + removeLen,
+    insert: prefix,
+  });
   view.dispatch({
-    changes: { from: line.from, to: line.from + removeLen, insert: prefix },
+    changes: changeSet,
+    selection: view.state.selection.map(changeSet, 1),
   });
 }
 
@@ -147,8 +159,14 @@ export function cycleHeading(view: EditorView): void {
 
   if (nextLevel === 0) {
     if (match) {
+      const changeSet = view.state.changes({
+        from: line.from,
+        to: line.from + match[0].length,
+        insert: '',
+      });
       view.dispatch({
-        changes: { from: line.from, to: line.from + match[0].length, insert: '' },
+        changes: changeSet,
+        selection: view.state.selection.map(changeSet, 1),
       });
     }
     return;
@@ -156,7 +174,13 @@ export function cycleHeading(view: EditorView): void {
 
   const prefix = `${'#'.repeat(nextLevel)} `;
   const removeLen = match ? match[0].length : 0;
+  const changeSet = view.state.changes({
+    from: line.from,
+    to: line.from + removeLen,
+    insert: prefix,
+  });
   view.dispatch({
-    changes: { from: line.from, to: line.from + removeLen, insert: prefix },
+    changes: changeSet,
+    selection: view.state.selection.map(changeSet, 1),
   });
 }

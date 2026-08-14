@@ -75,6 +75,18 @@
                 android:resource="@xml/widget_note_list_info" />
         </receiver>
 
+        <receiver
+            android:name=".widget.DailyNoteWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_daily_note_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_daily_note_info" />
+        </receiver>
+
         <service
             android:name=".widget.QuickAddTileService"
             android:exported="true"
@@ -205,6 +217,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize"
             android:theme="@style/Theme.KardLeaf"
             android:windowSoftInputMode="adjustResize">
 
@@ -247,41 +260,6 @@
             </intent-filter>
         </activity-alias>
 
-        <activity-alias
-            android:name=".LauncherLeaf"
-            android:enabled="false"
-            android:exported="true"
-            android:icon="@mipmap/ic_app_icon_leaf"
-            android:label="${appLabel}"
-            android:roundIcon="@mipmap/ic_app_icon_leaf_round"
-            android:targetActivity=".MainActivity">
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
-
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-
-        <activity-alias
-            android:name=".LauncherMinimal"
-            android:enabled="false"
-            android:exported="true"
-            android:icon="@mipmap/ic_app_icon_minimal"
-            android:label="${appLabel}"
-            android:roundIcon="@mipmap/ic_app_icon_minimal_round"
-            android:targetActivity=".MainActivity">
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
-
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
     </application>
 
 </manifest>

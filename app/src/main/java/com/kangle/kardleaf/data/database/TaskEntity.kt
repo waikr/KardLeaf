@@ -9,6 +9,7 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["notePath"]),
         Index(value = ["groupId"]),
+        Index(value = ["parentTaskId"]),
         Index(value = ["done", "reminderAt"]),
     ],
 )
@@ -29,6 +30,9 @@ data class TaskEntity(
     val reminderMode: String = REMINDER_MODE_POPUP,
     val reminderRing: Boolean = true,
     val reminderVibrate: Boolean = true,
+    val isTrashed: Boolean = false,
+    val parentTaskId: Long? = null,
+    val manualOrder: Long = 0L,
 ) {
     companion object {
         const val REMINDER_MODE_POPUP = "POPUP"

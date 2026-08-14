@@ -49,6 +49,9 @@ interface NoteHistoryDao {
     @Query("SELECT * FROM note_history WHERE id = :id")
     suspend fun getHistoryById(id: Long): NoteHistoryEntity?
 
+    @Query("SELECT * FROM note_history WHERE noteId = :noteId ORDER BY savedAtMs DESC")
+    suspend fun getHistoryList(noteId: String): List<NoteHistoryEntity>
+
     @Query("SELECT * FROM note_history ORDER BY savedAtMs DESC")
     suspend fun getAllHistory(): List<NoteHistoryEntity>
 
@@ -166,5 +169,5 @@ interface NoteHistoryDao {
     suspend fun replaceNoteId(
         oldNoteId: String,
         newNoteId: String,
-    )
+    ): Int
 }

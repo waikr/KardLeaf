@@ -13,7 +13,7 @@ object KardLeafContentLimits {
     const val WORD_EXPORT_MAX_TOTAL_CHARS = 1_200_000
 
     const val MIND_MAP_MAX_CONTENT_CHARS = 80_000
-    const val MIND_MAP_MAX_HEADING_COUNT = 200
+    const val MIND_MAP_MAX_NODE_COUNT = 200
 
     const val IMAGE_DATA_URI_MAX_BYTES = 2L * 1024L * 1024L
     const val IMAGE_IMPORT_MAX_BYTES = 20L * 1024L * 1024L

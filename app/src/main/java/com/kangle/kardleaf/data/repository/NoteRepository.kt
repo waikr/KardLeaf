@@ -4,6 +4,7 @@ import com.kangle.kardleaf.data.model.HistoryCleanupPreview
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.model.NoteHistory
 import com.kangle.kardleaf.data.model.NoteSearchMatch
+import com.kangle.kardleaf.data.model.NoteSearchOptions
 import kotlinx.coroutines.flow.Flow
 
 interface NoteRepository {
@@ -25,7 +26,10 @@ interface NoteRepository {
 
     fun searchHistoryPreview(query: String): Flow<List<NoteHistory>>
 
-    fun searchNoteMatches(query: String): Flow<List<NoteSearchMatch>>
+    fun searchNoteMatches(
+        query: String,
+        options: NoteSearchOptions = NoteSearchOptions(),
+    ): Flow<List<NoteSearchMatch>>
 
     suspend fun deleteNoteHistory(historyId: Long)
 

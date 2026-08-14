@@ -2,6 +2,16 @@ package com.kangle.kardleaf.data.repository.prefs
 
 import android.content.SharedPreferences
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.KardLeafLogTags
+
+private val FOLDER_NAVIGATION_TRACE_TAG = KardLeafLogTags.FOLDER_NAVIGATION
+
+private inline fun logFolderNavigationTrace(message: () -> String) {
+    if (KardLeafLog.isEnabled(FOLDER_NAVIGATION_TRACE_TAG)) {
+        KardLeafLog.d(FOLDER_NAVIGATION_TRACE_TAG, message())
+    }
+}
 
 internal class DashboardPreferences(private val prefs: SharedPreferences) {
     fun saveFolderSortSettings(folder: String, settings: PrefsManager.FolderSortSettings) {
@@ -25,8 +35,21 @@ internal class DashboardPreferences(private val prefs: SharedPreferences) {
     fun saveFolderCustomOrder(folder: String, paths: Collection<String>) = saveOrder(folderCustomOrderKey(folder), paths)
     fun getFolderCustomOrder(folder: String): List<String> = getOrder(folderCustomOrderKey(folder))
     fun clearFolderCustomOrder(folder: String) = clearOrder(folderCustomOrderKey(folder))
-    fun saveFolderDisplayOrder(parentFolder: String, paths: Collection<String>) = saveOrder(folderDisplayOrderKey(parentFolder), paths)
-    fun getFolderDisplayOrder(parentFolder: String): List<String> = getOrder(folderDisplayOrderKey(parentFolder))
+    fun saveFolderDisplayOrder(parentFolder: String, paths: Collection<String>) {
+        logFolderNavigationTrace {
+            "preferences saveDisplayOrder enter parent=$parentFolder paths=${paths.joinToString(prefix = "[", postfix = "]")}"
+        }
+        saveOrder(folderDisplayOrderKey(parentFolder), paths)
+        logFolderNavigationTrace { "preferences saveDisplayOrder applied parent=$parentFolder" }
+    }
+
+    fun getFolderDisplayOrder(parentFolder: String): List<String> {
+        val order = getOrder(folderDisplayOrderKey(parentFolder))
+        logFolderNavigationTrace {
+            "preferences getDisplayOrder parent=$parentFolder order=${order.joinToString(prefix = "[", postfix = "]")}"
+        }
+        return order
+    }
     fun clearFolderDisplayOrder(parentFolder: String) = clearOrder(folderDisplayOrderKey(parentFolder))
 
     fun getPinnedNotePaths(): Set<String> = getPaths(KEY_PINNED_NOTE_PATHS)

@@ -2,68 +2,76 @@ package com.kangle.kardleaf.data.task
 
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.os.SystemClock
+import android.os.VibrationAttributes
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.lifecycleScope
 import com.kangle.kardleaf.data.database.AppDatabase
 import com.kangle.kardleaf.data.database.TaskEntity
+import com.kangle.kardleaf.data.task.TaskEditorResult
+import com.kangle.kardleaf.data.task.toTaskEntity
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.KardLeafLogTags
 import com.kangle.kardleaf.ui.TaskEditorDialog
-import com.kangle.kardleaf.ui.TaskEditorResult
 import com.kangle.kardleaf.ui.showToast
 import com.kangle.kardleaf.ui.theme.KardLeafTheme
 import com.kangle.kardleaf.widget.TaskListWidgetProvider
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val TASK_QUICK_ADD_LOG_TAG = "KardLeafTaskQuickAdd"
-private const val WIDGET_CLICK_LOG_TAG = "KardLeafWidgetClick"
-
 class TaskQuickAddActivity : ComponentActivity() {
     private var editingTask: TaskEntity? = null
+    private var storeDeferred: Deferred<TaskMarkdownStore?>? = null
+    private var saveInProgress = false
+    private var editorOpenStartedAtMs = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
         val taskId = intent.getLongExtra(EXTRA_TASK_ID, 0L)
         val clickAction = intent.getStringExtra(EXTRA_WIDGET_CLICK_ACTION).orEmpty()
-        KardLeafLog.i(
-            WIDGET_CLICK_LOG_TAG,
-            "task action entered clickAction=$clickAction taskId=$taskId action=${intent.action}",
-        )
-        @Suppress("DEPRECATION")
-        overridePendingTransition(0, 0)
-        window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
-
         if (clickAction == CLICK_ACTION_TOGGLE) {
-            lifecycleScope.launch {
-                val completed = withContext(Dispatchers.IO) {
-                    TaskListWidgetProvider.completeTaskFromWidget(applicationContext, taskId)
-                }
-                KardLeafLog.i(
-                    WIDGET_CLICK_LOG_TAG,
-                    "task toggle finished taskId=$taskId completed=$completed",
-                )
-                finish()
+            setTheme(android.R.style.Theme_NoDisplay)
+        }
+        super.onCreate(savedInstanceState)
+        if (clickAction == CLICK_ACTION_TOGGLE) {
+            if (taskId > 0L) {
+                TaskCompletionFeedback.perform(applicationContext, VibrationAttributes.USAGE_HARDWARE_FEEDBACK)
             }
+            TaskListWidgetProvider.completeTaskFromWidgetAsync(applicationContext, taskId)
+            finish()
             return
         }
 
-        window.setSoftInputMode(
-            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING or
-                WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE,
+        @Suppress("DEPRECATION")
+        overridePendingTransition(0, 0)
+        editorOpenStartedAtMs = SystemClock.elapsedRealtime()
+        KardLeafLog.d(
+            KardLeafLogTags.USER_PERF,
+            "taskEditor openRequest source=widget taskId=$taskId action=${clickAction.ifBlank { "new" }}",
         )
+        window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+        window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        window.attributes = window.attributes.apply { dimAmount = 0.12f }
+
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        storeDeferred = lifecycleScope.async(Dispatchers.IO) { TaskMarkdownStore.create(applicationContext) }
 
         if (taskId <= 0L) {
             showEditor(null)
         } else {
             lifecycleScope.launch {
-                val task = withContext(Dispatchers.IO) {
-                    AppDatabase.getDatabase(applicationContext).taskDao().getTask(taskId)
-                }
+                val task =
+                    withContext(Dispatchers.IO) {
+                        AppDatabase.getDatabase(applicationContext).taskDao().getTask(taskId)
+                    }
                 if (task == null) {
                     showToast("无法打开这条任务")
                     finish()
@@ -77,15 +85,26 @@ class TaskQuickAddActivity : ComponentActivity() {
 
     private fun showEditor(task: TaskEntity?) {
         val taskDao = AppDatabase.getDatabase(applicationContext).taskDao()
+        KardLeafLog.d(
+            KardLeafLogTags.USER_PERF,
+            "taskEditor showEditor source=widget taskId=${task?.id ?: 0} elapsed=${SystemClock.elapsedRealtime() - editorOpenStartedAtMs}ms",
+        )
         setContent {
             val groups by taskDao.observeGroups().collectAsState(initial = emptyList())
+            LaunchedEffect(groups.size) {
+                KardLeafLog.d(
+                    KardLeafLogTags.USER_PERF,
+                    "taskEditor dataSnapshot source=widget groups=${groups.size} elapsed=${SystemClock.elapsedRealtime() - editorOpenStartedAtMs}ms",
+                )
+            }
             KardLeafTheme(styleSystemBars = false) {
                 TaskEditorDialog(
                     task = task,
                     groups = groups,
+                    useDialog = false,
                     autoFocusTitle = true,
-                    embeddedOverlay = true,
-                    onDismiss = { finish() },
+                    openStartedAtMs = editorOpenStartedAtMs,
+                    onDismiss = { if (!saveInProgress) finish() },
                     onSave = ::saveTask,
                 )
             }
@@ -99,50 +118,45 @@ class TaskQuickAddActivity : ComponentActivity() {
     }
 
     private fun saveTask(result: TaskEditorResult) {
+        if (saveInProgress) return
+        saveInProgress = true
         val appContext = applicationContext
         lifecycleScope.launch {
-            val saved = withContext(Dispatchers.IO) {
-                val now = System.currentTimeMillis()
-                val dao = AppDatabase.getDatabase(appContext).taskDao()
-                val current = editingTask
-                val task = if (current == null) {
-                    val draft = TaskEntity(
-                        taskText = result.text,
-                        notePath = null,
-                        done = result.done,
-                        reminderAt = result.reminderAt,
-                        groupId = result.groupId,
-                        priority = result.priority,
-                        dueAt = result.dueAt,
-                        repeatRule = result.repeatRule,
-                        notes = result.notes,
-                        createdAt = now,
-                        updatedAt = now,
-                    )
-                    draft.copy(id = dao.insert(draft))
-                } else {
-                    current.copy(
-                        taskText = result.text,
-                        done = result.done,
-                        reminderAt = result.reminderAt,
-                        groupId = result.groupId,
-                        priority = result.priority,
-                        dueAt = result.dueAt,
-                        repeatRule = result.repeatRule,
-                        notes = result.notes,
-                        updatedAt = now,
-                    ).also { dao.update(it) }
+            val saved =
+                try {
+                    withContext(Dispatchers.IO) {
+                        val now = System.currentTimeMillis()
+                        val store = storeDeferred?.await() ?: TaskMarkdownStore.create(appContext) ?: return@withContext null
+                        val current = editingTask
+                        store.saveTaskBatch(
+                            original = current,
+                            candidate = result.toTaskEntity(current, now),
+                            parentTaskId = result.parentTaskId,
+                            parentTaskSelectionChanged = result.parentTaskSelectionChanged,
+                            childTaskTexts = result.childTaskTexts,
+                        )
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    KardLeafLog.e(KardLeafLogTags.TASK_SAVE, "quick task save failed", error)
+                    null
                 }
-                KardLeafLog.i(
-                    TASK_QUICK_ADD_LOG_TAG,
-                    "widget editor saved mode=${if (current == null) "new" else "edit"} id=${task.id} textLen=${task.taskText.length} reminderAt=${task.reminderAt}",
-                )
-                TaskReminderScheduler(appContext).schedule(task)
+            val savedBatch = saved
+            if (savedBatch == null) {
+                saveInProgress = false
+                showToast("任务保存失败，请检查笔记库权限")
+                return@launch
+            }
+            runCatching {
+                val scheduler = TaskReminderScheduler(appContext)
+                scheduler.schedule(savedBatch.task)
+                savedBatch.children.forEach(scheduler::schedule)
                 TaskListWidgetProvider.refreshAllWidgets(appContext)
-                task
+            }.onFailure { error ->
+                KardLeafLog.e(KardLeafLogTags.TASK_SAVE, "quick task refresh failed id=${savedBatch.task.id}", error)
             }
             showToast(if (editingTask == null) "已添加任务" else "已更新任务")
-            KardLeafLog.i(TASK_QUICK_ADD_LOG_TAG, "widget editor finish id=${saved.id}")
             finish()
         }
     }

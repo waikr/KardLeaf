@@ -22,7 +22,7 @@ class AppDatabaseMigrationTest {
         )
 
     @Test
-    fun migration6To18ValidatesCompleteSchema() {
+    fun migration6To20ValidatesCompleteSchema() {
         migrationHelper.createDatabase(FULL_CHAIN_DATABASE, 6).close()
 
         migrationHelper
@@ -35,7 +35,7 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun migration15To18PreservesVersion160NoteAndTaskData() {
+    fun migration15To20PreservesVersion160NoteAndTaskData() {
         val note =
             NoteFixture(
                 filePath = "compat/version-160.md",
@@ -65,13 +65,16 @@ class AppDatabaseMigrationTest {
                 MIGRATION_15_16,
                 MIGRATION_16_17,
                 MIGRATION_17_18,
+                MIGRATION_18_19,
+                MIGRATION_19_20,
             ).use { database ->
                 database.assertNotePreserved(note)
                 database.query(
                     """
                     SELECT `notePath`, `taskText`, `done`, `reminderAt`, `createdAt`, `updatedAt`,
                            `groupId`, `priority`, `dueAt`, `repeatRule`, `notes`,
-                           `reminderMode`, `reminderRing`, `reminderVibrate`
+                           `reminderMode`, `reminderRing`, `reminderVibrate`, `isTrashed`,
+                           `parentTaskId`, `manualOrder`
                     FROM `tasks`
                     WHERE `id` = 71
                     """.trimIndent(),
@@ -91,12 +94,15 @@ class AppDatabaseMigrationTest {
                     assertEquals("POPUP", cursor.getString(11))
                     assertEquals(1, cursor.getInt(12))
                     assertEquals(1, cursor.getInt(13))
+                    assertEquals(0, cursor.getInt(14))
+                    assertTrue("Migrated task parentTaskId must remain null", cursor.isNull(15))
+                    assertEquals(0L, cursor.getLong(16))
                 }
             }
     }
 
     @Test
-    fun migration16To18PreservesNoteAndCreatesNoteLinksSchema() {
+    fun migration16To20PreservesNoteAndCreatesNoteLinksSchema() {
         val note =
             NoteFixture(
                 filePath = "compat/version-16.md",
@@ -117,6 +123,8 @@ class AppDatabaseMigrationTest {
                 true,
                 MIGRATION_16_17,
                 MIGRATION_17_18,
+                MIGRATION_18_19,
+                MIGRATION_19_20,
             ).use { database ->
                 database.assertNotePreserved(note)
                 database.assertNoteLinksSchema()
@@ -220,11 +228,11 @@ class AppDatabaseMigrationTest {
     )
 
     companion object {
-        private const val CURRENT_DATABASE_VERSION = 18
+        private const val CURRENT_DATABASE_VERSION = 20
         private const val VERSION_160_DATABASE_VERSION = 15
-        private const val FULL_CHAIN_DATABASE = "migration-6-to-18"
-        private const val VERSION_160_DATABASE = "migration-15-to-18"
-        private const val VERSION_16_DATABASE = "migration-16-to-18"
+        private const val FULL_CHAIN_DATABASE = "migration-6-to-20"
+        private const val VERSION_160_DATABASE = "migration-15-to-20"
+        private const val VERSION_16_DATABASE = "migration-16-to-20"
 
         private val ALL_MIGRATIONS: Array<Migration> =
             arrayOf(
@@ -240,6 +248,8 @@ class AppDatabaseMigrationTest {
                 MIGRATION_15_16,
                 MIGRATION_16_17,
                 MIGRATION_17_18,
+                MIGRATION_18_19,
+                MIGRATION_19_20,
             )
 
         private val NOTE_LINK_COLUMNS =

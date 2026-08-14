@@ -33,6 +33,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
 import com.kangle.kardleaf.R
+import com.kangle.kardleaf.ui.editor.EditorViewportAnchor
+import com.kangle.kardleaf.ui.editor.parseEditorViewportAnchor
+import com.kangle.kardleaf.ui.editor.toJson
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicLong
@@ -103,6 +106,11 @@ private class PreviewWebViewLifecycleState(
 ) {
     @Volatile
     var released: Boolean = false
+    var active: Boolean? = null
+    var renderToken: Long = 0L
+    var renderStartedAtMs: Long = 0L
+    var renderContentLength: Int = 0
+    var renderContentHash: Int = 0
     var horizontalVelocityTracker: VelocityTracker? = null
 }
 
@@ -117,6 +125,7 @@ private class PreviewJavascriptBridge(
     private val onCheckboxToggled: (Int, Boolean) -> Unit,
     private val onImageClicked: (Int) -> Unit,
     private val onInternalLinkOpen: (String) -> Unit,
+    private val onPreviewRenderCompleted: (WebView, Long, String) -> Unit,
 ) {
     private val released = AtomicBoolean(false)
     private val releasedDropLogged = AtomicBoolean(false)
@@ -178,6 +187,11 @@ private class PreviewJavascriptBridge(
             onInternalLinkOpen(rawTarget.orEmpty())
             KardLeafLog.d("KardLeafWikiLinkTrace", "preview click targetLen=${rawTarget?.length ?: 0}")
         }
+    }
+
+    @JavascriptInterface
+    fun onPreviewRenderCompleted(token: Long, status: String?) {
+        postIfActive { webView -> onPreviewRenderCompleted(webView, token, status.orEmpty()) }
     }
 
     @JavascriptInterface
@@ -287,6 +301,10 @@ class PreviewWebViewController {
         }
     }
 
+    fun clearFocus() {
+        webView?.clearFocus()
+    }
+
     fun getFastScrollMetrics(): EditorFastScrollMetrics {
         val view = webView ?: return EditorFastScrollMetrics()
         val maxScrollY = view.maxPreviewScrollY()
@@ -305,6 +323,35 @@ class PreviewWebViewController {
         if (maxScrollY <= 0) return
         val targetScrollY = (ratio.coerceIn(0f, 1f) * maxScrollY).roundToInt()
         view.scrollTo(0, targetScrollY.coerceIn(0, maxScrollY))
+    }
+
+    internal fun getViewportAnchor(onResult: (EditorViewportAnchor?) -> Unit) {
+        val view = webView
+        if (view == null || view.previewLifecycleState()?.released != false) {
+            onResult(null)
+            return
+        }
+        view.evaluateJavascript(
+            "if (window.getMarkdownViewportAnchor) { window.getMarkdownViewportAnchor(); } else { null; }",
+        ) { result ->
+            onResult(parseEditorViewportAnchor(result))
+        }
+    }
+
+    internal fun scrollToAnchor(anchor: EditorViewportAnchor, onResult: (String?) -> Unit = {}) {
+        val view = webView
+        if (view == null || view.previewLifecycleState()?.released != false) {
+            onResult(null)
+            return
+        }
+        view.evaluateJavascript(
+            "if (window.scrollToMarkdownAnchor) { window.scrollToMarkdownAnchor(${anchor.toJson()}); } else { 'missing'; }",
+        ) { result ->
+            if (view.previewLifecycleState()?.released != false) return@evaluateJavascript
+            view.postOnAnimation {
+                if (view.previewLifecycleState()?.released == false) onResult(result)
+            }
+        }
     }
 
     fun scrollToSearchOrdinal(ordinal: Int) {
@@ -352,6 +399,7 @@ fun PreviewWebView(
     sessionKey: String,
     isDark: Boolean,
     controller: PreviewWebViewController,
+    active: Boolean = true,
     modifier: Modifier = Modifier,
     searchQuery: String = "",
     headingScrollText: String = "",
@@ -495,7 +543,7 @@ fun PreviewWebView(
                 object : WebView.VisualStateCallback() {
                     override fun onComplete(requestId: Long) {
                         if (lifecycleState.released) return
-                        lifecycleState.mainHandler.postDelayed(notifyRendered, 120L)
+                        lifecycleState.mainHandler.post(notifyRendered)
                     }
                 },
             )
@@ -538,6 +586,10 @@ fun PreviewWebView(
             })();
         """.trimIndent()
         val renderStartMs = SystemClock.elapsedRealtime()
+        lifecycleState.renderToken = token
+        lifecycleState.renderStartedAtMs = renderStartMs
+        lifecycleState.renderContentLength = contentLength
+        lifecycleState.renderContentHash = renderedContent.hashCode()
         applyPreviewTypography()
         applyPreviewThemeColors()
         evaluateJavascript(script) { result ->
@@ -553,9 +605,6 @@ fun PreviewWebView(
                 LARGE_NOTE_OPEN_TRACE_TAG,
                 "webview updateContent done reason=$reason result=$result len=${contentRef.get().length} hash=${contentRef.get().hashCode()}",
             )
-            applyPreviewSearch()
-            applyPreviewHeadingScroll()
-            notifyPreviewContentRendered(token, contentLength, renderedContent.hashCode(), renderStartMs)
         }
     }
 
@@ -578,13 +627,17 @@ fun PreviewWebView(
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            KardLeafLog.d(LARGE_NOTE_OPEN_TRACE_TAG, "webview factory create")
+            KardLeafLog.d(LARGE_NOTE_OPEN_TRACE_TAG, "webview factory create active=$active")
             WebView(context).apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 )
                 setBackgroundColor(0)
+                visibility = if (active) View.VISIBLE else View.INVISIBLE
+                isEnabled = active
+                importantForAccessibility =
+                    if (active) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
@@ -621,6 +674,28 @@ fun PreviewWebView(
                     onCheckboxToggled = { index, checked -> currentOnCheckboxToggled.value(index, checked) },
                     onImageClicked = { index -> currentOnImageClicked.value(index) },
                     onInternalLinkOpen = { target -> currentOnInternalLinkOpen.value(target) },
+                    onPreviewRenderCompleted = onRender@ { webView, token, status ->
+                        val state = webView.previewLifecycleState() ?: return@onRender
+                        if (state.released || token != previewTokenRef.get() || token != state.renderToken) {
+                            KardLeafLog.d(
+                                PREVIEW_SESSION_TRACE_TAG,
+                                "previewRender callback dropped token=$token current=${previewTokenRef.get()} status=$status",
+                            )
+                            return@onRender
+                        }
+                        webView.applyPreviewSearch()
+                        webView.applyPreviewHeadingScroll()
+                        KardLeafLog.d(
+                            PREVIEW_SESSION_TRACE_TAG,
+                            "previewRender final token=$token status=$status len=${state.renderContentLength}",
+                        )
+                        webView.notifyPreviewContentRendered(
+                            token = token,
+                            renderedLength = state.renderContentLength,
+                            renderedHash = state.renderContentHash,
+                            renderStartMs = state.renderStartedAtMs,
+                        )
+                    },
                 )
                 val lifecycleState = PreviewWebViewLifecycleState(mainHandler, bridge)
                 setTag(R.id.preview_lifecycle_state_tag, lifecycleState)
@@ -912,6 +987,20 @@ fun PreviewWebView(
         update = { view ->
             val lifecycleState = view.previewLifecycleState() ?: return@AndroidView
             if (lifecycleState.released) return@AndroidView
+            view.visibility = if (active) View.VISIBLE else View.INVISIBLE
+            view.isEnabled = active
+            view.importantForAccessibility =
+                if (active) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            if (!active) view.clearFocus()
+            if (lifecycleState.active != active) {
+                lifecycleState.active = active
+                KardLeafLog.d(
+                    PREVIEW_SESSION_TRACE_TAG,
+                    "modeSurface active=$active viewId=${System.identityHashCode(view)} visibility=${view.visibility} " +
+                        "size=${view.width}x${view.height} scrollY=${view.scrollY} " +
+                        "maxScrollY=${(view.contentHeight * view.scale - view.height).roundToInt().coerceAtLeast(0)}",
+                )
+            }
             controller.attach(view)
             val previewState = PreviewRenderState(
                 contentLength = content.length,

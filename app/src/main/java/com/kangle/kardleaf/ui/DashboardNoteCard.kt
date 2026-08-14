@@ -81,6 +81,7 @@ fun NoteCard(
     isSelected: Boolean,
     cardDensity: PrefsManager.CardDensity,
     showFolderTag: Boolean,
+    rootFolderName: String = "",
     showYamlTags: Boolean = false,
     showModifiedDate: Boolean = false,
     modifiedDateFormat: String = PrefsManager.DEFAULT_CARD_MODIFIED_DATE_FORMAT,
@@ -138,13 +139,14 @@ fun NoteCard(
     val contentStyle =
         (if (isCompact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium)
             .copy(color = contentColor)
-    val folderTag = remember(note.folder, showFolderTag) {
+    val folderTag = remember(note.folder, rootFolderName, showFolderTag) {
         if (showFolderTag) {
             note.folder
                 .replace("\\", "/")
                 .trim()
                 .takeIf { it.isNotBlank() }
-                ?: "obsidian"
+                ?: rootFolderName.trim().takeIf { it.isNotBlank() }
+                ?: "根目录"
         } else {
             null
         }

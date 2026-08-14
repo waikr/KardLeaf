@@ -1,27 +1,39 @@
 package com.kangle.kardleaf.ui
 
-import com.kangle.kardleaf.data.utils.KardLeafLog
 import android.os.SystemClock
-import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Label
+import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,24 +52,33 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import com.kangle.kardleaf.R
-import com.kangle.kardleaf.localizedText
+import com.kangle.kardleaf.data.model.NoteSearchOptions
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.localizedText
+import android.view.KeyEvent as AndroidKeyEvent
 
 private const val BACK_TRACE_TAG = "KardLeafBackTrace"
 private const val MENU_REOPEN_GUARD_MS = 250L
 
 @Composable
-fun SearchBar(viewModel: MainViewModel) {
+fun SearchBar(
+    viewModel: MainViewModel,
+    requestFocus: Boolean = true,
+) {
     val searchQuery by viewModel.searchQuery.collectAsState()
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(requestFocus) {
+        if (!requestFocus) return@LaunchedEffect
         withFrameNanos { }
         runCatching { focusRequester.requestFocus() }
+        withFrameNanos { }
         keyboardController?.show()
     }
 
@@ -102,6 +123,147 @@ fun SearchBar(viewModel: MainViewModel) {
                     imageVector = Icons.Outlined.Close,
                     contentDescription = stringResource(R.string.clear_search),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun SearchFilterToolbar(viewModel: MainViewModel) {
+    val query by viewModel.searchQuery.collectAsState()
+    val options by viewModel.searchOptions.collectAsState()
+    val tags by viewModel.yamlTags.collectAsState()
+    val folders by viewModel.labels.collectAsState()
+    var showTagMenu by remember { mutableStateOf(false) }
+    var showFolderMenu by remember { mutableStateOf(false) }
+    val invalidRegex = options.useRegex && query.isNotBlank() && runCatching { Regex(query) }.isFailure
+
+    Surface(
+        modifier = Modifier.fillMaxWidth().height(52.dp),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Row(
+            modifier =
+                Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilterChip(
+                selected = options.matchCase,
+                onClick = { viewModel.setSearchMatchCase(!options.matchCase) },
+                label = { Text("Aa") },
+                leadingIcon = { Icon(Icons.Outlined.TextFields, null, Modifier.size(18.dp)) },
+            )
+            FilterChip(
+                selected = options.useRegex,
+                onClick = { viewModel.setSearchUseRegex(!options.useRegex) },
+                label = { Text(".*") },
+                leadingIcon = { Icon(Icons.Outlined.Code, null, Modifier.size(18.dp)) },
+            )
+            FilterChip(
+                selected = options.matchTitle,
+                onClick = { viewModel.setSearchMatchTitle(!options.matchTitle) },
+                label = { Text(localizedText("标题", "Title")) },
+                leadingIcon = { Icon(Icons.Outlined.Title, null, Modifier.size(18.dp)) },
+            )
+            FilterChip(
+                selected = options.matchContent,
+                onClick = { viewModel.setSearchMatchContent(!options.matchContent) },
+                label = { Text(localizedText("正文", "Body")) },
+                leadingIcon = { Icon(Icons.Outlined.Article, null, Modifier.size(18.dp)) },
+            )
+            Box {
+                FilterChip(
+                    modifier = Modifier.widthIn(max = 160.dp),
+                    selected = options.tag != null,
+                    onClick = { showTagMenu = true },
+                    label = {
+                        Text(
+                            options.tag?.let { "#$it" } ?: localizedText("标签", "Tag"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    leadingIcon = { Icon(Icons.Outlined.Label, null, Modifier.size(18.dp)) },
+                )
+                KardLeafDropdownMenu(
+                    expanded = showTagMenu,
+                    onDismissRequest = { showTagMenu = false },
+                    properties = PopupProperties(focusable = false),
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(localizedText("全部标签", "All tags")) },
+                        trailingIcon = { if (options.tag == null) Icon(Icons.Default.Check, null) },
+                        onClick = {
+                            viewModel.setSearchTag(null)
+                            showTagMenu = false
+                        },
+                    )
+                    tags.forEach { tag ->
+                        DropdownMenuItem(
+                            text = { Text("#$tag", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            trailingIcon = { if (options.tag == tag) Icon(Icons.Default.Check, null) },
+                            onClick = {
+                                viewModel.setSearchTag(tag)
+                                showTagMenu = false
+                            },
+                        )
+                    }
+                }
+            }
+            Box {
+                FilterChip(
+                    modifier = Modifier.widthIn(max = 180.dp),
+                    selected = options.folder != null,
+                    onClick = { showFolderMenu = true },
+                    label = {
+                        Text(
+                            options.folder?.ifBlank { localizedText("根目录", "Root") }
+                                ?: localizedText("文件夹", "Folder"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    leadingIcon = { Icon(Icons.Outlined.Folder, null, Modifier.size(18.dp)) },
+                )
+                KardLeafDropdownMenu(
+                    expanded = showFolderMenu,
+                    onDismissRequest = { showFolderMenu = false },
+                    properties = PopupProperties(focusable = false),
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(localizedText("全部文件夹", "All folders")) },
+                        trailingIcon = { if (options.folder == null) Icon(Icons.Default.Check, null) },
+                        onClick = {
+                            viewModel.setSearchFolder(null)
+                            showFolderMenu = false
+                        },
+                    )
+                    folders.forEach { folder ->
+                        DropdownMenuItem(
+                            text = { Text(folder, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            trailingIcon = { if (options.folder == folder) Icon(Icons.Default.Check, null) },
+                            onClick = {
+                                viewModel.setSearchFolder(folder)
+                                showFolderMenu = false
+                            },
+                        )
+                    }
+                }
+            }
+            if (options != NoteSearchOptions()) {
+                TextButton(onClick = viewModel::resetSearchFilters) {
+                    Text(localizedText("重置", "Reset"))
+                }
+            }
+            if (invalidRegex) {
+                Text(
+                    text = localizedText("正则无效", "Invalid regex"),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
                 )
             }
         }

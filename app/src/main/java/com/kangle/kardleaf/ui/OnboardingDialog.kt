@@ -95,7 +95,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -103,7 +102,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.kangle.kardleaf.AppIconManager
+import com.kangle.kardleaf.R
 import com.kangle.kardleaf.localizedText
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.ui.theme.LocalKardLeafGlobalCornerRadiusDp
@@ -174,7 +173,7 @@ private fun onboardingPages(): List<OnboardingPageData> =
         ),
         OnboardingPageData(
             title = "笔记阅读",
-            description = "默认先进入查看模式，顶部提供搜索、编辑、大纲与属性备注",
+            description = "默认直接进入编辑模式，顶部提供搜索、预览、大纲与属性备注",
             target = OnboardingTourTarget.Home,
             scene = OnboardingScene.Reader,
         ),
@@ -402,7 +401,6 @@ private fun SceneSurface(content: @Composable () -> Unit) {
 
 @Composable
 private fun AppIntroScene() {
-    val context = LocalContext.current
     SceneSurface {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -410,7 +408,7 @@ private fun AppIntroScene() {
             verticalArrangement = Arrangement.Center,
         ) {
             Image(
-                painter = painterResource(AppIconManager.current(context).iconResId),
+                painter = painterResource(R.mipmap.ic_app_icon_default),
                 contentDescription = "卡叶笔记图标",
                 modifier = Modifier.size(126.dp).clip(RoundedCornerShape(32.dp)),
             )
@@ -1013,7 +1011,7 @@ private fun SettingsScene() {
                 SettingsSection("编辑器") {
                     SettingsRow(Icons.Outlined.FormatListBulleted, "字符按钮位置", "调整工具按钮顺序")
                     SettingsRow(Icons.Outlined.StickyNote2, "笔记顶部栏", "大纲与属性备注通过顶部按钮打开")
-                    SettingsRow(Icons.Outlined.Edit, "默认打开模式", "查看模式")
+                    SettingsRow(Icons.Outlined.Edit, "默认打开模式", "编辑模式")
                     SettingsRow(Icons.Outlined.Description, "编辑器内核", "原生 Beta 内核")
                     SettingsRow(Icons.Outlined.Checklist, "编辑底部工具栏常驻", "已开启")
                 }

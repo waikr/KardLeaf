@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -75,6 +76,7 @@ class WidgetPickerActivity : ComponentActivity() {
                         onDismiss = ::finishWithoutTransition,
                         onSelectTaskWidget = { requestWidgetPin(TaskListWidgetProvider::class.java) },
                         onSelectNoteWidget = { requestWidgetPin(NoteListWidgetProvider::class.java) },
+                        onSelectDailyNoteWidget = { requestWidgetPin(DailyNoteWidgetProvider::class.java) },
                         onSelectQuickMemoShortcut = ::requestQuickMemoShortcut,
                     )
                 } else {
@@ -183,6 +185,7 @@ private fun WidgetPickerDialog(
     onDismiss: () -> Unit,
     onSelectTaskWidget: () -> Unit,
     onSelectNoteWidget: () -> Unit,
+    onSelectDailyNoteWidget: () -> Unit,
     onSelectQuickMemoShortcut: () -> Unit,
 ) {
     AlertDialog(
@@ -208,6 +211,13 @@ private fun WidgetPickerDialog(
                         title = stringResource(R.string.widget_note_list_label),
                         description = stringResource(R.string.widget_note_list_desc),
                         onClick = onSelectNoteWidget,
+                    )
+                    Spacer(modifier = Modifier.size(10.dp))
+                    WidgetChoice(
+                        icon = Icons.Outlined.EventNote,
+                        title = stringResource(R.string.widget_daily_note_label),
+                        description = stringResource(R.string.widget_daily_note_desc),
+                        onClick = onSelectDailyNoteWidget,
                     )
                 }
                 if (showWidgetChoices && showQuickMemoShortcut) {

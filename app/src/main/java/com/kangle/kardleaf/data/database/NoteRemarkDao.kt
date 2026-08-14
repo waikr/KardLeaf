@@ -12,6 +12,12 @@ interface NoteRemarkDao {
     @Query("SELECT * FROM note_remarks WHERE noteId = :noteId ORDER BY updatedAtMs DESC, id DESC")
     fun getRemarks(noteId: String): Flow<List<NoteRemarkEntity>>
 
+    @Query("SELECT * FROM note_remarks WHERE noteId = :noteId ORDER BY updatedAtMs DESC, id DESC")
+    suspend fun getRemarksList(noteId: String): List<NoteRemarkEntity>
+
+    @Query("SELECT * FROM note_remarks WHERE id = :id")
+    suspend fun getRemarkById(id: Long): NoteRemarkEntity?
+
     @Query("SELECT * FROM note_remarks ORDER BY updatedAtMs DESC, id DESC")
     suspend fun getAllRemarks(): List<NoteRemarkEntity>
 
@@ -63,5 +69,5 @@ interface NoteRemarkDao {
     suspend fun replaceNoteId(
         oldNoteId: String,
         newNoteId: String,
-    )
+    ): Int
 }

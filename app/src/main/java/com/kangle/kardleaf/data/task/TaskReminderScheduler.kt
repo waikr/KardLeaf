@@ -197,15 +197,6 @@ class TaskReminderScheduler(context: Context) {
         return builder.build()
     }
 
-    fun showReminderAlert(task: TaskEntity) {
-        runCatching {
-            appContext.startActivity(reminderAlertIntent(appContext, task.id, task.taskText))
-            KardLeafLog.i(TASK_REMINDER_LOG_TAG, "alert startActivity requested id=${task.id}")
-        }.onFailure { error ->
-            KardLeafLog.e(TASK_REMINDER_LOG_TAG, "alert startActivity failed id=${task.id}", error)
-        }
-    }
-
     private fun reminderPendingIntent(taskId: Long): PendingIntent =
         PendingIntent.getBroadcast(
             appContext,

@@ -2,12 +2,8 @@ package com.kangle.kardleaf.ui
 
 import android.content.Context
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
@@ -16,21 +12,29 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -39,29 +43,39 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Alarm
+import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
-import androidx.compose.material.icons.outlined.CalendarMonth
-import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.Flag
-import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -72,61 +86,103 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.zIndex
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.findViewTreeLifecycleOwner
+import com.kangle.kardleaf.BuildConfig
+import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.database.AppDatabase
 import com.kangle.kardleaf.data.database.TaskEntity
 import com.kangle.kardleaf.data.database.TaskGroupEntity
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.repository.RoomNoteRepository
+import com.kangle.kardleaf.data.task.DuplicateTaskIdConflict
 import com.kangle.kardleaf.data.task.MarkdownTaskItem
 import com.kangle.kardleaf.data.task.MarkdownTaskParserCache
+import com.kangle.kardleaf.data.task.MissingTaskMarkdownFile
+import com.kangle.kardleaf.data.task.TaskCompletionFeedback
+import com.kangle.kardleaf.data.task.TaskEditorResult
+import com.kangle.kardleaf.data.task.TaskHierarchy
+import com.kangle.kardleaf.data.task.TaskMarkdownStore
 import com.kangle.kardleaf.data.task.TaskReminderScheduler
+import com.kangle.kardleaf.data.task.TaskRepeat
+import com.kangle.kardleaf.data.task.toTaskEntity
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.KardLeafLogTags
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import sh.calvin.reorderable.ReorderableColumn
+import sh.calvin.reorderable.ReorderableItem
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
-private const val TASK_REMINDER_PATTERN = "yyyy-MM-dd HH:mm"
 private const val TASK_REMINDER_LOG_TAG = "KardLeafTaskReminder"
 private const val TASK_SCAN_LOG_TAG = "KardLeafTaskScan"
+private const val GLOBAL_TASK_FILTER_PATH = "\u0000global"
 
 internal enum class TaskFilter(val label: String) {
     ALL("全部"),
@@ -137,64 +193,46 @@ internal enum class TaskFilter(val label: String) {
 }
 
 internal enum class TaskSort(val label: String) {
+    MANUAL("手动排序"),
     DUE("到期时间"),
     PRIORITY("优先级"),
     UPDATED("最近更新"),
 }
 
-internal enum class TaskRepeat(val value: String, val label: String) {
-    NONE("NONE", "不重复"),
-    DAILY("DAILY", "每天"),
-    WEEKLY("WEEKLY", "每周"),
-    MONTHLY("MONTHLY", "每月"),
-    ;
-
-    companion object {
-        fun from(value: String): TaskRepeat = entries.firstOrNull { it.value == value } ?: NONE
-    }
-}
-
-internal data class TaskEditorResult(
-    val text: String,
-    val done: Boolean,
-    val groupId: Long?,
-    val priority: Int,
-    val dueAt: Long?,
-    val reminderAt: Long?,
-    val repeatRule: String,
-    val notes: String,
-    val reminderMode: String = TaskEntity.REMINDER_MODE_POPUP,
-    val reminderRing: Boolean = true,
-    val reminderVibrate: Boolean = true,
-)
-
-private data class TaskGroupSection(
-    val group: TaskGroupEntity?,
-    val tasks: List<TaskEntity>,
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TaskListScreen(
+    noteRepository: RoomNoteRepository,
     onOpenDrawer: () -> Unit,
     onOpenNotePath: (String) -> Unit = {},
+    onMissingManagedFile: (MissingTaskMarkdownFile) -> Unit = {},
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val appContext = context.applicationContext
     val taskDao = remember { AppDatabase.getDatabase(appContext).taskDao() }
     val prefsManager = remember { PrefsManager(appContext) }
+    val managedTaskPath = TaskMarkdownStore.managedNotePath(prefsManager)
     val scheduler = remember { TaskReminderScheduler(appContext) }
+    val taskStore = remember(noteRepository) { TaskMarkdownStore(appContext, noteRepository, taskDao) }
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val permissionHintState = rememberPermissionHintState(context)
     val tasks by taskDao.observeTasks().collectAsState(initial = emptyList())
+    val trashedTasks by taskDao.observeTrashedTasks().collectAsState(initial = emptyList())
     val groups by taskDao.observeGroups().collectAsState(initial = emptyList())
-    var editingTask by remember { mutableStateOf<TaskEntity?>(null) }
-    var showEditor by remember { mutableStateOf(false) }
+    val managedTaskSource by remember(taskDao, managedTaskPath) {
+        taskDao.observeMarkdownTaskSource(managedTaskPath)
+    }.collectAsState(initial = null)
+    var editingTaskId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var showEditor by rememberSaveable { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showSearch by remember { mutableStateOf(false) }
     var showMarkdownTasks by remember {
         mutableStateOf(prefsManager.isShowMarkdownTasksInTaskListEnabled())
     }
+    var showGlobalTasksOnly by remember { mutableStateOf(false) }
     var taskGroupFilter by remember {
         mutableStateOf<MainViewModel.NoteFilter>(MainViewModel.NoteFilter.All)
     }
@@ -219,99 +257,279 @@ fun TaskListScreen(
         }
     }.collectAsState(initial = emptyList())
     var taskFilter by remember { mutableStateOf(TaskFilter.ALL) }
-    var taskSort by remember { mutableStateOf(TaskSort.DUE) }
+    var taskSort by remember { mutableStateOf(TaskSort.MANUAL) }
+    var showTaskFilters by remember { mutableStateOf(false) }
     var showTaskOptions by remember { mutableStateOf(false) }
+    var showTaskTrash by remember { mutableStateOf(false) }
+    var taskEditMode by remember { mutableStateOf(false) }
+    var selectedTaskIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var showSelectionMenu by remember { mutableStateOf(false) }
+    var showSelectionMoveDialog by remember { mutableStateOf(false) }
+    var showDeleteSelectedDialog by remember { mutableStateOf(false) }
+    var showEmptyTrashDialog by remember { mutableStateOf(false) }
+    var taskSaveInProgress by remember { mutableStateOf(false) }
     var editingGroup by remember { mutableStateOf<TaskGroupEntity?>(null) }
+    var newGroupParentPath by remember { mutableStateOf("") }
     var showGroupEditor by remember { mutableStateOf(false) }
     var deletingGroup by remember { mutableStateOf<TaskGroupEntity?>(null) }
-    val collapsedGroups = remember { mutableStateMapOf<Long?, Boolean>() }
+    var openedTask by remember { mutableStateOf<TaskEntity?>(null) }
+    var editorOpenStartedAtMs by remember { mutableStateOf<Long?>(null) }
+    var newTaskParentId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var expandedTaskIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var expandedMarkdownTaskKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var activeCollapsed by remember { mutableStateOf(false) }
     var completedCollapsed by remember { mutableStateOf(true) }
-    val taskGroupPaths = remember(groups) { buildTaskGroupNavigationPaths(groups) }
-    val groupFilteredTasks = remember(tasks, groups, taskGroupFilter) {
-        filterTasksByTaskGroup(tasks, groups, taskGroupFilter)
+    var globalTasksCollapsed by remember { mutableStateOf(false) }
+    var editableActiveTasks by remember { mutableStateOf(emptyList<TaskEntity>()) }
+    var editableCompletedTasks by remember { mutableStateOf(emptyList<TaskEntity>()) }
+    var duplicateTaskIdConflict by remember { mutableStateOf<DuplicateTaskIdConflict?>(null) }
+    val editingTask =
+        remember(tasks, trashedTasks, editingTaskId) {
+            editingTaskId?.let { id -> (tasks + trashedTasks).firstOrNull { it.id == id } }
+        }
+    fun requestTaskEditor(
+        source: String,
+        taskId: Long? = null,
+        parentTaskId: Long? = null,
+    ) {
+        editorOpenStartedAtMs = SystemClock.elapsedRealtime()
+        KardLeafLog.d(
+            KardLeafLogTags.USER_PERF,
+            "taskEditor openRequest source=$source taskId=${taskId ?: 0} parentTaskId=${parentTaskId ?: 0} tasks=${tasks.size} groups=${groups.size} markdownTasks=${markdownTasks.size}",
+        )
+        editingTaskId = taskId
+        newTaskParentId = parentTaskId
+        showEditor = true
     }
-    val visibleGroups = remember(groups, taskGroupFilter) {
-        filterTaskGroups(groups, taskGroupFilter)
-    }
-    val filteredTasks = remember(groupFilteredTasks, searchQuery, taskFilter, taskSort) {
-        filterAndSortTasks(groupFilteredTasks, searchQuery, taskFilter, taskSort)
-    }
-    val activeTasks = remember(filteredTasks, taskFilter) {
-        if (taskFilter == TaskFilter.COMPLETED) emptyList() else filteredTasks.filterNot { it.done }
-    }
-    val completedTasks = remember(filteredTasks, taskFilter) {
-        if (taskFilter == TaskFilter.ALL || taskFilter == TaskFilter.COMPLETED) {
-            filteredTasks.filter { it.done }
-        } else {
-            emptyList()
+    LaunchedEffect(showEditor, editingTaskId, newTaskParentId) {
+        if (showEditor) {
+            KardLeafLog.d(
+                KardLeafLogTags.USER_PERF,
+                "taskEditor begin source=task_list taskId=${editingTaskId ?: 0} parentTaskId=${newTaskParentId ?: 0} elapsed=${editorOpenStartedAtMs?.let { SystemClock.elapsedRealtime() - it } ?: 0}ms",
+            )
         }
     }
-    val taskSections = remember(activeTasks, visibleGroups, taskGroupFilter) {
-        buildTaskGroupSections(activeTasks, visibleGroups).filter { section ->
-            taskGroupFilter is MainViewModel.NoteFilter.All || section.group != null
+    LaunchedEffect(showEditor, tasks, groups, markdownTasks) {
+        if (showEditor) {
+            KardLeafLog.d(
+                KardLeafLogTags.USER_PERF,
+                "taskEditor dataSnapshot source=task_list tasks=${tasks.size} groups=${groups.size} markdownTasks=${markdownTasks.size} elapsed=${editorOpenStartedAtMs?.let { SystemClock.elapsedRealtime() - it } ?: 0}ms",
+            )
         }
     }
-    val visibleMarkdownTasks = remember(markdownTasks, searchQuery) {
-        val query = searchQuery.trim()
-        markdownTasks.filterNot { it.done }.filter {
-            query.isBlank() || it.taskText.contains(query, ignoreCase = true) ||
-                it.noteTitle.contains(query, ignoreCase = true)
+    val groupFilteredTasks =
+        remember(tasks, trashedTasks, groups, taskGroupFilter, showGlobalTasksOnly, showTaskTrash) {
+            when {
+                showTaskTrash -> trashedTasks
+                showGlobalTasksOnly -> emptyList()
+                else -> filterTasksByTaskGroup(tasks, groups, taskGroupFilter)
+            }
         }
+    val filteredTasks =
+        remember(groupFilteredTasks, searchQuery, taskFilter, taskSort, showTaskTrash) {
+            filterAndSortTasks(
+                groupFilteredTasks,
+                searchQuery,
+                if (showTaskTrash) TaskFilter.ALL else taskFilter,
+                taskSort,
+            )
+        }
+    val managedTaskParentIds =
+        remember(tasks, trashedTasks) {
+            (tasks + trashedTasks).mapNotNull { task -> task.parentTaskId?.let { task.id to it } }.toMap()
+        }
+    val managedTaskRootIds =
+        remember(tasks, trashedTasks, managedTaskParentIds) {
+            TaskHierarchy.rootIds(tasks + trashedTasks, managedTaskParentIds)
+        }
+    val managedTaskById =
+        remember(tasks, trashedTasks) {
+            (tasks + trashedTasks).associateBy { it.id }
+        }
+    val filteredRootOrder =
+        remember(filteredTasks, managedTaskRootIds) {
+            filteredTasks.mapNotNull { managedTaskRootIds[it.id] }.distinct()
+        }
+    val filteredRootIds = filteredRootOrder.toSet()
+    val activeRootIds =
+        remember(filteredRootIds, managedTaskById, taskFilter, showTaskTrash) {
+            if (showTaskTrash || taskFilter == TaskFilter.COMPLETED) {
+                emptySet()
+            } else {
+                filteredRootIds.filter { managedTaskById[it]?.done != true }.toSet()
+            }
+        }
+    val completedRootIds =
+        remember(filteredRootIds, managedTaskById, taskFilter, showTaskTrash) {
+            if (!showTaskTrash && (taskFilter == TaskFilter.ALL || taskFilter == TaskFilter.COMPLETED)) {
+                filteredRootIds.filter { managedTaskById[it]?.done == true }.toSet()
+            } else {
+                emptySet()
+            }
+        }
+    val activeTasks =
+        remember(filteredRootOrder, activeRootIds, managedTaskById) {
+            filteredRootOrder.mapNotNull { rootId -> managedTaskById[rootId]?.takeIf { rootId in activeRootIds } }
+        }
+    val completedTasks =
+        remember(filteredRootOrder, completedRootIds, managedTaskById) {
+            filteredRootOrder.mapNotNull { rootId -> managedTaskById[rootId]?.takeIf { rootId in completedRootIds } }
+        }
+    val selectedTasks =
+        remember(tasks, trashedTasks, selectedTaskIds, showTaskTrash) {
+            val source = if (showTaskTrash) trashedTasks else tasks
+            source.filter { it.id in selectedTaskIds }
+        }
+    val selectedTaskGroup =
+        remember(groups, taskGroupFilter) {
+            val selectedPath =
+                (taskGroupFilter as? MainViewModel.NoteFilter.Label)?.name
+                    ?.let(::normalizeFolderPathForUi)
+                    ?.takeIf { it.isNotBlank() }
+            groups.firstOrNull { normalizeFolderPathForUi(it.name) == selectedPath }
+        }
+    val markdownTasksByKey =
+        remember(markdownTasks) {
+            markdownTasks.associateBy(::itemKey)
+        }
+    val visibleMarkdownTasks =
+        remember(markdownTasks, markdownTasksByKey, searchQuery, managedTaskPath) {
+            val query = searchQuery.trim()
+            markdownTasks.filter { item ->
+                markdownTasksByKey[markdownTaskRootKey(item, markdownTasksByKey)]?.done != true &&
+                    !(
+                        item.notePath == managedTaskPath &&
+                            item.taskId?.startsWith(TaskMarkdownStore.TASK_ID_PREFIX) == true
+                    ) &&
+                    (query.isBlank() || item.taskText.contains(query, ignoreCase = true) ||
+                        item.noteTitle.contains(query, ignoreCase = true) ||
+                        item.notes.contains(query, ignoreCase = true))
+            }
+        }
+    val managedTaskIndentLevels =
+        remember(tasks, trashedTasks, managedTaskParentIds) {
+            TaskHierarchy.depths(tasks + trashedTasks, managedTaskParentIds)
+        }
+    val showGlobalTaskSection =
+        !showTaskTrash &&
+            showMarkdownTasks &&
+            taskFilter == TaskFilter.ALL &&
+            taskGroupFilter is MainViewModel.NoteFilter.All
+
+    LaunchedEffect(taskStore, managedTaskSource?.updatedAt, managedTaskSource?.content?.hashCode()) {
+        val result = withContext(Dispatchers.IO) { taskStore.synchronize() }
+        result.duplicateTaskIdConflict?.let { duplicateTaskIdConflict = it }
+        result.missingManagedFile?.let(onMissingManagedFile)
     }
 
-    LaunchedEffect(taskGroupPaths, taskGroupFilter) {
+    LaunchedEffect(groups, taskGroupFilter) {
         val selectedPath = (taskGroupFilter as? MainViewModel.NoteFilter.Label)?.name ?: return@LaunchedEffect
-        if (selectedPath !in taskGroupPaths) {
+        if (selectedPath.isNotBlank() && groups.none { normalizeFolderPathForUi(it.name) == normalizeFolderPathForUi(selectedPath) }) {
             taskGroupFilter = MainViewModel.NoteFilter.All
         }
     }
+
+    LaunchedEffect(showTaskTrash, tasks, trashedTasks) {
+        val visibleIds = (if (showTaskTrash) trashedTasks else tasks).mapTo(hashSetOf()) { it.id }
+        selectedTaskIds = selectedTaskIds.intersect(visibleIds)
+    }
+
+    LaunchedEffect(taskEditMode, activeTasks, completedTasks) {
+        if (!taskEditMode) {
+            editableActiveTasks = emptyList()
+            editableCompletedTasks = emptyList()
+            return@LaunchedEffect
+        }
+        val activeById = activeTasks.associateBy { it.id }
+        val completedById = completedTasks.associateBy { it.id }
+        editableActiveTasks = editableActiveTasks.mapNotNull { activeById[it.id] } +
+            activeTasks.filterNot { task -> editableActiveTasks.any { it.id == task.id } }
+        editableCompletedTasks = editableCompletedTasks.mapNotNull { completedById[it.id] } +
+            completedTasks.filterNot { task -> editableCompletedTasks.any { it.id == task.id } }
+    }
+    val displayActiveTasks =
+        if (taskEditMode && editableActiveTasks.isNotEmpty()) {
+            editableActiveTasks
+        } else {
+            activeTasks
+        }
+    val displayCompletedTasks =
+        if (taskEditMode && editableCompletedTasks.isNotEmpty()) {
+            editableCompletedTasks
+        } else {
+            completedTasks
+        }
+    val activeTaskTreeTasks =
+        remember(groupFilteredTasks, managedTaskRootIds, activeRootIds) {
+            groupFilteredTasks.filter { managedTaskRootIds[it.id] in activeRootIds }
+        }
+    val completedTaskTreeTasks =
+        remember(groupFilteredTasks, managedTaskRootIds, completedRootIds) {
+            groupFilteredTasks.filter { managedTaskRootIds[it.id] in completedRootIds }
+        }
+    val displayActiveTaskTree =
+        remember(taskEditMode, displayActiveTasks, activeTaskTreeTasks, managedTaskParentIds, expandedTaskIds) {
+            if (taskEditMode) {
+                displayActiveTasks
+            } else {
+                TaskHierarchy.flatten(activeTaskTreeTasks, managedTaskParentIds, expandedTaskIds)
+            }
+        }
+    val displayCompletedTaskTree =
+        remember(taskEditMode, displayCompletedTasks, completedTaskTreeTasks, managedTaskParentIds, expandedTaskIds) {
+            if (taskEditMode) {
+                displayCompletedTasks
+            } else {
+                TaskHierarchy.flatten(completedTaskTreeTasks, managedTaskParentIds, expandedTaskIds)
+            }
+        }
+    val activeTaskChildCounts =
+        remember(activeTaskTreeTasks, managedTaskParentIds) {
+            TaskHierarchy.childCounts(activeTaskTreeTasks, managedTaskParentIds)
+        }
+    val completedTaskChildCounts =
+        remember(completedTaskTreeTasks, managedTaskParentIds) {
+            TaskHierarchy.childCounts(completedTaskTreeTasks, managedTaskParentIds)
+        }
+    val visibleMarkdownTaskTree = flattenMarkdownTaskTree(visibleMarkdownTasks, expandedMarkdownTaskKeys)
+    val markdownTaskChildCounts = markdownTaskChildCounts(visibleMarkdownTasks)
 
     fun saveTask(
         original: TaskEntity?,
         result: TaskEditorResult,
     ) {
+        if (taskSaveInProgress) return
+        taskSaveInProgress = true
         scope.launch {
             val now = System.currentTimeMillis()
-            val savedTask = withContext(Dispatchers.IO) {
-                val task = if (original == null) {
-                    val draft = TaskEntity(
-                        taskText = result.text,
-                        done = result.done,
-                        reminderAt = result.reminderAt,
-                        groupId = result.groupId,
-                        priority = result.priority,
-                        dueAt = result.dueAt,
-                        repeatRule = result.repeatRule,
-                        notes = result.notes,
-                        createdAt = now,
-                        updatedAt = now,
-                        reminderMode = result.reminderMode,
-                        reminderRing = result.reminderRing,
-                        reminderVibrate = result.reminderVibrate,
-                    )
-                    draft.copy(id = taskDao.insert(draft))
-                } else {
-                    original.copy(
-                        taskText = result.text,
-                        done = result.done,
-                        reminderAt = result.reminderAt,
-                        groupId = result.groupId,
-                        priority = result.priority,
-                        dueAt = result.dueAt,
-                        repeatRule = result.repeatRule,
-                        notes = result.notes,
-                        updatedAt = now,
-                        reminderMode = result.reminderMode,
-                        reminderRing = result.reminderRing,
-                        reminderVibrate = result.reminderVibrate,
-                    ).also { taskDao.update(it) }
+            val savedTask =
+                try {
+                    withContext(Dispatchers.IO) {
+                        taskStore.saveTaskBatch(
+                            original = original,
+                            candidate = result.toTaskEntity(original, now),
+                            parentTaskId = result.parentTaskId,
+                            parentTaskSelectionChanged = result.parentTaskSelectionChanged,
+                            childTaskTexts = result.childTaskTexts,
+                        )?.task
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    KardLeafLog.e(KardLeafLogTags.TASK_SAVE, "task screen save failed", error)
+                    null
                 }
-                KardLeafLog.i(
-                    TASK_REMINDER_LOG_TAG,
-                    "save id=${task.id} done=${task.done} reminderAt=${task.reminderAt} delayMs=${task.reminderAt?.let { it - System.currentTimeMillis() }}",
-                )
-                scheduler.schedule(task)
-                task
+            if (savedTask == null) {
+                taskSaveInProgress = false
+                context.showToast("任务保存失败，请检查笔记库权限")
+                return@launch
+            }
+            taskSaveInProgress = false
+            showEditor = false
+            editingTaskId = null
+            newTaskParentId = null
+            runCatching { scheduler.schedule(savedTask) }.onFailure { error ->
+                KardLeafLog.e(KardLeafLogTags.TASK_SAVE, "task reminder scheduling failed id=${savedTask.id}", error)
             }
             if (savedTask.reminderAt != null && !TaskReminderScheduler.areNotificationsEnabled(context)) {
                 context.showToast("系统通知未开启，提醒可能无法弹出")
@@ -319,64 +537,232 @@ fun TaskListScreen(
         }
     }
 
-    fun deleteTask(task: TaskEntity) {
-        scope.launch(Dispatchers.IO) {
-            taskDao.delete(task)
-            scheduler.cancel(task.id)
+    fun selectTask(task: TaskEntity) {
+        selectedTaskIds =
+            if (task.id in selectedTaskIds) {
+                selectedTaskIds - task.id
+            } else {
+                selectedTaskIds + task.id
+            }
+    }
+
+    fun reorderTasks(
+        current: List<TaskEntity>,
+        fromIndex: Int,
+        toIndex: Int,
+        completed: Boolean,
+    ) {
+        if (fromIndex == toIndex || fromIndex !in current.indices || toIndex !in current.indices) return
+        taskSort = TaskSort.MANUAL
+        val reordered =
+            current.toMutableList().apply {
+                add(toIndex, removeAt(fromIndex))
+            }
+        if (completed) {
+            editableCompletedTasks = reordered
+        } else {
+            editableActiveTasks = reordered
+        }
+        scope.launch {
+            val success =
+                withContext(Dispatchers.IO) {
+                    taskStore.reorderTasks(reordered.map { it.id })
+                }
+            if (!success) {
+                if (completed) {
+                    editableCompletedTasks = current
+                } else {
+                    editableActiveTasks = current
+                }
+                context.showToast("任务排序保存失败，请检查笔记库权限")
+            }
         }
     }
 
-    fun toggleDone(task: TaskEntity, done: Boolean) {
-        scope.launch(Dispatchers.IO) {
+    fun showUndoSnackbar(
+        message: String,
+        undo: suspend () -> Boolean,
+    ) {
+        scope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result =
+                snackbarHostState.showSnackbar(
+                    message = message,
+                    actionLabel = "撤回",
+                    withDismissAction = false,
+                    duration = SnackbarDuration.Long,
+                )
+            if (result == SnackbarResult.ActionPerformed) {
+                val success = withContext(Dispatchers.IO) { undo() }
+                if (!success) context.showToast("撤回失败，请检查笔记库权限")
+            }
+        }
+    }
+
+    fun enterTaskSelection(task: TaskEntity) {
+        selectedTaskIds = selectedTaskIds + task.id
+    }
+
+    fun moveSelectedToTrash() {
+        val targets = selectedTasks
+        selectedTaskIds = emptySet()
+        showSelectionMenu = false
+        scope.launch {
+            val success = withContext(Dispatchers.IO) { taskStore.moveTasksToTrash(targets) }
+            if (!success) {
+                context.showToast("任务移入回收站失败，请检查笔记库权限")
+            } else {
+                showUndoSnackbar("已移入回收站") { taskStore.restoreTasks(targets) }
+            }
+        }
+    }
+
+    fun restoreSelectedTasks() {
+        val targets = selectedTasks
+        selectedTaskIds = emptySet()
+        showSelectionMenu = false
+        scope.launch {
+            val success = withContext(Dispatchers.IO) { taskStore.restoreTasks(targets) }
+            if (!success) context.showToast("任务恢复失败，请检查笔记库权限")
+        }
+    }
+
+    fun permanentlyDeleteSelectedTasks() {
+        val targets = selectedTasks
+        selectedTaskIds = emptySet()
+        showSelectionMenu = false
+        scope.launch {
+            val success = withContext(Dispatchers.IO) { taskStore.deleteTasksPermanently(targets) }
+            if (!success) context.showToast("任务永久删除失败，请检查笔记库权限")
+        }
+    }
+
+    fun moveSelectedToGroup(groupId: Long?) {
+        val targets = selectedTasks
+        selectedTaskIds = emptySet()
+        showSelectionMoveDialog = false
+        scope.launch {
+            val success =
+                withContext(Dispatchers.IO) {
+                    taskStore.moveTasksToGroup(targets, groupId, System.currentTimeMillis())
+                }
+            if (!success) context.showToast("任务移动失败，请检查笔记库权限")
+        }
+    }
+
+    fun editSelectedTask() {
+        val task = selectedTasks.singleOrNull() ?: return
+        selectedTaskIds = emptySet()
+        showSelectionMenu = false
+        requestTaskEditor("selection_edit", task.id, managedTaskParentIds[task.id])
+    }
+
+    fun emptyTaskTrash() {
+        showEmptyTrashDialog = false
+        selectedTaskIds = emptySet()
+        scope.launch {
+            val success = withContext(Dispatchers.IO) { taskStore.deleteTasksPermanently(trashedTasks) }
+            if (!success) context.showToast("清空任务回收站失败，请检查笔记库权限")
+        }
+    }
+
+    fun openTaskTrash() {
+        showTaskOptions = false
+        showTaskTrash = true
+        taskEditMode = false
+        selectedTaskIds = emptySet()
+        showGlobalTasksOnly = false
+    }
+
+    fun closeTaskTrash() {
+        showTaskOptions = false
+        showTaskTrash = false
+        selectedTaskIds = emptySet()
+    }
+
+    fun deleteTask(task: TaskEntity) {
+        scope.launch {
+            val success = withContext(Dispatchers.IO) { taskStore.moveTasksToTrash(listOf(task)) }
+            if (!success) {
+                context.showToast("任务移入回收站失败，请检查笔记库权限")
+            } else {
+                showUndoSnackbar("已移入回收站") { taskStore.restoreTasks(listOf(task)) }
+            }
+        }
+    }
+
+    fun toggleDone(
+        task: TaskEntity,
+        done: Boolean,
+        onSuccess: (TaskEntity) -> Unit = {},
+    ) {
+        if (done) TaskCompletionFeedback.perform(context)
+        scope.launch {
             val now = System.currentTimeMillis()
             val updated = task.copy(done = done, updatedAt = now)
-            taskDao.update(updated)
-            scheduler.schedule(updated)
-            if (done) {
-                nextTaskOccurrence(task, now)?.let { next ->
-                    val saved = next.copy(id = taskDao.insert(next))
-                    scheduler.schedule(saved)
+            val result =
+                withContext(Dispatchers.IO) {
+                    taskStore.setTaskDone(task, updated)
+                }
+            if (result == null) {
+                context.showToast("任务状态保存失败，请检查笔记库权限")
+            } else {
+                onSuccess(result.first)
+                scheduler.schedule(result.first)
+                result.second?.let(scheduler::schedule)
+                if (done) {
+                    showUndoSnackbar("已完成") {
+                        taskStore.undoTaskCompletion(result.first, result.second)
+                    }
                 }
             }
         }
     }
 
-    fun moveTask(task: TaskEntity, groupId: Long?) {
-        scope.launch(Dispatchers.IO) {
-            taskDao.moveTaskToGroup(task.id, groupId, System.currentTimeMillis())
+    fun moveTask(
+        task: TaskEntity,
+        groupId: Long?,
+    ) {
+        scope.launch {
+            val success =
+                withContext(Dispatchers.IO) {
+                    taskStore.moveTask(task, groupId, System.currentTimeMillis())
+                }
+            if (!success) context.showToast("任务移动失败，请检查笔记库权限")
         }
     }
 
-    fun saveGroup(group: TaskGroupEntity?, name: String) {
-        val parentPath = when {
-            group != null -> group.name.substringBeforeLast('/', missingDelimiterValue = "")
-            else -> (taskGroupFilter as? MainViewModel.NoteFilter.Label)?.name.orEmpty()
-        }
+    fun saveGroup(
+        group: TaskGroupEntity?,
+        name: String,
+    ) {
+        val parentPath =
+            when {
+                group != null -> group.name.substringBeforeLast('/', missingDelimiterValue = "")
+                else -> newGroupParentPath
+            }
         val resolvedPath = resolveTaskGroupPath(parentPath, name)
         if (resolvedPath.isBlank() || groups.any { it.id != group?.id && it.name.equals(resolvedPath, ignoreCase = true) }) {
             context.showToast(if (resolvedPath.isBlank()) "分组名称不能为空" else "已有同名分组")
             return
         }
-        scope.launch(Dispatchers.IO) {
-            if (group == null) {
-                taskDao.insertGroup(
-                    TaskGroupEntity(
-                        name = resolvedPath,
-                        sortOrder = taskDao.getMaxGroupOrder() + 1,
-                        createdAt = System.currentTimeMillis(),
-                    ),
-                )
-            } else {
-                taskDao.updateGroup(group.copy(name = resolvedPath))
-            }
+        scope.launch {
+            val saved = withContext(Dispatchers.IO) { taskStore.saveGroup(group, resolvedPath) }
+            if (saved == null) context.showToast("分组保存失败，请检查笔记库权限")
         }
         showGroupEditor = false
     }
 
-    fun moveGroup(group: TaskGroupEntity, offset: Int) {
+    fun moveGroup(
+        group: TaskGroupEntity,
+        offset: Int,
+    ) {
         val index = groups.indexOfFirst { it.id == group.id }
         val other = groups.getOrNull(index + offset) ?: return
-        scope.launch(Dispatchers.IO) { taskDao.swapGroupOrder(group, other) }
+        scope.launch {
+            val success = withContext(Dispatchers.IO) { taskStore.swapGroups(group, other) }
+            if (!success) context.showToast("分组排序保存失败，请检查笔记库权限")
+        }
     }
 
     fun testReminderTask(text: String): TaskEntity {
@@ -385,323 +771,626 @@ fun TaskListScreen(
             id = (now % 1_000_000_000L) + 9_000_000_000L,
             taskText = text,
             done = false,
-            reminderAt = now,
+            reminderAt = now + 10_000L,
             createdAt = now,
             updatedAt = now,
         )
     }
 
-    fun runImmediateReminderTest() {
-        val task = testReminderTask("立即提醒测试")
-        KardLeafLog.i(TASK_REMINDER_LOG_TAG, "test immediate start id=${task.id}")
-        scheduler.deliverReminder(task)
-        context.showToast("已触发立即提醒测试")
-    }
-
-    fun runPopupTest() {
-        val task = testReminderTask("测试弹窗")
-        KardLeafLog.i(TASK_REMINDER_LOG_TAG, "test popup start id=${task.id}")
-        scheduler.showReminderAlert(task)
-        context.showToast("已触发测试弹窗")
-    }
-
-    fun runSoundTest() {
-        KardLeafLog.i(TASK_REMINDER_LOG_TAG, "test sound start")
-        runCatching {
-            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val ringtone = RingtoneManager.getRingtone(context, soundUri)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                ringtone?.audioAttributes = AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ALARM)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                ringtone?.volume = 1f
-            }
-            ringtone?.play()
-            Handler(Looper.getMainLooper()).postDelayed({
-                runCatching { ringtone?.stop() }
-            }, 3_000L)
-            context.showToast("已播放测试铃声")
-        }.onFailure { error ->
-            KardLeafLog.e(TASK_REMINDER_LOG_TAG, "test sound failed", error)
-            context.showToast("测试铃声失败")
+    fun runReminderTest() {
+        val task = testReminderTask("测试提醒")
+        KardLeafLog.i(TASK_REMINDER_LOG_TAG, "test delayed start id=${task.id} delayMs=10000")
+        scheduler.schedule(task)
+        scope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(
+                message = "10 秒后提醒",
+                duration = SnackbarDuration.Long,
+            )
         }
     }
 
-    BackHandler(enabled = showSearch) {
-        showSearch = false
-        searchQuery = ""
-        focusManager.clearFocus()
+    BackHandler(enabled = openedTask != null || taskEditMode || selectedTaskIds.isNotEmpty() || showSearch || showTaskTrash) {
+        when {
+            openedTask != null -> openedTask = null
+            taskEditMode -> taskEditMode = false
+            selectedTaskIds.isNotEmpty() -> {
+                selectedTaskIds = emptySet()
+                showSelectionMenu = false
+            }
+            showSearch -> {
+                showSearch = false
+                searchQuery = ""
+                focusManager.clearFocus()
+            }
+            else -> closeTaskTrash()
+        }
+    }
+
+    val detailTask = openedTask
+    if (detailTask != null) {
+        val detailSubtasks =
+            remember(detailTask.id, tasks, managedTaskParentIds) {
+                val descendantIds = TaskHierarchy.descendants(tasks, setOf(detailTask.id))
+                val subtree = tasks.filter { it.id == detailTask.id || it.id in descendantIds }
+                TaskHierarchy.flatten(subtree, managedTaskParentIds, descendantIds + detailTask.id)
+                    .filterNot { it.id == detailTask.id }
+            }
+        val detailRootDepth = TaskHierarchy.depth(detailTask.id, managedTaskParentIds)
+        val detailSubtaskIndentLevels =
+            remember(detailTask.id, detailSubtasks, managedTaskParentIds) {
+                detailSubtasks.associate { subtask ->
+                    subtask.id to (TaskHierarchy.depth(subtask.id, managedTaskParentIds) - detailRootDepth - 1)
+                        .coerceAtLeast(0)
+                }
+            }
+        TaskDetailScreen(
+            task = detailTask,
+            groups = groups,
+            subtasks = detailSubtasks,
+            subtaskIndentLevels = detailSubtaskIndentLevels,
+            onBack = { openedTask = null },
+            onEdit = {
+                openedTask = null
+                requestTaskEditor("detail_edit", detailTask.id, managedTaskParentIds[detailTask.id])
+            },
+            onAddSubtask = {
+                openedTask = null
+                requestTaskEditor("detail_add_subtask", parentTaskId = detailTask.id)
+            },
+            onToggleDone = { done ->
+                toggleDone(detailTask, done) { updatedTask -> openedTask = updatedTask }
+            },
+        )
+        return
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        AnimatedVisibility(
-                            visible = !showSearch,
-                            enter = fadeIn(),
-                            exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.Start),
-                        ) {
-                            Text(
-                                text = taskGroupTitle(taskGroupFilter),
-                                style = MaterialTheme.typography.titleLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+            if (selectedTaskIds.isNotEmpty()) {
+                TopAppBar(
+                    title = { Text("${selectedTaskIds.size} 个已选中") },
+                    navigationIcon = {
+                        IconButton(onClick = {
+                            selectedTaskIds = emptySet()
+                            showSelectionMenu = false
+                        }) {
+                            Icon(Icons.Outlined.Close, contentDescription = "取消选择")
                         }
-                        AnimatedVisibility(
-                            visible = showSearch,
-                            enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
-                            exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End),
-                        ) {
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(50.dp),
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                tonalElevation = 2.dp,
-                            ) {
-                                TaskSearchBar(
-                                    query = searchQuery,
-                                    onQueryChange = { searchQuery = it },
-                                    onClear = { searchQuery = "" },
-                                )
+                    },
+                    actions = {
+                        IconButton(onClick = {
+                            val visibleIds = filteredTasks.mapTo(hashSetOf()) { it.id }
+                            selectedTaskIds =
+                                if (visibleIds.isNotEmpty() && selectedTaskIds.containsAll(visibleIds)) {
+                                    emptySet()
+                                } else {
+                                    visibleIds
+                                }
+                        }) {
+                            Icon(Icons.Outlined.SelectAll, contentDescription = "全选")
+                        }
+                        if (showTaskTrash) {
+                            IconButton(onClick = { restoreSelectedTasks() }) {
+                                Icon(Icons.Outlined.Refresh, contentDescription = "恢复任务")
                             }
                         }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Outlined.Menu, contentDescription = "打开侧边栏")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = {
-                        showSearch = !showSearch
-                        focusManager.clearFocus()
-                    }) {
-                        Icon(
-                            Icons.Outlined.Search,
-                            contentDescription = "搜索任务",
-                            tint = if (showSearch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Box {
-                        IconButton(onClick = { showTaskOptions = true }) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = "更多选项")
+                        Box {
+                            IconButton(onClick = { showSelectionMenu = true }) {
+                                Icon(Icons.Filled.MoreVert, contentDescription = "选中任务操作")
+                            }
+                            DropdownMenu(
+                                expanded = showSelectionMenu,
+                                onDismissRequest = { showSelectionMenu = false },
+                            ) {
+                                if (showTaskTrash) {
+                                    DropdownMenuItem(
+                                        text = { Text("永久删除") },
+                                        leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                        onClick = {
+                                            showSelectionMenu = false
+                                            showDeleteSelectedDialog = true
+                                        },
+                                    )
+                                } else {
+                                    DropdownMenuItem(
+                                        text = { Text("编辑") },
+                                        leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                        enabled = selectedTasks.size == 1,
+                                        onClick = { editSelectedTask() },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("移动到分组") },
+                                        leadingIcon = { Icon(Icons.Outlined.DriveFileMove, null) },
+                                        onClick = {
+                                            showSelectionMenu = false
+                                            showSelectionMoveDialog = true
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("移入回收站") },
+                                        leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                        onClick = {
+                                            showSelectionMenu = false
+                                            showDeleteSelectedDialog = true
+                                        },
+                                    )
+                                }
+                            }
                         }
-                        DropdownMenu(
-                            expanded = showTaskOptions,
-                            onDismissRequest = { showTaskOptions = false },
+                    },
+                )
+            } else {
+                TopAppBar(
+                    title = {
+                        Box(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp),
+                            contentAlignment = Alignment.CenterStart,
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("新建分组") },
-                                onClick = {
-                                    showTaskOptions = false
-                                    editingGroup = null
-                                    showGroupEditor = true
-                                },
+                            AnimatedVisibility(
+                                visible = !showSearch,
+                                enter = fadeIn(),
+                                exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.Start),
+                            ) {
+                                Text(
+                                    text = if (showTaskTrash) "任务回收站" else taskScreenTitle(taskFilter, taskGroupFilter),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            AnimatedVisibility(
+                                visible = showSearch,
+                                enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
+                                exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End),
+                            ) {
+                                Surface(
+                                    modifier =
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .height(50.dp),
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    tonalElevation = 2.dp,
+                                ) {
+                                    TaskSearchBar(
+                                        query = searchQuery,
+                                        onQueryChange = { searchQuery = it },
+                                        onClear = { searchQuery = "" },
+                                        requestFocus = showSearch,
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onOpenDrawer) {
+                            Icon(Icons.Outlined.Menu, contentDescription = "打开侧边栏")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = {
+                            showSearch = !showSearch
+                            focusManager.clearFocus()
+                        }) {
+                            Icon(
+                                Icons.Outlined.Search,
+                                contentDescription = "搜索任务",
+                                tint = if (showSearch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            DropdownMenuItem(
-                                text = { Text("显示笔记中的 Markdown 任务") },
-                                trailingIcon = {
-                                    Checkbox(checked = showMarkdownTasks, onCheckedChange = null)
-                                },
-                                onClick = {
-                                    showMarkdownTasks = !showMarkdownTasks
-                                    prefsManager.saveShowMarkdownTasksInTaskList(showMarkdownTasks)
-                                    showTaskOptions = false
-                                },
-                            )
-                            TaskSort.entries.forEach { sort ->
-                                DropdownMenuItem(
-                                    text = { Text("${if (taskSort == sort) "✓ " else ""}按${sort.label}排序") },
-                                    onClick = {
-                                        taskSort = sort
-                                        showTaskOptions = false
+                        }
+                        if (!showTaskTrash) {
+                            Box {
+                                val hasActiveFilters =
+                                    taskFilter != TaskFilter.ALL ||
+                                        taskGroupFilter !is MainViewModel.NoteFilter.All ||
+                                        taskSort != TaskSort.MANUAL ||
+                                        showGlobalTasksOnly
+                                IconButton(onClick = { showTaskFilters = true }) {
+                                    Icon(
+                                        Icons.Outlined.FilterList,
+                                        contentDescription = if (hasActiveFilters) "筛选任务，已启用" else "筛选任务",
+                                        tint =
+                                            if (hasActiveFilters) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
+                                    )
+                                }
+                                TaskFilterMenu(
+                                    expanded = showTaskFilters,
+                                    taskFilter = taskFilter,
+                                    taskGroupFilter = taskGroupFilter,
+                                    taskSort = taskSort,
+                                    showGlobalTasksOnly = showGlobalTasksOnly,
+                                    groups = groups,
+                                    onDismiss = { showTaskFilters = false },
+                                    onTaskFilterChange = {
+                                        taskFilter = it
+                                        if (it != TaskFilter.ALL) showGlobalTasksOnly = false
+                                        if (it == TaskFilter.COMPLETED) completedCollapsed = false
+                                        showTaskFilters = false
+                                    },
+                                    onTaskGroupFilterChange = {
+                                        taskGroupFilter = it
+                                        showGlobalTasksOnly = false
+                                        showTaskFilters = false
+                                    },
+                                    onTaskSortChange = {
+                                        taskSort = it
+                                        showTaskFilters = false
+                                    },
+                                    onReset = {
+                                        taskFilter = TaskFilter.ALL
+                                        taskGroupFilter = MainViewModel.NoteFilter.All
+                                        taskSort = TaskSort.MANUAL
+                                        showGlobalTasksOnly = false
+                                        showTaskFilters = false
                                     },
                                 )
                             }
-                            DropdownMenuItem(
-                                text = { Text("立即提醒") },
-                                onClick = {
-                                    showTaskOptions = false
-                                    runImmediateReminderTest()
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("测试弹窗") },
-                                onClick = {
-                                    showTaskOptions = false
-                                    runPopupTest()
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("测试铃声") },
-                                onClick = {
-                                    showTaskOptions = false
-                                    runSoundTest()
-                                },
-                            )
                         }
-                    }
-                },
+                        Box {
+                            IconButton(onClick = { showTaskOptions = true }) {
+                                Icon(Icons.Filled.MoreVert, contentDescription = "更多选项")
+                            }
+                            DropdownMenu(
+                                expanded = showTaskOptions,
+                                onDismissRequest = { showTaskOptions = false },
+                            ) {
+                                if (showTaskTrash) {
+                                    DropdownMenuItem(
+                                        text = { Text("返回任务清单") },
+                                        leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                                        onClick = { closeTaskTrash() },
+                                    )
+                                    if (trashedTasks.isNotEmpty()) {
+                                        DropdownMenuItem(
+                                            text = { Text("清空回收站") },
+                                            leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                            onClick = {
+                                                showTaskOptions = false
+                                                showEmptyTrashDialog = true
+                                            },
+                                        )
+                                    }
+                                } else {
+                                    DropdownMenuItem(
+                                        text = { Text(if (taskEditMode) "完成编辑" else "编辑") },
+                                        leadingIcon = {
+                                            Icon(
+                                                if (taskEditMode) Icons.Outlined.Check else Icons.Outlined.Edit,
+                                                contentDescription = null,
+                                            )
+                                        },
+                                        onClick = {
+                                            taskEditMode = !taskEditMode
+                                            selectedTaskIds = emptySet()
+                                            showTaskOptions = false
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("新建分组") },
+                                        onClick = {
+                                            showTaskOptions = false
+                                            editingGroup = null
+                                            newGroupParentPath =
+                                                (taskGroupFilter as? MainViewModel.NoteFilter.Label)
+                                                    ?.name
+                                                    .orEmpty()
+                                            showGroupEditor = true
+                                        },
+                                    )
+                                    selectedTaskGroup?.let { group ->
+                                        DropdownMenuItem(
+                                            text = { Text("重命名当前分组") },
+                                            leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                            onClick = {
+                                                showTaskOptions = false
+                                                editingGroup = group
+                                                showGroupEditor = true
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("上移当前分组") },
+                                            leadingIcon = { Icon(Icons.Outlined.ArrowUpward, null) },
+                                            enabled = groups.indexOfFirst { it.id == group.id } > 0,
+                                            onClick = {
+                                                showTaskOptions = false
+                                                moveGroup(group, -1)
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("下移当前分组") },
+                                            leadingIcon = { Icon(Icons.Outlined.ArrowDownward, null) },
+                                            enabled = groups.indexOfFirst { it.id == group.id } < groups.lastIndex,
+                                            onClick = {
+                                                showTaskOptions = false
+                                                moveGroup(group, 1)
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("删除当前分组") },
+                                            leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                            onClick = {
+                                                showTaskOptions = false
+                                                deletingGroup = group
+                                            },
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text("回收站") },
+                                        onClick = { openTaskTrash() },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("全局任务") },
+                                        trailingIcon = {
+                                            if (showMarkdownTasks) {
+                                                Icon(Icons.Outlined.Check, contentDescription = null)
+                                            }
+                                        },
+                                        onClick = {
+                                            showMarkdownTasks = !showMarkdownTasks
+                                            if (!showMarkdownTasks) showGlobalTasksOnly = false
+                                            prefsManager.saveShowMarkdownTasksInTaskList(showMarkdownTasks)
+                                            showTaskOptions = false
+                                        },
+                                    )
+                                    if (BuildConfig.KARDLEAF_DEV_VARIANT) {
+                                        DropdownMenuItem(
+                                            text = { Text("测试提醒") },
+                                            onClick = {
+                                                showTaskOptions = false
+                                                runReminderTest()
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    },
+                )
+            }
+        },
+        snackbarHost = {
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 80.dp),
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = {
-                editingTask = null
-                showEditor = true
-            }) {
-                Icon(Icons.Outlined.Add, contentDescription = "新建任务")
+            if (!showTaskTrash) {
+                FloatingActionButton(onClick = { requestTaskEditor("task_list_fab") }) {
+                    Icon(Icons.Outlined.Add, contentDescription = "新建任务")
+                }
             }
         },
     ) { padding ->
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(16.dp),
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item {
-                PermissionHint()
+            if (permissionHintState.visible) {
+                item {
+                    PermissionHint(permissionHintState, context)
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
             }
-            if (taskGroupPaths.isNotEmpty()) {
+            if (!showTaskTrash && taskFilter == TaskFilter.ALL &&
+                !showSearch &&
+                (groups.isNotEmpty() || showMarkdownTasks || taskEditMode)
+            ) {
                 item {
                     FolderPathStrip(
                         currentFilter = taskGroupFilter,
-                        labels = taskGroupPaths,
+                        labels = groups.map { it.name },
                         rootChip = FolderChipData("全部任务", ""),
-                        onOpenFolder = { path ->
-                            taskGroupFilter = if (path.isBlank()) {
-                                MainViewModel.NoteFilter.All
+                        leadingChips =
+                            if (showMarkdownTasks) {
+                                listOf(FolderChipData("全局任务", GLOBAL_TASK_FILTER_PATH))
                             } else {
-                                MainViewModel.NoteFilter.Label(path)
+                                emptyList()
+                            },
+                        selectedLeadingPath = GLOBAL_TASK_FILTER_PATH.takeIf { showGlobalTasksOnly },
+                        onOpenFolder = { path ->
+                            if (path == GLOBAL_TASK_FILTER_PATH) {
+                                showGlobalTasksOnly = true
+                                taskGroupFilter = MainViewModel.NoteFilter.All
+                            } else if (path.isBlank()) {
+                                showGlobalTasksOnly = false
+                                taskGroupFilter = MainViewModel.NoteFilter.All
+                            } else {
+                                showGlobalTasksOnly = false
+                                taskGroupFilter = MainViewModel.NoteFilter.Label(path)
                             }
                         },
                         onShowAllInFolder = { path ->
-                            taskGroupFilter = MainViewModel.NoteFilter.Label(path, recursive = true)
+                            showGlobalTasksOnly = false
+                            val currentGroup = taskGroupFilter as? MainViewModel.NoteFilter.Label
+                            taskGroupFilter =
+                                MainViewModel.NoteFilter.Label(
+                                    path,
+                                    recursive = currentGroup?.recursive != true,
+                                )
+                        },
+                        editMode = taskEditMode,
+                        onAddFolder = { parentPath ->
+                            editingGroup = null
+                            newGroupParentPath = parentPath
+                            showGroupEditor = true
                         },
                     )
                 }
             }
-            item {
-                TaskFiltersRow(
-                    selectedFilter = taskFilter,
-                    onFilterChange = {
-                        taskFilter = it
-                        if (it == TaskFilter.COMPLETED) completedCollapsed = false
-                    },
-                )
-            }
-            item {
-                SectionHeader(
-                    "任务清单",
-                    "${activeTasks.size} 个待办 · ${completedTasks.size} 个已完成 · 按${taskSort.label}排序",
-                )
-            }
-            if (activeTasks.isEmpty() && completedTasks.isEmpty()) {
+            if (((showTaskTrash && filteredTasks.isEmpty()) ||
+                    (!showTaskTrash && activeTasks.isEmpty() && completedTasks.isEmpty())) &&
+                !showGlobalTaskSection
+            ) {
                 item {
-                    EmptyTaskState(filter = taskFilter, searching = searchQuery.isNotBlank())
+                    EmptyTaskState(
+                        filter = taskFilter,
+                        searching = searchQuery.isNotBlank(),
+                        filteringGroup = taskGroupFilter !is MainViewModel.NoteFilter.All,
+                        trash = showTaskTrash,
+                    )
                 }
             } else {
-                if (taskFilter != TaskFilter.COMPLETED) taskSections.forEach { section ->
-                    val groupId = section.group?.id
-                    item(key = "group-${groupId ?: "ungrouped"}") {
-                        TaskGroupHeader(
-                            group = section.group,
-                            count = tasks.count { task ->
-                                !task.done && if (section.group == null) {
-                                    groups.none { it.id == task.groupId }
-                                } else {
-                                    task.groupId == section.group.id
-                                }
-                            },
-                            collapsed = collapsedGroups[groupId] == true,
-                            canMoveUp = section.group != null && groups.indexOfFirst { it.id == groupId } > 0,
-                            canMoveDown = section.group != null && groups.indexOfFirst { it.id == groupId } < groups.lastIndex,
-                            onToggle = { collapsedGroups[groupId] = collapsedGroups[groupId] != true },
-                            onRename = {
-                                editingGroup = section.group
-                                showGroupEditor = true
-                            },
-                            onDelete = { deletingGroup = section.group },
-                            onMoveUp = { section.group?.let { moveGroup(it, -1) } },
-                            onMoveDown = { section.group?.let { moveGroup(it, 1) } },
+                if (showTaskTrash) {
+                    items(filteredTasks, key = { "trash-${it.id}" }) { task ->
+                        TaskRow(
+                            task = task,
+                            groups = groups,
+                            isSelected = task.id in selectedTaskIds,
+                            selectionMode = selectedTaskIds.isNotEmpty(),
+                            isTrash = true,
+                            indentLevel = managedTaskIndentLevels[task.id] ?: 0,
+                            hasChildren = false,
+                            expanded = false,
+                            onToggleChildren = {},
+                            showGroupName = true,
+                            onToggleDone = {},
+                            onEdit = {},
+                            onSelect = { selectTask(task) },
+                            onLongPress = { enterTaskSelection(task) },
+                            onDelete = {},
+                            onOpenNotePath = onOpenNotePath,
                         )
                     }
-                    if (collapsedGroups[groupId] != true) {
-                        items(section.tasks, key = { it.id }) { task ->
+                } else if (!showGlobalTasksOnly && taskFilter != TaskFilter.COMPLETED && activeTasks.isNotEmpty()) {
+                    item(key = "active-section") {
+                        TaskSection(
+                            title = "未完成",
+                            count = activeTasks.size,
+                            collapsed = activeCollapsed,
+                            onToggle = { activeCollapsed = !activeCollapsed },
+                            tasks = displayActiveTaskTree,
+                            editMode = taskEditMode,
+                            onReorder = { from, to -> reorderTasks(displayActiveTasks, from, to, completed = false) },
+                        ) { task, dragModifier ->
                             TaskRow(
                                 task = task,
                                 groups = groups,
-                                onToggleDone = { toggleDone(task, it) },
-                                onEdit = {
-                                    editingTask = task
-                                    showEditor = true
+                                isSelected = task.id in selectedTaskIds,
+                                selectionMode = selectedTaskIds.isNotEmpty(),
+                                isTrash = false,
+                                indentLevel = managedTaskIndentLevels[task.id] ?: 0,
+                                hasChildren = (activeTaskChildCounts[task.id] ?: 0) > 0,
+                                expanded = task.id in expandedTaskIds,
+                                onToggleChildren = {
+                                    expandedTaskIds =
+                                        if (task.id in expandedTaskIds) {
+                                            expandedTaskIds - task.id
+                                        } else {
+                                            expandedTaskIds + task.id
+                                        }
                                 },
-                                onMove = { moveTask(task, it) },
+                                editMode = taskEditMode,
+                                dragModifier = dragModifier,
+                                showGroupName = taskGroupFilter is MainViewModel.NoteFilter.All,
+                                onToggleDone = { toggleDone(task, it) },
+                                onEdit = { openedTask = task },
+                                onSelect = { selectTask(task) },
+                                onLongPress = { enterTaskSelection(task) },
                                 onDelete = { deleteTask(task) },
                                 onOpenNotePath = onOpenNotePath,
                             )
                         }
                     }
                 }
-                if (completedTasks.isNotEmpty()) {
-                    item(key = "completed-header") {
+                if (showGlobalTaskSection) {
+                    item(key = "global-tasks-header") {
                         CompletedTasksHeader(
+                            title = "全局任务",
+                            count = visibleMarkdownTasks.size,
+                            collapsed = globalTasksCollapsed,
+                            onToggle = { globalTasksCollapsed = !globalTasksCollapsed },
+                        )
+                    }
+                    if (!globalTasksCollapsed) {
+                        items(
+                            visibleMarkdownTaskTree,
+                            key = { item -> "global-${item.notePath}:${item.lineNumber}:${item.taskText}" },
+                        ) { item ->
+                            MarkdownTaskRow(
+                                item = item,
+                                hasChildren = (markdownTaskChildCounts[itemKey(item)] ?: 0) > 0,
+                                expanded = itemKey(item) in expandedMarkdownTaskKeys,
+                                onToggleChildren = {
+                                    val key = itemKey(item)
+                                    expandedMarkdownTaskKeys =
+                                        if (key in expandedMarkdownTaskKeys) {
+                                            expandedMarkdownTaskKeys - key
+                                        } else {
+                                            expandedMarkdownTaskKeys + key
+                                        }
+                                },
+                                onToggleDone = { done ->
+                                    if (done) TaskCompletionFeedback.perform(context)
+                                    scope.launch {
+                                        val success =
+                                            withContext(Dispatchers.IO) {
+                                                taskStore.setMarkdownTaskDone(item, done)
+                                            }
+                                        if (success && done) {
+                                            showUndoSnackbar("已完成") {
+                                                taskStore.setMarkdownTaskDone(item, false)
+                                            }
+                                        }
+                                        if (!success) context.showToast("源任务已变化，未覆盖原笔记")
+                                    }
+                                },
+                                onOpenNotePath = onOpenNotePath,
+                            )
+                        }
+                    }
+                }
+                if (displayCompletedTasks.isNotEmpty()) {
+                    item(key = "completed-header") {
+                        TaskSection(
+                            title = "已完成",
                             count = completedTasks.size,
                             collapsed = completedCollapsed,
                             onToggle = { completedCollapsed = !completedCollapsed },
-                        )
-                    }
-                    if (!completedCollapsed) {
-                        items(completedTasks, key = { "completed-${it.id}" }) { task ->
+                            tasks = displayCompletedTaskTree,
+                            editMode = taskEditMode,
+                            onReorder = { from, to -> reorderTasks(displayCompletedTasks, from, to, completed = true) },
+                        ) { task, dragModifier ->
                             TaskRow(
                                 task = task,
                                 groups = groups,
-                                onToggleDone = { toggleDone(task, it) },
-                                onEdit = {
-                                    editingTask = task
-                                    showEditor = true
+                                isSelected = task.id in selectedTaskIds,
+                                selectionMode = selectedTaskIds.isNotEmpty(),
+                                isTrash = false,
+                                indentLevel = managedTaskIndentLevels[task.id] ?: 0,
+                                hasChildren = (completedTaskChildCounts[task.id] ?: 0) > 0,
+                                expanded = task.id in expandedTaskIds,
+                                onToggleChildren = {
+                                    expandedTaskIds =
+                                        if (task.id in expandedTaskIds) {
+                                            expandedTaskIds - task.id
+                                        } else {
+                                            expandedTaskIds + task.id
+                                        }
                                 },
-                                onMove = { moveTask(task, it) },
+                                editMode = taskEditMode,
+                                dragModifier = dragModifier,
+                                showGroupName = taskGroupFilter is MainViewModel.NoteFilter.All,
+                                onToggleDone = { toggleDone(task, it) },
+                                onEdit = { openedTask = task },
+                                onSelect = { selectTask(task) },
+                                onLongPress = { enterTaskSelection(task) },
                                 onDelete = { deleteTask(task) },
                                 onOpenNotePath = onOpenNotePath,
                             )
                         }
-                    }
-                }
-            }
-            if (showMarkdownTasks && taskFilter == TaskFilter.ALL && taskGroupFilter is MainViewModel.NoteFilter.All) {
-                item {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    HorizontalDivider()
-                    SectionHeader("笔记中的 Markdown 任务", "${visibleMarkdownTasks.size} 条未完成")
-                }
-                if (visibleMarkdownTasks.isEmpty()) {
-                    item {
-                        Text(
-                            text = "未识别到匹配的 - [ ] 任务。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                } else {
-                    items(visibleMarkdownTasks, key = { "${it.notePath}:${it.lineNumber}:${it.taskText}" }) { item ->
-                        MarkdownTaskRow(item = item, onOpenNotePath = onOpenNotePath)
                     }
                 }
             }
@@ -709,25 +1398,98 @@ fun TaskListScreen(
     }
 
     if (showEditor) {
-        TaskEditorDialog(
-            task = editingTask,
-            groups = groups,
-            onDismiss = { showEditor = false },
-            onSave = { result ->
-                saveTask(editingTask, result)
-                showEditor = false
+                TaskEditorDialog(
+                    task = editingTask,
+                    groups = groups,
+                    parentTaskIds = managedTaskParentIds,
+                    initialGroupId =
+                        editingTask?.groupId
+                            ?: newTaskParentId?.let { parentId -> tasks.firstOrNull { it.id == parentId }?.groupId }
+                            ?: selectedTaskGroup?.id,
+                    initialParentTaskId = newTaskParentId,
+                    autoFocusTitle = true,
+                    openStartedAtMs = editorOpenStartedAtMs,
+                    onDismiss = {
+                        if (!taskSaveInProgress) {
+                            showEditor = false
+                            editingTaskId = null
+                            newTaskParentId = null
+                        }
+                    },
+                    onSave = { result -> saveTask(editingTask, result) },
+                )
+    }
+
+    if (showSelectionMoveDialog) {
+        AlertDialog(
+            onDismissRequest = { showSelectionMoveDialog = false },
+            title = { Text("移动到分组") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    (listOf<TaskGroupEntity?>(null) + groups).forEach { group ->
+                        TextButton(
+                            onClick = { moveSelectedToGroup(group?.id) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = if (group == null) "未分组" else group.name,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
             },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showSelectionMoveDialog = false }) { Text("取消") } },
+        )
+    }
+
+    if (showDeleteSelectedDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteSelectedDialog = false },
+            title = { Text(if (showTaskTrash) "永久删除任务？" else "移入任务回收站？") },
+            text = {
+                Text(
+                    if (showTaskTrash) {
+                        "选中的 ${selectedTasks.size} 个任务将永久删除，无法恢复。"
+                    } else {
+                        "选中的 ${selectedTasks.size} 个任务会移入任务回收站。"
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteSelectedDialog = false
+                    if (showTaskTrash) permanentlyDeleteSelectedTasks() else moveSelectedToTrash()
+                }) {
+                    Text(if (showTaskTrash) "永久删除" else "移入回收站")
+                }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteSelectedDialog = false }) { Text("取消") } },
+        )
+    }
+
+    if (showEmptyTrashDialog) {
+        AlertDialog(
+            onDismissRequest = { showEmptyTrashDialog = false },
+            title = { Text("清空任务回收站？") },
+            text = { Text("回收站中的 ${trashedTasks.size} 个任务将永久删除，无法恢复。") },
+            confirmButton = {
+                TextButton(onClick = { emptyTaskTrash() }) { Text("清空回收站") }
+            },
+            dismissButton = { TextButton(onClick = { showEmptyTrashDialog = false }) { Text("取消") } },
         )
     }
 
     if (showGroupEditor) {
         GroupEditorDialog(
             group = editingGroup,
-            parentPath = if (editingGroup == null) {
-                (taskGroupFilter as? MainViewModel.NoteFilter.Label)?.name.orEmpty()
-            } else {
-                editingGroup?.name?.substringBeforeLast('/', missingDelimiterValue = "").orEmpty()
-            },
+            parentPath =
+                if (editingGroup == null) {
+                    newGroupParentPath
+                } else {
+                    editingGroup?.name?.substringBeforeLast('/', missingDelimiterValue = "").orEmpty()
+                },
             onDismiss = { showGroupEditor = false },
             onSave = { saveGroup(editingGroup, it) },
         )
@@ -741,14 +1503,112 @@ fun TaskListScreen(
             confirmButton = {
                 TextButton(onClick = {
                     deletingGroup = null
-                    scope.launch(Dispatchers.IO) {
-                        taskDao.deleteGroupKeepingTasks(group, System.currentTimeMillis())
+                    scope.launch {
+                        val success = withContext(Dispatchers.IO) { taskStore.deleteGroup(group) }
+                        if (!success) context.showToast("分组删除失败，请检查笔记库权限")
                     }
                 }) { Text("删除分组") }
             },
             dismissButton = { TextButton(onClick = { deletingGroup = null }) { Text("取消") } },
         )
     }
+
+    duplicateTaskIdConflict?.let { conflict ->
+        DuplicateTaskIdDialog(
+            conflict = conflict,
+            onDismiss = { duplicateTaskIdConflict = null },
+            onSave = { firstId, firstText, secondId, secondText ->
+                scope.launch {
+                    val success =
+                        withContext(Dispatchers.IO) {
+                            taskStore.resolveDuplicateTaskId(
+                                conflict = conflict,
+                                firstTaskId = firstId,
+                                firstTaskText = firstText,
+                                secondTaskId = secondId,
+                                secondTaskText = secondText,
+                            )
+                        }
+                    if (success) {
+                        duplicateTaskIdConflict = null
+                    } else {
+                        context.showToast("重复 ID 保存失败，请重新检查任务内容")
+                    }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun DuplicateTaskIdDialog(
+    conflict: DuplicateTaskIdConflict,
+    onDismiss: () -> Unit,
+    onSave: (firstId: String, firstText: String, secondId: String, secondText: String) -> Unit,
+) {
+    var firstId by remember(conflict) { mutableStateOf(conflict.first.taskId.orEmpty()) }
+    var firstText by remember(conflict) { mutableStateOf(conflict.first.taskText) }
+    var secondId by remember(conflict) { mutableStateOf(conflict.second.taskId.orEmpty()) }
+    var secondText by remember(conflict) { mutableStateOf(conflict.second.taskText) }
+    val canSave =
+        firstId.isNotBlank() && secondId.isNotBlank() &&
+            firstText.isNotBlank() && secondText.isNotBlank() && firstId.trim() != secondId.trim()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("发现重复任务 ID") },
+        text = {
+            Column(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 520.dp)
+                        .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("两个任务使用了同一个 ID，请修改任务名称或 ID 后再保存。")
+                Text("任务 1 · 第 ${conflict.first.lineNumber} 行")
+                OutlinedTextField(
+                    value = firstText,
+                    onValueChange = { firstText = it },
+                    label = { Text("任务名称") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 3,
+                )
+                OutlinedTextField(
+                    value = firstId,
+                    onValueChange = { firstId = it },
+                    label = { Text("任务 ID") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                Text("任务 2 · 第 ${conflict.second.lineNumber} 行")
+                OutlinedTextField(
+                    value = secondText,
+                    onValueChange = { secondText = it },
+                    label = { Text("任务名称") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 3,
+                )
+                OutlinedTextField(
+                    value = secondId,
+                    onValueChange = { secondId = it },
+                    label = { Text("任务 ID") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(firstId, firstText, secondId, secondText) },
+                enabled = canSave,
+            ) {
+                Text("保存")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 internal fun filterAndSortTasks(
@@ -760,54 +1620,43 @@ internal fun filterAndSortTasks(
 ): List<TaskEntity> {
     val startToday = startOfTodayMillis(now)
     val endToday = endOfTodayMillis(now)
-    val searched = tasks.filter { task ->
-        query.isBlank() || task.taskText.contains(query, ignoreCase = true) ||
-            task.notes.contains(query, ignoreCase = true)
-    }
-    val filtered = searched.filter { task ->
-        val due = task.dueAt ?: task.reminderAt
-        when (filter) {
-            TaskFilter.ALL -> true
-            TaskFilter.TODAY -> !task.done && due != null && due in startToday..endToday
-            TaskFilter.UPCOMING -> !task.done && due != null && due > endToday
-            TaskFilter.OVERDUE -> !task.done && due != null && due < now
-            TaskFilter.COMPLETED -> task.done
+    val searched =
+        tasks.filter { task ->
+            query.isBlank() || task.taskText.contains(query, ignoreCase = true) ||
+                task.notes.contains(query, ignoreCase = true)
         }
-    }
+    val filtered =
+        searched.filter { task ->
+            val due = task.dueAt ?: task.reminderAt
+            when (filter) {
+                TaskFilter.ALL -> true
+                TaskFilter.TODAY -> !task.done && due != null && due in startToday..endToday
+                TaskFilter.UPCOMING -> !task.done && due != null && due > endToday
+                TaskFilter.OVERDUE -> !task.done && due != null && due < now
+                TaskFilter.COMPLETED -> task.done
+            }
+        }
     return when (sort) {
-        TaskSort.DUE -> filtered.sortedWith(
-            compareBy<TaskEntity> { (it.dueAt ?: it.reminderAt) == null }
-                .thenBy { it.dueAt ?: it.reminderAt }
-                .thenByDescending { it.priority }
-                .thenByDescending { it.updatedAt },
-        )
-        TaskSort.PRIORITY -> filtered.sortedWith(
-            compareByDescending<TaskEntity> { it.priority }
-                .thenBy { (it.dueAt ?: it.reminderAt) == null }
-                .thenBy { it.dueAt ?: it.reminderAt }
-                .thenByDescending { it.updatedAt },
-        )
+        TaskSort.MANUAL -> filtered.sortedWith(compareBy<TaskEntity> { it.manualOrder }.thenBy { it.id })
+        TaskSort.DUE ->
+            filtered.sortedWith(
+                compareBy<TaskEntity> { (it.dueAt ?: it.reminderAt) == null }
+                    .thenBy { it.dueAt ?: it.reminderAt }
+                    .thenByDescending { it.priority }
+                    .thenByDescending { it.updatedAt },
+            )
+        TaskSort.PRIORITY ->
+            filtered.sortedWith(
+                compareByDescending<TaskEntity> { it.priority }
+                    .thenBy { (it.dueAt ?: it.reminderAt) == null }
+                    .thenBy { it.dueAt ?: it.reminderAt }
+                    .thenByDescending { it.updatedAt },
+            )
         TaskSort.UPDATED -> filtered.sortedByDescending { it.updatedAt }
     }
 }
 
-private fun buildTaskGroupSections(
-    tasks: List<TaskEntity>,
-    groups: List<TaskGroupEntity>,
-): List<TaskGroupSection> =
-    groups.map { group -> TaskGroupSection(group, tasks.filter { it.groupId == group.id }) } +
-        TaskGroupSection(null, tasks.filter { task -> groups.none { it.id == task.groupId } })
-
-private fun buildTaskGroupNavigationPaths(groups: List<TaskGroupEntity>): List<String> =
-    groups
-        .flatMap { group ->
-            val segments = normalizeFolderPathForUi(group.name).split('/').filter { it.isNotBlank() }
-            segments.indices.map { index -> segments.take(index + 1).joinToString("/") }
-        }
-        .distinct()
-        .sorted()
-
-private fun filterTasksByTaskGroup(
+internal fun filterTasksByTaskGroup(
     tasks: List<TaskEntity>,
     groups: List<TaskGroupEntity>,
     filter: MainViewModel.NoteFilter,
@@ -815,179 +1664,179 @@ private fun filterTasksByTaskGroup(
     val folderFilter = filter as? MainViewModel.NoteFilter.Label ?: return tasks
     val selectedPath = normalizeFolderPathForUi(folderFilter.name)
     val groupPaths = groups.associate { it.id to normalizeFolderPathForUi(it.name) }
+    if (selectedPath.isBlank()) return tasks.filter { task -> task.groupId?.let(groupPaths::containsKey) != true }
     return tasks.filter { task ->
         val taskPath = task.groupId?.let(groupPaths::get).orEmpty()
         taskPath == selectedPath || (folderFilter.recursive && taskPath.startsWith("$selectedPath/"))
     }
 }
 
-private fun filterTaskGroups(
-    groups: List<TaskGroupEntity>,
-    filter: MainViewModel.NoteFilter,
-): List<TaskGroupEntity> {
-    val folderFilter = filter as? MainViewModel.NoteFilter.Label ?: return groups
-    val selectedPath = normalizeFolderPathForUi(folderFilter.name)
-    return groups.filter { group ->
-        val groupPath = normalizeFolderPathForUi(group.name)
-        groupPath == selectedPath || (folderFilter.recursive && groupPath.startsWith("$selectedPath/"))
+private data class LegacyTaskGroupTreeRow(
+    val group: TaskGroupEntity,
+    val depth: Int,
+)
+
+private fun legacyTaskGroupTreeRows(groups: List<TaskGroupEntity>): List<LegacyTaskGroupTreeRow> {
+    val ordered = groups.sortedBy { it.sortOrder }
+    val paths = ordered.associateBy { normalizeFolderPathForUi(it.name) }
+    val children =
+        ordered.groupBy { group ->
+            normalizeFolderPathForUi(group.name)
+                .substringBeforeLast('/', missingDelimiterValue = "")
+                .takeIf(paths::containsKey)
+                .orEmpty()
+        }
+    return buildList {
+        fun append(
+            parentPath: String,
+            depth: Int,
+        ) {
+            children[parentPath].orEmpty().forEach { group ->
+                add(LegacyTaskGroupTreeRow(group, depth))
+                append(normalizeFolderPathForUi(group.name), depth + 1)
+            }
+        }
+        append("", 0)
     }
 }
 
-private fun resolveTaskGroupPath(parentPath: String, name: String): String =
+@Composable
+private fun LegacyTaskGroupMenuRow(
+    label: String,
+    depth: Int,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(start = 16.dp + 20.dp * depth, end = 16.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (selected) Icon(Icons.Outlined.Check, contentDescription = null)
+    }
+}
+
+private fun itemKey(item: MarkdownTaskItem): String = "${item.notePath}:${item.lineNumber}"
+
+private fun markdownTaskParentKey(
+    item: MarkdownTaskItem,
+    itemsByKey: Map<String, MarkdownTaskItem>,
+): String? =
+    item.parentLineNumber
+        ?.let { line -> itemsByKey["${item.notePath}:$line"] }
+        ?.let(::itemKey)
+
+private fun markdownTaskRootKey(
+    item: MarkdownTaskItem,
+    itemsByKey: Map<String, MarkdownTaskItem>,
+): String {
+    var currentKey = itemKey(item)
+    val visited = hashSetOf<String>()
+    while (visited.add(currentKey)) {
+        val current = itemsByKey[currentKey] ?: return currentKey
+        currentKey = markdownTaskParentKey(current, itemsByKey) ?: return currentKey
+    }
+    return currentKey
+}
+
+private fun flattenMarkdownTaskTree(
+    items: List<MarkdownTaskItem>,
+    expandedKeys: Set<String>,
+): List<MarkdownTaskItem> {
+    val itemsByKey = items.associateBy(::itemKey)
+    val childrenByParent =
+        items.mapNotNull { item ->
+            markdownTaskParentKey(item, itemsByKey)?.let { parentKey -> parentKey to item }
+        }.groupBy({ it.first }, { it.second })
+    val result = ArrayList<MarkdownTaskItem>(items.size)
+    val visited = hashSetOf<String>()
+
+    fun append(item: MarkdownTaskItem) {
+        val key = itemKey(item)
+        if (!visited.add(key)) return
+        result += item
+        if (key in expandedKeys) childrenByParent[key].orEmpty().forEach(::append)
+    }
+
+    items.filter { markdownTaskParentKey(it, itemsByKey) == null }.forEach(::append)
+    if (visited.isEmpty()) {
+        items.forEach(::append)
+    }
+    return result
+}
+
+private fun markdownTaskChildCounts(items: List<MarkdownTaskItem>): Map<String, Int> {
+    val itemsByKey = items.associateBy(::itemKey)
+    return items
+        .mapNotNull { item -> markdownTaskParentKey(item, itemsByKey) }
+        .groupingBy { it }
+        .eachCount()
+}
+
+private fun resolveTaskGroupPath(
+    parentPath: String,
+    name: String,
+): String =
     normalizeFolderPathForUi(
         listOf(parentPath, name)
             .filter { it.isNotBlank() }
             .joinToString("/"),
     )
 
-private fun taskGroupTitle(filter: MainViewModel.NoteFilter): String {
-    val folderFilter = filter as? MainViewModel.NoteFilter.Label ?: return "任务"
-    val name = normalizeFolderPathForUi(folderFilter.name).substringAfterLast('/')
-    return if (folderFilter.recursive) "$name · 全部" else name
-}
-
-internal fun nextTaskOccurrence(task: TaskEntity, now: Long): TaskEntity? {
-    val repeat = TaskRepeat.from(task.repeatRule)
-    if (repeat == TaskRepeat.NONE || (task.dueAt == null && task.reminderAt == null)) return null
-
-    fun advance(time: Long): Long {
-        var next = time
-        do {
-            next = Calendar.getInstance().apply {
-                timeInMillis = next
-                add(
-                    when (repeat) {
-                        TaskRepeat.DAILY -> Calendar.DAY_OF_MONTH
-                        TaskRepeat.WEEKLY -> Calendar.WEEK_OF_YEAR
-                        TaskRepeat.MONTHLY -> Calendar.MONTH
-                        TaskRepeat.NONE -> return time
-                    },
-                    1,
-                )
-            }.timeInMillis
-        } while (next <= now)
-        return next
+private fun taskScreenTitle(
+    filter: TaskFilter,
+    groupFilter: MainViewModel.NoteFilter,
+): String =
+    when {
+        filter != TaskFilter.ALL -> filter.label
+        groupFilter is MainViewModel.NoteFilter.Label && groupFilter.name.isBlank() -> "未分组"
+        groupFilter is MainViewModel.NoteFilter.Label -> normalizeFolderPathForUi(groupFilter.name).substringAfterLast('/')
+        else -> "任务"
     }
 
-    return task.copy(
-        id = 0,
-        done = false,
-        dueAt = task.dueAt?.let(::advance),
-        reminderAt = task.reminderAt?.let(::advance),
-        createdAt = now,
-        updatedAt = now,
-    )
-}
-
-@Composable
-private fun PermissionHint() {
-    val context = LocalContext.current
-    val notificationsEnabled = TaskReminderScheduler.areNotificationsEnabled(context)
-    val exactAlarmsEnabled = TaskReminderScheduler.canScheduleExactAlarms(context)
-    val fullScreenEnabled = TaskReminderScheduler.canUseFullScreenIntent(context)
-    val overlayEnabled = TaskReminderScheduler.canDrawOverlays(context)
-    val channelAudible = TaskReminderScheduler.hasAudibleReminderChannel(context)
-    val statusText = when {
-        !notificationsEnabled -> "通知未允许 · 通知栏、横幅和声音都无法显示"
-        !exactAlarmsEnabled -> "通知已允许 · 未开启精确提醒，系统可能延后触发"
-        !fullScreenEnabled -> "通知和精确提醒已允许 · 全屏提醒未允许"
-        !overlayEnabled -> "未授予悬浮窗权限 · 亮屏后台时弹窗提醒只能以横幅显示"
-        !channelAudible -> "提醒渠道已静音或重要级别过低"
-        else -> "通知、精确提醒、弹窗和声音均可用"
-    }
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Notifications,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-            )
-            Text(
-                text = statusText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 8.dp),
-            )
-            if (!notificationsEnabled) {
-                TextButton(onClick = { openAppNotificationSettings(context) }) {
-                    Text("通知")
-                }
-            }
-            if (!exactAlarmsEnabled) {
-                TextButton(onClick = { openExactAlarmSettings(context) }) {
-                    Text("精确")
-                }
-            }
-            if (!fullScreenEnabled) {
-                TextButton(onClick = { openFullScreenIntentSettings(context) }) {
-                    Text("全屏")
-                }
-            }
-            if (!overlayEnabled) {
-                TextButton(onClick = { openOverlayPermissionSettings(context) }) {
-                    Text("弹窗")
-                }
-            }
-            if (!channelAudible) {
-                TextButton(onClick = { openReminderChannelSettings(context) }) {
-                    Text("声音")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectionHeader(
-    title: String,
-    subtitle: String,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-            text = subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
 
 @Composable
 private fun TaskSearchBar(
     query: String,
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit,
+    requestFocus: Boolean,
 ) {
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(requestFocus) {
+        if (!requestFocus) return@LaunchedEffect
+        withFrameNanos { }
+        runCatching { focusRequester.requestFocus() }
+        withFrameNanos { }
+        keyboardController?.show()
+    }
+
     Row(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 4.dp),
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BasicTextField(
             value = query,
             onValueChange = onQueryChange,
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 8.dp),
+            modifier =
+                Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester)
+                    .padding(horizontal = 8.dp),
             singleLine = true,
-            textStyle = MaterialTheme.typography.bodyLarge.copy(
-                color = MaterialTheme.colorScheme.onSurface,
-            ),
+            textStyle =
+                MaterialTheme.typography.bodyLarge.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             decorationBox = { innerTextField ->
                 Box(contentAlignment = Alignment.CenterStart) {
@@ -1015,394 +1864,131 @@ private fun TaskSearchBar(
 }
 
 @Composable
-private fun TaskFiltersRow(
-    selectedFilter: TaskFilter,
-    onFilterChange: (TaskFilter) -> Unit,
-) {
-    Row(
-        modifier = Modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        TaskFilter.entries.forEach { filter ->
-            FilterChip(
-                selected = selectedFilter == filter,
-                onClick = { onFilterChange(filter) },
-                label = { Text(filter.label) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun TaskGroupHeader(
-    group: TaskGroupEntity?,
-    count: Int,
-    collapsed: Boolean,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onToggle: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-) {
-    var showMenu by remember(group?.id) { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onToggle)
-            .padding(start = 4.dp, top = 8.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = if (collapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
-            contentDescription = if (collapsed) "展开分组" else "折叠分组",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Icon(
-            imageVector = Icons.Outlined.Folder,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier
-                .padding(start = 4.dp)
-                .size(20.dp),
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = group?.name ?: "未分组",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-            Text(
-                text = "${count} 个未完成",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
-        if (group != null) {
-            Box {
-                IconButton(onClick = { showMenu = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "分组操作")
-                }
-                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("重命名") },
-                        leadingIcon = { Icon(Icons.Outlined.Edit, null) },
-                        onClick = { showMenu = false; onRename() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("上移") },
-                        leadingIcon = { Icon(Icons.Outlined.ArrowUpward, null) },
-                        enabled = canMoveUp,
-                        onClick = { showMenu = false; onMoveUp() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("下移") },
-                        leadingIcon = { Icon(Icons.Outlined.ArrowDownward, null) },
-                        enabled = canMoveDown,
-                        onClick = { showMenu = false; onMoveDown() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("删除分组") },
-                        leadingIcon = { Icon(Icons.Outlined.Delete, null) },
-                        onClick = { showMenu = false; onDelete() },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CompletedTasksHeader(count: Int, collapsed: Boolean, onToggle: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onToggle)
-            .padding(horizontal = 4.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = if (collapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = "已完成",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 8.dp),
-        )
-        Text("$count 个", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun GroupEditorDialog(
-    group: TaskGroupEntity?,
-    parentPath: String,
-    onDismiss: () -> Unit,
-    onSave: (String) -> Unit,
-) {
-    var name by remember(group?.id, parentPath) {
-        mutableStateOf(group?.name?.substringAfterLast('/').orEmpty())
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (group == null) "新建分组" else "重命名分组") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (parentPath.isNotBlank()) {
-                    Text(
-                        text = "上级分组：$parentPath",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("分组名称") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = { TextButton(onClick = { onSave(name) }) { Text("保存") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
-}
-
-@Composable
-private fun EmptyTaskState(filter: TaskFilter, searching: Boolean) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text(
-            text = when {
-                searching -> "没有匹配的任务。"
-                filter != TaskFilter.ALL -> "“${filter.label}”中暂无任务。"
-                else -> "还没有任务。点击右下角的新建按钮即可开始。"
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(14.dp),
-        )
-    }
-}
-
-@Composable
-private fun TaskRow(
-    task: TaskEntity,
+private fun TaskFilterMenu(
+    expanded: Boolean,
+    taskFilter: TaskFilter,
+    taskGroupFilter: MainViewModel.NoteFilter,
+    taskSort: TaskSort,
+    showGlobalTasksOnly: Boolean,
     groups: List<TaskGroupEntity>,
-    onToggleDone: (Boolean) -> Unit,
-    onEdit: () -> Unit,
-    onMove: (Long?) -> Unit,
-    onDelete: () -> Unit,
-    onOpenNotePath: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onTaskFilterChange: (TaskFilter) -> Unit,
+    onTaskGroupFilterChange: (MainViewModel.NoteFilter) -> Unit,
+    onTaskSortChange: (TaskSort) -> Unit,
+    onReset: () -> Unit,
 ) {
-    var showMenu by remember(task.id) { mutableStateOf(false) }
-    var showMoveDialog by remember(task.id) { mutableStateOf(false) }
-    var confirmDelete by remember(task.id) { mutableStateOf(false) }
-    val due = task.dueAt ?: task.reminderAt
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = if (due?.let { it < System.currentTimeMillis() } == true && !task.done) {
-            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.22f)
-        } else {
-            MaterialTheme.colorScheme.surface
-        },
-        tonalElevation = if (task.done) 0.dp else 1.dp,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier
-                .clickable(onClick = onEdit)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Checkbox(checked = task.done, onCheckedChange = onToggleDone)
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                Text(
-                    text = task.taskText,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    textDecoration = if (task.done) TextDecoration.LineThrough else null,
-                )
-                TaskMeta(task = task, onOpenNotePath = onOpenNotePath)
-            }
-            Box {
-                IconButton(onClick = { showMenu = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "任务操作")
-                }
-                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("编辑") },
-                        leadingIcon = { Icon(Icons.Outlined.Edit, null) },
-                        onClick = { showMenu = false; onEdit() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("移动到分组") },
-                        leadingIcon = { Icon(Icons.Outlined.DriveFileMove, null) },
-                        onClick = { showMenu = false; showMoveDialog = true },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("删除") },
-                        leadingIcon = { Icon(Icons.Outlined.Delete, null) },
-                        onClick = { showMenu = false; confirmDelete = true },
-                    )
-                }
-            }
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        TaskFilterMenuHeader("状态")
+        TaskFilter.entries.forEach { filter ->
+            TaskFilterMenuOption(
+                label = filter.label,
+                selected = taskFilter == filter,
+                onClick = { onTaskFilterChange(filter) },
+            )
         }
-    }
-
-    if (showMoveDialog) {
-        AlertDialog(
-            onDismissRequest = { showMoveDialog = false },
-            title = { Text("移动到分组") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    (listOf<TaskGroupEntity?>(null) + groups).forEach { group ->
-                        TextButton(
-                            onClick = { showMoveDialog = false; onMove(group?.id) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(if (group == null) "未分组" else group.name, modifier = Modifier.fillMaxWidth())
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { showMoveDialog = false }) { Text("取消") } },
+        HorizontalDivider()
+        TaskFilterMenuHeader("清单")
+        TaskFilterMenuOption(
+            label = "全部任务",
+            selected = taskGroupFilter is MainViewModel.NoteFilter.All,
+            onClick = { onTaskGroupFilterChange(MainViewModel.NoteFilter.All) },
         )
-    }
-
-    if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("删除任务？") },
-            text = { Text("“${task.taskText}”删除后无法恢复。") },
-            confirmButton = {
-                TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("删除") }
-            },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
+        val selectedGroupPath =
+            (taskGroupFilter as? MainViewModel.NoteFilter.Label)?.name
+                ?.let(::normalizeFolderPathForUi)
+        TaskFilterMenuOption(
+            label = "未分组",
+            selected = selectedGroupPath != null && selectedGroupPath.isBlank(),
+            onClick = { onTaskGroupFilterChange(MainViewModel.NoteFilter.Label("")) },
+        )
+        groups.forEach { group ->
+            val groupPath = normalizeFolderPathForUi(group.name)
+            TaskFilterMenuOption(
+                label = groupPath.replace("/", " › "),
+                selected = selectedGroupPath == groupPath,
+                onClick = { onTaskGroupFilterChange(MainViewModel.NoteFilter.Label(groupPath)) },
+            )
+        }
+        HorizontalDivider()
+        TaskFilterMenuHeader("排序")
+        TaskSort.entries.forEach { sort ->
+            TaskFilterMenuOption(
+                label = sort.label,
+                selected = taskSort == sort,
+                onClick = { onTaskSortChange(sort) },
+            )
+        }
+        HorizontalDivider()
+        DropdownMenuItem(
+            text = { Text("重置筛选") },
+            enabled =
+                taskFilter != TaskFilter.ALL ||
+                    taskGroupFilter !is MainViewModel.NoteFilter.All ||
+                    taskSort != TaskSort.MANUAL ||
+                    showGlobalTasksOnly,
+            onClick = onReset,
         )
     }
 }
 
 @Composable
-private fun TaskMeta(
-    task: TaskEntity,
-    onOpenNotePath: (String) -> Unit,
-) {
-    val reminder = task.reminderAt?.let { reminderStatusText(it) }
-    val due = task.dueAt?.let { dueStatusText(it) }
-    val priority = priorityLabel(task.priority).takeUnless { task.priority == 0 }
-    val repeat = TaskRepeat.from(task.repeatRule).label.takeUnless { task.repeatRule == TaskRepeat.NONE.value }
-    val notes = "有备注".takeIf { task.notes.isNotBlank() }
-    val notePath = task.notePath?.takeIf { it.isNotBlank() }
-    val text = listOfNotNull(priority, due, reminder, repeat, notes, notePath).joinToString(" · ").ifBlank { "无日期" }
+private fun TaskFilterMenuHeader(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.bodySmall,
+        style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
-        modifier = if (notePath == null) Modifier else Modifier.clickable { onOpenNotePath(notePath) },
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
     )
 }
 
 @Composable
-private fun MarkdownTaskRow(
-    item: MarkdownTaskItem,
-    onOpenNotePath: (String) -> Unit,
+private fun TaskFilterMenuOption(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onOpenNotePath(item.notePath) },
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.CheckBox,
-                contentDescription = null,
-                tint = if (item.done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = item.taskText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    textDecoration = if (item.done) TextDecoration.LineThrough else null,
-                )
-                Text(
-                    text = "${item.noteTitle.ifBlank { item.notePath }} · 第 ${item.lineNumber} 行",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
+    DropdownMenuItem(
+        text = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        leadingIcon = { RadioButton(selected = selected, onClick = null) },
+        onClick = onClick,
+    )
 }
 
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun TaskEditorDialog(
+internal fun LegacyTaskEditorDialog(
     task: TaskEntity?,
     groups: List<TaskGroupEntity> = emptyList(),
+    parentTasks: List<TaskEntity> = emptyList(),
+    parentTaskIds: Map<Long, Long> = emptyMap(),
+    initialGroupId: Long? = null,
+    initialParentTaskId: Long? = null,
     autoFocusTitle: Boolean = false,
-    embeddedOverlay: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (TaskEditorResult) -> Unit,
 ) {
-    var text by remember(task?.id) { mutableStateOf(task?.taskText.orEmpty()) }
-    var done by remember(task?.id) { mutableStateOf(task?.done ?: false) }
-    var groupId by remember(task?.id) { mutableStateOf(task?.groupId) }
-    var priority by remember(task?.id) { mutableStateOf(task?.priority ?: 0) }
-    var dueAt by remember(task?.id) { mutableStateOf(task?.dueAt) }
-    var reminderAt by remember(task?.id) { mutableStateOf(task?.reminderAt) }
-    var reminderPopup by remember(task?.id) {
-        mutableStateOf((task?.reminderMode ?: TaskEntity.REMINDER_MODE_POPUP) != TaskEntity.REMINDER_MODE_NOTIFICATION)
-    }
-    var reminderRing by remember(task?.id) { mutableStateOf(task?.reminderRing ?: true) }
-    var reminderVibrate by remember(task?.id) { mutableStateOf(task?.reminderVibrate ?: true) }
-    var repeatRule by remember(task?.id) { mutableStateOf(TaskRepeat.from(task?.repeatRule ?: TaskRepeat.NONE.value)) }
-    var notes by remember(task?.id) { mutableStateOf(task?.notes.orEmpty()) }
-    var error by remember(task?.id) { mutableStateOf<String?>(null) }
-    var showGroupMenu by remember(task?.id) { mutableStateOf(false) }
-    var showPriorityMenu by remember(task?.id) { mutableStateOf(false) }
-    var showRepeatMenu by remember(task?.id) { mutableStateOf(false) }
-    var showDuePicker by remember(task?.id) { mutableStateOf(false) }
-    var showReminderPicker by remember(task?.id) { mutableStateOf(false) }
+    val editorState = rememberTaskEditorState(task, initialGroupId, initialParentTaskId, parentTaskIds)
+    with(editorState) {
     val titleFocusRequester = remember { FocusRequester() }
-    val editorScrollState = rememberScrollState()
+    val lightEditor = MaterialTheme.colorScheme.background.luminance() > 0.5f
+    val editorActionColor = if (lightEditor) Color(0xFFCBDDEE) else MaterialTheme.colorScheme.primaryContainer
+    val editorFieldColor = if (lightEditor) Color(0xFFF8F8F8) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f)
+    val editorPlaceholderColor = if (lightEditor) Color(0xFFC8C1C1) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.48f)
+    val editorHeaderHeight = 64.dp
+    val editorToolbarHeight = 60.dp
+    val editorIconSize = 26.dp
+    val editorTextSize = 17.sp
+    val editorNotesTextSize = 14.sp
+    val editorPanelHeight =
+        200.dp +
+            (if (showInlineChildInput) 44.dp * childTaskTexts.size else 0.dp) +
+            (if (reminderAt != null) 48.dp else 0.dp) +
+            (if (error != null) 28.dp else 0.dp)
+    val childFocusRequesters =
+        remember(childTaskTexts.size) {
+            List(childTaskTexts.size) { FocusRequester() }
+        }
 
     LaunchedEffect(autoFocusTitle) {
         if (autoFocusTitle) {
@@ -1410,20 +1996,52 @@ internal fun TaskEditorDialog(
             titleFocusRequester.requestFocus()
         }
     }
+    LaunchedEffect(showInlineChildInput, focusedChildIndex, childTaskTexts.size) {
+        val index = focusedChildIndex
+        if (showInlineChildInput && index != null) {
+            withFrameNanos { }
+            childFocusRequesters.getOrNull(index)?.requestFocus()
+        }
+    }
+    BackHandler(enabled = showGroupMenu || showPriorityMenu || showParentMenu) {
+        showGroupMenu = false
+        showPriorityMenu = false
+        showParentMenu = false
+    }
+
+    val descendantTaskIds =
+        remember(task?.id, parentTaskIds) {
+            task?.id?.let { TaskHierarchy.descendants(it, parentTaskIds) }.orEmpty()
+        }
+    val selectableParentTasks =
+        parentTasks.filter { parent ->
+            !parent.isTrashed &&
+                parent.id != task?.id &&
+                parent.id !in descendantTaskIds &&
+                parent.groupId == groupId
+        }
+
+    LaunchedEffect(groupId, selectableParentTasks) {
+        if (parentTaskId != null && selectableParentTasks.none { it.id == parentTaskId }) {
+            parentTaskId = null
+            parentTaskSelectionChanged = true
+        }
+    }
 
     fun submitTask() {
         val trimmedText = text.trim()
         if (trimmedText.isBlank()) {
-            error = "任务标题不能为空"
+            error = "任务描述不能为空"
             return
         }
-        val selectedReminderAt = reminderAt
-        if (!done && selectedReminderAt != null && selectedReminderAt <= System.currentTimeMillis() + 1000L) {
-            error = "提醒时间需要晚于当前时间"
+        val selectedStartAt = reminderAt
+        val selectedEndAt = dueAt
+        if (selectedStartAt != null && selectedEndAt != null && selectedStartAt > selectedEndAt) {
+            error = "开始时间不能晚于结束时间"
             return
         }
-        if (repeatRule != TaskRepeat.NONE && dueAt == null && reminderAt == null) {
-            error = "重复任务需要到期时间或提醒时间"
+        if (TaskRepeat.from(repeatRule) != TaskRepeat.NONE && selectedEndAt == null && selectedStartAt == null) {
+            error = "重复任务需要开始或结束时间"
             return
         }
         onSave(
@@ -1433,120 +2051,380 @@ internal fun TaskEditorDialog(
                 groupId = groupId,
                 priority = priority,
                 dueAt = dueAt,
-                reminderAt = selectedReminderAt,
-                repeatRule = repeatRule.value,
+                reminderAt = reminderAt,
+                repeatRule = repeatRule,
                 notes = notes.trim(),
                 reminderMode = if (reminderPopup) TaskEntity.REMINDER_MODE_POPUP else TaskEntity.REMINDER_MODE_NOTIFICATION,
                 reminderRing = reminderRing,
                 reminderVibrate = reminderVibrate,
+                parentTaskId = parentTaskId,
+                parentTaskSelectionChanged = parentTaskSelectionChanged,
+                childTaskTexts = childTaskTexts,
             ),
         )
     }
 
-    val editorFields: @Composable (Modifier) -> Unit = { modifier ->
-        Column(
-            modifier = modifier.verticalScroll(editorScrollState),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+    fun toggleInlineChildInput() {
+        if (showInlineChildInput) {
+            titleFocusRequester.requestFocus()
+            showInlineChildInput = false
+            childTaskTexts = emptyList()
+            focusedChildIndex = null
+        } else {
+            showInlineChildInput = true
+            childTaskTexts = listOf("")
+            focusedChildIndex = 0
+        }
+    }
+
+    fun updateChildTaskText(
+        index: Int,
+        value: String,
+    ) {
+        val lines = value.replace('\r', '\n').split('\n')
+        val next = childTaskTexts.toMutableList()
+        next[index] = lines.first()
+        if (lines.size > 1) {
+            next.addAll(index + 1, lines.drop(1))
+            focusedChildIndex = index + 1
+        }
+        childTaskTexts = next
+    }
+
+    val editorPanel: @Composable (Modifier) -> Unit = { modifier ->
+        Box(
+            modifier =
+                modifier
+                    .fillMaxWidth()
+                    .height(editorPanelHeight),
         ) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = {
-                    text = it
-                    error = null
-                },
-                label = { Text("任务标题") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(titleFocusRequester),
-            )
-            OutlinedTextField(
-                value = notes,
-                onValueChange = { notes = it },
-                label = { Text("备注") },
-                placeholder = { Text("补充描述（可选）") },
-                minLines = 2,
-                maxLines = 3,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Column(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()),
             ) {
-                Box {
-                    TaskEditorCompactOption(
-                        icon = { Icon(Icons.Outlined.Folder, null) },
-                        label = "分组",
-                        value = groups.firstOrNull { it.id == groupId }?.name ?: "未分组",
-                        onClick = { showGroupMenu = true },
-                    )
-                    DropdownMenu(expanded = showGroupMenu, onDismissRequest = { showGroupMenu = false }) {
-                        (listOf<TaskGroupEntity?>(null) + groups).forEach { group ->
-                            DropdownMenuItem(
-                                text = { Text(group?.name ?: "未分组") },
-                                onClick = { groupId = group?.id; showGroupMenu = false },
-                            )
-                        }
-                    }
-                }
-                Box {
-                    TaskEditorCompactOption(
-                        icon = { Icon(Icons.Outlined.Flag, null) },
-                        label = "优先级",
-                        value = priorityLabel(priority),
-                        onClick = { showPriorityMenu = true },
-                    )
-                    DropdownMenu(expanded = showPriorityMenu, onDismissRequest = { showPriorityMenu = false }) {
-                        (0..3).forEach { value ->
-                            DropdownMenuItem(
-                                text = { Text(priorityLabel(value)) },
-                                onClick = { priority = value; showPriorityMenu = false },
-                            )
-                        }
-                    }
-                }
-                TaskEditorCompactOption(
-                    icon = { Icon(Icons.Outlined.CalendarMonth, null) },
-                    label = "到期",
-                    value = dueAt?.let(::formatTaskOptionTime) ?: "无",
-                    onClick = { showDuePicker = true },
-                )
-                TaskEditorCompactOption(
-                    icon = { Icon(Icons.Outlined.Notifications, null) },
-                    label = "提醒",
-                    value = reminderAt?.let(::formatTaskOptionTime) ?: "无",
-                    onClick = { showReminderPicker = true },
-                )
-                Box {
-                    TaskEditorCompactOption(
-                        icon = { Icon(Icons.Outlined.Repeat, null) },
-                        label = "重复",
-                        value = repeatRule.label,
-                        onClick = { showRepeatMenu = true },
-                    )
-                    DropdownMenu(expanded = showRepeatMenu, onDismissRequest = { showRepeatMenu = false }) {
-                        TaskRepeat.entries.forEach { repeat ->
-                            DropdownMenuItem(
-                                text = { Text(repeat.label) },
-                                onClick = { repeatRule = repeat; showRepeatMenu = false },
-                            )
-                        }
-                    }
-                }
-            }
-            if (reminderAt != null) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        text = "提醒方式",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(
-                        modifier = Modifier
+                Box(
+                    modifier =
+                        Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
+                            .height(editorHeaderHeight),
+                ) {
+                    BasicTextField(
+                        value = text,
+                        onValueChange = {
+                            text = it.replace('\r', ' ').replace('\n', ' ')
+                            error = null
+                        },
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(
+                                    start = 44.dp,
+                                    top = 18.dp,
+                                    end = 64.dp,
+                                )
+                                .focusRequester(titleFocusRequester),
+                        textStyle =
+                            MaterialTheme.typography.headlineLarge.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Light,
+                                fontSize = editorTextSize,
+                            ),
+                        singleLine = false,
+                        maxLines = 1,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.None),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        decorationBox = { innerTextField ->
+                            Box {
+                                if (text.isBlank()) {
+                                    Text(
+                                        text = if (task == null) "添加一条新的任务" else "编辑任务",
+                                        style =
+                                            MaterialTheme.typography.headlineLarge.copy(
+                                                color = editorPlaceholderColor,
+                                                fontWeight = FontWeight.Light,
+                                                fontSize = editorTextSize,
+                                            ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Clip,
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        },
+                    )
+                    Checkbox(
+                        checked = done,
+                        onCheckedChange = { done = it },
+                        modifier =
+                            Modifier
+                                .align(Alignment.TopStart)
+                                .padding(top = 8.dp),
+                    )
+                    Box(
+                        modifier =
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 4.dp, end = 4.dp)
+                                .size(52.dp)
+                                .clip(CircleShape)
+                                .background(editorActionColor)
+                                .clickable(onClick = ::submitTask),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Check,
+                            contentDescription = "保存",
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                }
+                Surface(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .height(76.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    color = editorFieldColor,
+                ) {
+                    BasicTextField(
+                        value = notes,
+                        onValueChange = { notes = it },
+                        modifier =
+                            Modifier
+                                .fillMaxSize()
+                                .padding(
+                                    horizontal = 12.dp,
+                                    vertical = 10.dp,
+                                ),
+                        textStyle =
+                            MaterialTheme.typography.bodyLarge.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = editorNotesTextSize,
+                            ),
+                        maxLines = 8,
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        decorationBox = { innerTextField ->
+                            Box {
+                                if (notes.isBlank()) {
+                                    Text(
+                                        text = "请输入",
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = editorNotesTextSize),
+                                        color = editorPlaceholderColor,
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        },
+                    )
+                }
+                if (showInlineChildInput) {
+                    childTaskTexts.forEachIndexed { index, childText ->
+                        Row(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "·",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 20.sp,
+                                modifier = Modifier.width(20.dp),
+                            )
+                            BasicTextField(
+                                value = childText,
+                                onValueChange = { updateChildTaskText(index, it) },
+                                modifier =
+                                    Modifier
+                                        .weight(1f)
+                                        .focusRequester(childFocusRequesters[index]),
+                                textStyle =
+                                    MaterialTheme.typography.bodyLarge.copy(
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontSize = editorNotesTextSize,
+                                    ),
+                                singleLine = false,
+                                maxLines = 1,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.None),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                decorationBox = { innerTextField ->
+                                    Box {
+                                        if (childText.isBlank()) {
+                                            Text(
+                                                text = "添加子任务",
+                                                color = editorPlaceholderColor,
+                                                fontSize = editorNotesTextSize,
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .height(editorToolbarHeight),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    LegacyTaskEditorToolbarButton(
+                        icon = {
+                            Icon(
+                                painter = painterResource(R.drawable.task_date),
+                                contentDescription = "日期",
+                                modifier = Modifier.size(editorIconSize),
+                            )
+                        },
+                        onClick = { showDatePicker = true },
+                    )
+                    Box {
+                        LegacyTaskEditorToolbarButton(
+                            icon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.task_priority),
+                                    contentDescription = "优先级",
+                                    modifier = Modifier.size(editorIconSize),
+                                )
+                            },
+                            onClick = { showPriorityMenu = true },
+                        )
+                        DropdownMenu(
+                            expanded = showPriorityMenu,
+                            onDismissRequest = { showPriorityMenu = false },
+                            properties = PopupProperties(focusable = false),
+                        ) {
+                            (0..3).forEach { value ->
+                                DropdownMenuItem(
+                                    text = { Text(legacyPriorityLabel(value)) },
+                                    onClick = {
+                                        priority = value
+                                        showPriorityMenu = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    Box {
+                        LegacyTaskEditorToolbarButton(
+                            icon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.task_subtask),
+                                    contentDescription = "子任务",
+                                    tint =
+                                        if (!showInlineChildInput && parentTaskId == null) {
+                                            MaterialTheme.colorScheme.onSurface
+                                        } else {
+                                            MaterialTheme.colorScheme.primary
+                                        },
+                                    modifier = Modifier.size(editorIconSize),
+                                )
+                            },
+                            onClick = ::toggleInlineChildInput,
+                        )
+                    }
+                    Box {
+                        LegacyTaskEditorToolbarButton(
+                            icon = {
+                                Icon(
+                                    imageVector = Icons.Outlined.AccountTree,
+                                    contentDescription = "父任务",
+                                    tint =
+                                        if (parentTaskId == null) {
+                                            MaterialTheme.colorScheme.onSurface
+                                        } else {
+                                            MaterialTheme.colorScheme.primary
+                                        },
+                                    modifier = Modifier.size(editorIconSize),
+                                )
+                            },
+                            onClick = { showParentMenu = true },
+                        )
+                        DropdownMenu(
+                            expanded = showParentMenu,
+                            onDismissRequest = { showParentMenu = false },
+                            modifier = Modifier.widthIn(min = 180.dp, max = 260.dp),
+                            properties =
+                                PopupProperties(
+                                    focusable = false,
+                                    dismissOnBackPress = false,
+                                    dismissOnClickOutside = true,
+                                ),
+                        ) {
+                            Text(
+                                text = "选择父任务",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                            DropdownMenuItem(
+                                text = { Text("无父任务") },
+                                trailingIcon = {
+                                    if (parentTaskId == null) {
+                                        Icon(Icons.Outlined.Check, contentDescription = null)
+                                    }
+                                },
+                                onClick = {
+                                    parentTaskId = null
+                                    parentTaskSelectionChanged = true
+                                    showParentMenu = false
+                                },
+                            )
+                            selectableParentTasks
+                                .forEach { parent ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(parent.taskText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        },
+                                        trailingIcon = {
+                                            if (parent.id == parentTaskId) {
+                                                Icon(Icons.Outlined.Check, contentDescription = null)
+                                            }
+                                        },
+                                        onClick = {
+                                            parentTaskId = parent.id
+                                            parentTaskSelectionChanged = true
+                                            groupId = parent.groupId
+                                            showParentMenu = false
+                                        },
+                                    )
+                                }
+                        }
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    Box {
+                        Row(
+                            modifier =
+                                Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { showGroupMenu = true }
+                                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = groups.firstOrNull { it.id == groupId }?.name?.substringAfterLast('/') ?: "未分组",
+                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 14.sp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Icon(Icons.Filled.ArrowDropDown, contentDescription = "选择分组")
+                        }
+                    }
+                }
+                if (reminderAt != null) {
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         FilterChip(
@@ -1571,829 +2449,167 @@ internal fun TaskEditorDialog(
                         )
                     }
                 }
-            }
-            if (task != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = done, onCheckedChange = { done = it })
-                    Text("已完成")
-                }
-            }
-            error?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-    }
-
-    if (embeddedOverlay) {
-        val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-        val panelHeight = (screenHeight - 340.dp).coerceIn(300.dp, 440.dp)
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 24.dp),
-            contentAlignment = Alignment.TopCenter,
-        ) {
-            Surface(
-                modifier = Modifier
-                    .widthIn(max = 440.dp)
-                    .fillMaxWidth()
-                    .height(panelHeight),
-                shape = MaterialTheme.shapes.extraLarge,
-                color = MaterialTheme.colorScheme.background,
-                tonalElevation = 8.dp,
-                shadowElevation = 14.dp,
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = if (task == null) "添加任务" else "编辑任务",
-                            style = MaterialTheme.typography.titleLarge,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = onDismiss) {
-                            Text("取消")
-                        }
-                        TextButton(onClick = ::submitTask) {
-                            Text("保存")
-                        }
-                    }
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
+                error?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(bottom = 4.dp),
                     )
-                    Spacer(Modifier.height(10.dp))
-                    editorFields(Modifier.weight(1f))
                 }
             }
         }
-    } else {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text(if (task == null) "添加任务" else "编辑任务") },
-            text = { editorFields(Modifier) },
-            confirmButton = {
-                TextButton(onClick = ::submitTask) {
-                    Text("保存")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss) {
-                    Text("取消")
-                }
-            },
-        )
     }
 
-    if (showDuePicker) {
-        TaskReminderPickerDialog(
-            title = "到期时间",
-            initialReminderAt = dueAt,
-            onDismiss = { showDuePicker = false },
-            onClear = { dueAt = null; showDuePicker = false },
-            onReminderSelected = { dueAt = it; showDuePicker = false },
-        )
-    }
-
-    if (showReminderPicker) {
-        TaskReminderPickerDialog(
-            title = "提醒时间",
-            initialReminderAt = reminderAt,
-            onDismiss = { showReminderPicker = false },
-            onClear = {
-                reminderAt = null
-                error = null
-                showReminderPicker = false
-            },
-            onReminderSelected = { selected ->
-                reminderAt = selected
-                error = if (selected <= System.currentTimeMillis() + 1000L) {
-                    "提醒时间需要晚于当前时间"
-                } else {
-                    null
-                }
-                showReminderPicker = false
-            },
-        )
-    }
-}
-
-@Composable
-private fun TaskEditorCompactOption(
-    icon: @Composable () -> Unit,
-    label: String,
-    value: String,
-    onClick: () -> Unit,
-) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-        modifier = Modifier
-            .width(92.dp)
-            .height(72.dp)
-            .clickable(onClick = onClick),
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            icon()
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-            Text(
-                text = value,
-                style = MaterialTheme.typography.bodySmall,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-}
-
-private fun formatTaskOptionTime(timeMillis: Long): String =
-    SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(timeMillis))
-
-private fun formatReminderTime(timeMillis: Long): String =
-    SimpleDateFormat(TASK_REMINDER_PATTERN, Locale.getDefault()).format(Date(timeMillis))
-
-private fun reminderStatusText(timeMillis: Long): String {
-    val now = System.currentTimeMillis()
-    val prefix = when {
-        timeMillis < now -> "已过提醒"
-        timeMillis <= endOfTodayMillis(now) -> "今天提醒"
-        timeMillis <= endOfTomorrowMillis(now) -> "明天提醒"
-        else -> "提醒"
-    }
-    return "$prefix ${formatReminderTime(timeMillis)}"
-}
-
-private fun dueStatusText(timeMillis: Long): String {
-    val now = System.currentTimeMillis()
-    val prefix = when {
-        timeMillis < now -> "已逾期"
-        timeMillis <= endOfTodayMillis(now) -> "今天到期"
-        timeMillis <= endOfTomorrowMillis(now) -> "明天到期"
-        else -> "到期"
-    }
-    return "$prefix ${formatReminderTime(timeMillis)}"
-}
-
-private fun priorityLabel(priority: Int): String = when (priority) {
-    3 -> "高优先级"
-    2 -> "中优先级"
-    1 -> "低优先级"
-    else -> "无优先级"
-}
-
-@Composable
-private fun TaskReminderPickerDialog(
-    title: String,
-    initialReminderAt: Long?,
-    onDismiss: () -> Unit,
-    onClear: () -> Unit,
-    onReminderSelected: (Long) -> Unit,
-) {
-    val initialTime = initialReminderAt ?: System.currentTimeMillis() + 60 * 60 * 1000L
-    var selectedDateUtcMillis by remember(initialReminderAt) { mutableStateOf(utcDateMillis(initialTime)) }
-    var displayedMonthUtcMillis by remember(initialReminderAt) {
-        mutableStateOf(monthStartUtcMillis(selectedDateUtcMillis))
-    }
-    var selectedHour by remember(initialReminderAt) { mutableStateOf(hourOfDay(initialTime)) }
-    var selectedMinute by remember(initialReminderAt) { mutableStateOf(minuteOfHour(initialTime)) }
-    var timeSelected by remember(initialReminderAt) { mutableStateOf(true) }
-    var quickReminderAt by remember(initialReminderAt) { mutableStateOf<Long?>(null) }
-    var quickReminderLabel by remember(initialReminderAt) { mutableStateOf<String?>(null) }
-    var showTimePicker by remember { mutableStateOf(false) }
-    var showQuickReminderPicker by remember { mutableStateOf(false) }
-
+    val panelShape = RoundedCornerShape(16.dp)
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        properties =
+            DialogProperties(
+                usePlatformDefaultWidth = false,
+                dismissOnBackPress = true,
+                dismissOnClickOutside = true,
+                decorFitsSystemWindows = false,
+            ),
     ) {
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp,
-            shadowElevation = 8.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp),
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        DisposableEffect(dialogWindow) {
+            dialogWindow?.setDimAmount(0.12f)
+            onDispose { }
+        }
+        BoxWithConstraints(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .imePadding()
+                    .padding(horizontal = 2.dp, vertical = 2.dp),
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+            Surface(
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(editorPanelHeight.coerceAtMost(maxHeight))
+                        .clip(panelShape),
+                shape = panelShape,
+                color = MaterialTheme.colorScheme.background,
+                tonalElevation = 0.dp,
             ) {
-                TaskReminderTabs(title = title, onClear = onClear)
-                TaskReminderMonthHeader(
-                    monthUtcMillis = displayedMonthUtcMillis,
-                    onPreviousMonth = {
-                        displayedMonthUtcMillis = addMonthsUtc(displayedMonthUtcMillis, -1)
-                    },
-                    onNextMonth = {
-                        displayedMonthUtcMillis = addMonthsUtc(displayedMonthUtcMillis, 1)
-                    },
-                )
-                TaskReminderCalendar(
-                    monthUtcMillis = displayedMonthUtcMillis,
-                    selectedDateUtcMillis = selectedDateUtcMillis,
-                    onDateSelected = {
-                        selectedDateUtcMillis = it
-                        quickReminderAt = null
-                        quickReminderLabel = null
-                    },
-                )
-                TaskReminderOptions(
-                    timeText = if (timeSelected) formatClockTime(selectedHour, selectedMinute) else "无",
-                    reminderText = quickReminderLabel ?: "无",
-                    onTimeClick = { showTimePicker = true },
-                    onReminderClick = { showQuickReminderPicker = true },
-                )
+                editorPanel(Modifier.padding(horizontal = 16.dp))
+            }
+            if (showGroupMenu) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .zIndex(2f),
                 ) {
-                    TextButton(onClick = onDismiss) { Text("取消") }
-                    TextButton(
-                        onClick = {
-                            val quickAt = quickReminderAt
-                            if (quickAt != null) {
-                                onReminderSelected(quickAt)
-                            } else if (timeSelected) {
-                                onReminderSelected(
-                                    combineDateAndTime(
-                                        selectedDateUtcMillis,
-                                        selectedHour,
-                                        selectedMinute,
-                                    ),
-                                )
-                            } else {
-                                onClear()
-                            }
-                        },
+                    Spacer(
+                        modifier =
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clickable { showGroupMenu = false },
+                    )
+                    Surface(
+                        modifier =
+                            Modifier
+                                .widthIn(min = 260.dp, max = 320.dp)
+                                .fillMaxHeight(),
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        tonalElevation = 3.dp,
                     ) {
-                        Text("确定")
-                    }
-                }
-            }
-        }
-    }
-
-    if (showTimePicker) {
-        TaskReminderTimePickerDialog(
-            initialHour = selectedHour,
-            initialMinute = selectedMinute,
-            onDismiss = { showTimePicker = false },
-            onConfirm = { hour, minute ->
-                selectedHour = hour
-                selectedMinute = minute
-                timeSelected = true
-                quickReminderAt = null
-                quickReminderLabel = null
-                showTimePicker = false
-            },
-        )
-    }
-
-    if (showQuickReminderPicker) {
-        TaskQuickReminderDialog(
-            onDismiss = { showQuickReminderPicker = false },
-            onSelected = { delayMillis, label ->
-                val targetAt = System.currentTimeMillis() + delayMillis
-                quickReminderAt = targetAt
-                quickReminderLabel = label
-                selectedDateUtcMillis = utcDateMillis(targetAt)
-                displayedMonthUtcMillis = monthStartUtcMillis(selectedDateUtcMillis)
-                selectedHour = hourOfDay(targetAt)
-                selectedMinute = minuteOfHour(targetAt)
-                timeSelected = true
-                showQuickReminderPicker = false
-            },
-        )
-    }
-}
-
-@Composable
-private fun TaskReminderTabs(title: String, onClear: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(onClick = onClear) {
-            Text("清除", color = MaterialTheme.colorScheme.primary)
-        }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .weight(1f)
-                .padding(end = 48.dp),
-        )
-    }
-}
-
-@Composable
-private fun TaskReminderMonthHeader(
-    monthUtcMillis: Long,
-    onPreviousMonth: () -> Unit,
-    onNextMonth: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(onClick = onPreviousMonth) {
-            Text("‹", style = MaterialTheme.typography.headlineSmall)
-        }
-        Text(
-            text = monthTitle(monthUtcMillis),
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 20.dp),
-        )
-        TextButton(onClick = onNextMonth) {
-            Text("›", style = MaterialTheme.typography.headlineSmall)
-        }
-    }
-}
-
-@Composable
-private fun TaskReminderCalendar(
-    monthUtcMillis: Long,
-    selectedDateUtcMillis: Long,
-    onDateSelected: (Long) -> Unit,
-) {
-    val weeks = remember(monthUtcMillis) { calendarDayCells(monthUtcMillis).chunked(7) }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            listOf("日", "一", "二", "三", "四", "五", "六").forEach { label ->
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-        weeks.forEach { week ->
-            Row(modifier = Modifier.fillMaxWidth()) {
-                week.forEach { day ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .size(46.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (day != null) {
-                            TaskReminderDateCell(
-                                day = day,
-                                selected = sameUtcDate(day.dateUtcMillis, selectedDateUtcMillis),
-                                onClick = { onDateSelected(day.dateUtcMillis) },
+                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                            Text(
+                                text = "选择分组",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             )
+                            LegacyTaskGroupMenuRow(
+                                label = "未分组",
+                                depth = 0,
+                                selected = groupId == null,
+                                onClick = {
+                                    if (groupId != null && parentTaskId != null) {
+                                        parentTaskId = null
+                                        parentTaskSelectionChanged = true
+                                    }
+                                    groupId = null
+                                    showGroupMenu = false
+                                },
+                            )
+                            legacyTaskGroupTreeRows(groups).forEach { row ->
+                                LegacyTaskGroupMenuRow(
+                                    label = row.group.name.substringAfterLast('/'),
+                                    depth = row.depth,
+                                    selected = row.group.id == groupId,
+                                    onClick = {
+                                        if (groupId != row.group.id && parentTaskId != null) {
+                                            parentTaskId = null
+                                            parentTaskSelectionChanged = true
+                                        }
+                                        groupId = row.group.id
+                                        showGroupMenu = false
+                                    },
+                                )
+                            }
                         }
                     }
                 }
             }
         }
     }
-}
 
-@Composable
-private fun TaskReminderDateCell(
-    day: ReminderCalendarDay,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val colorScheme = MaterialTheme.colorScheme
-    Column(
-        modifier = Modifier
-            .size(46.dp)
-            .clip(CircleShape)
-            .background(if (selected) colorScheme.primary else colorScheme.surface)
-            .clickable(onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(
-            text = day.dayOfMonth.toString(),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = if (selected) colorScheme.onPrimary else colorScheme.onSurface,
-            textAlign = TextAlign.Center,
+    if (showDatePicker) {
+        TaskReminderPickerDialog(
+            initialReminderAt = reminderAt,
+            initialEndAt = dueAt,
+            initialRepeatRule = TaskRepeat.from(repeatRule),
+            onDismiss = { showDatePicker = false },
+            onClear = {
+                reminderAt = null
+                dueAt = null
+                repeatRule = TaskRepeat.NONE.value
+                error = null
+                showDatePicker = false
+            },
+            onDateRangeSelected = { startAt, endAt, repeat ->
+                reminderAt = startAt
+                dueAt = endAt
+                repeatRule = repeat.value
+                error = null
+                showDatePicker = false
+            },
         )
-        Text(
-            text = day.subtitle,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (selected) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            textAlign = TextAlign.Center,
-        )
+    }
     }
 }
 
 @Composable
-private fun TaskReminderOptions(
-    timeText: String,
-    reminderText: String,
-    onTimeClick: () -> Unit,
-    onReminderClick: () -> Unit,
-) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-            TaskReminderOptionRow(
-                icon = { Icon(Icons.Outlined.AccessTime, contentDescription = null) },
-                title = "时间",
-                value = timeText,
-                onClick = onTimeClick,
-            )
-            TaskReminderOptionRow(
-                icon = { Icon(Icons.Outlined.Alarm, contentDescription = null) },
-                title = "快捷",
-                value = reminderText,
-                onClick = onReminderClick,
-            )
-        }
-    }
-}
-
-@Composable
-private fun TaskReminderOptionRow(
+private fun LegacyTaskEditorToolbarButton(
     icon: @Composable () -> Unit,
-    title: String,
-    value: String,
     onClick: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Box(
+        modifier =
+            Modifier
+                .size(58.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onClick)
+                .padding(8.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(
-            modifier = Modifier.size(24.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            icon()
-        }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier
-                .padding(start = 16.dp)
-                .weight(1f),
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = "›",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier.padding(start = 8.dp),
-        )
+        icon()
     }
 }
 
-private data class QuickReminderOption(
-    val label: String,
-    val targetAt: () -> Long,
-)
-
-private val quickReminderOptions = listOf(
-    QuickReminderOption("10秒后") { System.currentTimeMillis() + 10_000L },
-    QuickReminderOption("10分钟后") { System.currentTimeMillis() + 10L * 60_000L },
-    QuickReminderOption("1小时后") { System.currentTimeMillis() + 60L * 60_000L },
-    QuickReminderOption("下个 20:00") { nextTimeMillis(20, 0) },
-    QuickReminderOption("明早 09:00") { nextMorningMillis() },
-    QuickReminderOption("明晚 20:00") { nextTimeMillis(20, 0, dayOffset = 1) },
-)
-
-@Composable
-private fun TaskQuickReminderDialog(
-    onDismiss: () -> Unit,
-    onSelected: (Long, String) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("快捷提醒") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                quickReminderOptions.forEach { option ->
-                    TaskQuickReminderRow(
-                        option = option,
-                        onClick = {
-                            val targetAt = option.targetAt()
-                            onSelected(targetAt - System.currentTimeMillis(), option.label)
-                        },
-                    )
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
-    )
-}
-
-@Composable
-private fun TaskQuickReminderRow(
-    option: QuickReminderOption,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.Alarm,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-        )
-        Text(
-            text = option.label,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(start = 12.dp),
-        )
+private fun legacyPriorityLabel(priority: Int): String =
+    when (priority) {
+        3 -> "高优先级"
+        2 -> "中优先级"
+        1 -> "低优先级"
+        else -> "无优先级"
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TaskReminderTimePickerDialog(
-    initialHour: Int,
-    initialMinute: Int,
-    onDismiss: () -> Unit,
-    onConfirm: (Int, Int) -> Unit,
-) {
-    val state = rememberTimePickerState(
-        initialHour = initialHour,
-        initialMinute = initialMinute,
-        is24Hour = true,
-    )
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        text = {
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center,
-            ) {
-                TimePicker(state = state)
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(state.hour, state.minute) }) {
-                Text("确定")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
-    )
-}
-
-private data class ReminderCalendarDay(
-    val dateUtcMillis: Long,
-    val dayOfMonth: Int,
-    val subtitle: String,
-)
-
-private fun calendarDayCells(monthUtcMillis: Long): List<ReminderCalendarDay?> {
-    val month = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
-        clear()
-        timeInMillis = monthUtcMillis
-    }
-    val firstWeekdayOffset = month.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY
-    val maxDay = month.getActualMaximum(Calendar.DAY_OF_MONTH)
-    val cells = mutableListOf<ReminderCalendarDay?>()
-    repeat(firstWeekdayOffset) { cells += null }
-    for (day in 1..maxDay) {
-        cells += ReminderCalendarDay(
-            dateUtcMillis = month.apply { set(Calendar.DAY_OF_MONTH, day) }.timeInMillis,
-            dayOfMonth = day,
-            subtitle = dateSubtitle(month.timeInMillis),
-        )
-    }
-    while (cells.size % 7 != 0) cells += null
-    return cells
-}
-
-private fun dateSubtitle(dateUtcMillis: Long): String =
-    if (sameUtcDate(dateUtcMillis, utcDateMillis(System.currentTimeMillis()))) "今天" else ""
-
-private fun monthTitle(monthUtcMillis: Long): String =
-    SimpleDateFormat("yyyy年M月", Locale.getDefault()).format(Date(monthUtcMillis))
-
-private fun monthStartUtcMillis(dateUtcMillis: Long): Long =
-    Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
-        clear()
-        timeInMillis = dateUtcMillis
-        set(Calendar.DAY_OF_MONTH, 1)
-    }.timeInMillis
-
-private fun addMonthsUtc(monthUtcMillis: Long, offset: Int): Long =
-    Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
-        clear()
-        timeInMillis = monthUtcMillis
-        add(Calendar.MONTH, offset)
-        set(Calendar.DAY_OF_MONTH, 1)
-    }.timeInMillis
-
-private fun sameUtcDate(firstUtcMillis: Long, secondUtcMillis: Long): Boolean {
-    val first = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { timeInMillis = firstUtcMillis }
-    val second = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { timeInMillis = secondUtcMillis }
-    return first.get(Calendar.YEAR) == second.get(Calendar.YEAR) &&
-        first.get(Calendar.DAY_OF_YEAR) == second.get(Calendar.DAY_OF_YEAR)
-}
-
-private fun formatClockTime(hour: Int, minute: Int): String =
-    "${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}"
-
-private fun utcDateMillis(timeMillis: Long): Long {
-    val local = Calendar.getInstance().apply { timeInMillis = timeMillis }
-    return Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
-        clear()
-        set(local.get(Calendar.YEAR), local.get(Calendar.MONTH), local.get(Calendar.DAY_OF_MONTH))
-    }.timeInMillis
-}
-
-private fun hourOfDay(timeMillis: Long): Int =
-    Calendar.getInstance().apply { timeInMillis = timeMillis }.get(Calendar.HOUR_OF_DAY)
-
-private fun minuteOfHour(timeMillis: Long): Int =
-    Calendar.getInstance().apply { timeInMillis = timeMillis }.get(Calendar.MINUTE)
-
-private fun combineDateAndTime(
-    dateUtcMillis: Long,
-    hour: Int,
-    minute: Int,
-): Long {
-    val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { timeInMillis = dateUtcMillis }
-    return Calendar.getInstance().apply {
-        clear()
-        set(
-            utc.get(Calendar.YEAR),
-            utc.get(Calendar.MONTH),
-            utc.get(Calendar.DAY_OF_MONTH),
-            hour,
-            minute,
-            0,
-        )
-        set(Calendar.MILLISECOND, 0)
-    }.timeInMillis
-}
-
-private fun startOfTodayMillis(now: Long): Long =
-    Calendar.getInstance().apply {
-        timeInMillis = now
-        set(Calendar.HOUR_OF_DAY, 0)
-        set(Calendar.MINUTE, 0)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-    }.timeInMillis
-
-private fun endOfTodayMillis(now: Long): Long =
-    Calendar.getInstance().apply {
-        timeInMillis = now
-        set(Calendar.HOUR_OF_DAY, 23)
-        set(Calendar.MINUTE, 59)
-        set(Calendar.SECOND, 59)
-        set(Calendar.MILLISECOND, 999)
-    }.timeInMillis
-
-private fun endOfTomorrowMillis(now: Long): Long =
-    Calendar.getInstance().apply {
-        timeInMillis = now
-        add(Calendar.DAY_OF_MONTH, 1)
-        set(Calendar.HOUR_OF_DAY, 23)
-        set(Calendar.MINUTE, 59)
-        set(Calendar.SECOND, 59)
-        set(Calendar.MILLISECOND, 999)
-    }.timeInMillis
-
-private fun nextMorningMillis(): Long =
-    nextTimeMillis(hour = 9, minute = 0, dayOffset = 1)
-
-private fun nextTimeMillis(
-    hour: Int,
-    minute: Int,
-    dayOffset: Int = 0,
-): Long {
-    val now = System.currentTimeMillis()
-    return Calendar.getInstance().apply {
-        timeInMillis = now
-        add(Calendar.DAY_OF_MONTH, dayOffset)
-        set(Calendar.HOUR_OF_DAY, hour)
-        set(Calendar.MINUTE, minute)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-        if (timeInMillis <= now) {
-            add(Calendar.DAY_OF_MONTH, 1)
-        }
-    }.timeInMillis
-}
-
-private fun openAppNotificationSettings(context: Context) {
-    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-    } else {
-        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-            .setData(Uri.parse("package:${context.packageName}"))
-    }
-    runCatching {
-        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    }
-}
-
-private fun openExactAlarmSettings(context: Context) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-    val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-        .setData(Uri.parse("package:${context.packageName}"))
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    runCatching { context.startActivity(intent) }
-        .onFailure {
-            runCatching {
-                context.startActivity(
-                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                        .setData(Uri.parse("package:${context.packageName}"))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                )
-            }
-        }
-}
-
-private fun openFullScreenIntentSettings(context: Context) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
-    runCatching {
-        context.startActivity(
-            Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
-                .setData(Uri.parse("package:${context.packageName}"))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-    }
-}
-
-private fun openReminderChannelSettings(context: Context) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    runCatching {
-        context.startActivity(
-            Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-                .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                .putExtra(Settings.EXTRA_CHANNEL_ID, TaskReminderScheduler.CHANNEL_ID)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-    }
-}
-
-private fun openOverlayPermissionSettings(context: Context) {
-    runCatching {
-        context.startActivity(
-            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
-                .setData(Uri.parse("package:${context.packageName}"))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-    }.onFailure {
-        runCatching {
-            context.startActivity(
-                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                    .setData(Uri.parse("package:${context.packageName}"))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }
-    }
-}

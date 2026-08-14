@@ -309,27 +309,29 @@ private class WebPageMarkdownImporter(
             requestBuilder.header("Cookie", cookie)
         }
 
-        return try {
-            httpClient.newCall(requestBuilder.build()).execute().use { response ->
-                if (response.code == 401 || response.code == 403) {
-                    KardLeafLog.w(
-                        WEB_CLIP_LOG_TAG,
-                        "direct fetch requires browser host=${url.host} status=${response.code}",
-                    )
-                    throw WebClipBrowserRequiredException(
-                        pageUrl = url.toString(),
-                        message = "网站返回 HTTP ${response.code}，请在网页登录后保存当前页面",
-                    )
+        return withContext(Dispatchers.IO) {
+            try {
+                httpClient.newCall(requestBuilder.build()).execute().use { response ->
+                    if (response.code == 401 || response.code == 403) {
+                        KardLeafLog.w(
+                            WEB_CLIP_LOG_TAG,
+                            "direct fetch requires browser host=${url.host} status=${response.code}",
+                        )
+                        throw WebClipBrowserRequiredException(
+                            pageUrl = url.toString(),
+                            message = "网站返回 HTTP ${response.code}，请在网页登录后保存当前页面",
+                        )
+                    }
+                    if (!response.isSuccessful) {
+                        throw WebClipImportException("网页请求失败（HTTP ${response.code}）")
+                    }
+                    readLimitedBody(response.body)
                 }
-                if (!response.isSuccessful) {
-                    throw WebClipImportException("网页请求失败（HTTP ${response.code}）")
-                }
-                readLimitedBody(response.body)
+            } catch (error: WebClipImportException) {
+                throw error
+            } catch (error: Exception) {
+                throw WebClipImportException("网页下载失败，请检查链接或网络连接", error)
             }
-        } catch (error: WebClipImportException) {
-            throw error
-        } catch (error: Exception) {
-            throw WebClipImportException("网页下载失败，请检查链接或网络连接", error)
         }
     }
 

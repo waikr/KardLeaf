@@ -17,8 +17,12 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,12 +67,16 @@ fun FolderPathStrip(
     onOpenFolder: (String) -> Unit,
     onShowAllInFolder: (String) -> Unit = { path -> onOpenFolder(path) },
     rootChip: FolderChipData? = null,
+    leadingChips: List<FolderChipData> = emptyList(),
+    selectedLeadingPath: String? = null,
     previewPath: String = "",
     pagerCurrentPage: Int = -1,
     pagerSettledPage: Int = -1,
     pagerScrolling: Boolean = false,
     folderOrderVersion: Int = 0,
     savedOrderFor: (String) -> List<String> = { emptyList() },
+    editMode: Boolean = false,
+    onAddFolder: (String) -> Unit = {},
 ) {
     val filterLabel = currentFilter as? MainViewModel.NoteFilter.Label
     val filterPath = filterLabel?.name.orEmpty()
@@ -77,6 +85,12 @@ fun FolderPathStrip(
     val rows = remember(labels, currentPath, folderOrderVersion) {
         buildFolderRows(labels, currentPath, savedOrderFor)
     }
+    val visibleRows =
+        if (rows.isEmpty() && (rootChip != null || leadingChips.isNotEmpty() || editMode)) {
+            listOf(FolderRow(parentPath = "", children = emptyList(), selectedPath = null))
+        } else {
+            rows
+        }
 
     Column(
         modifier =
@@ -86,15 +100,20 @@ fun FolderPathStrip(
                 .clipToBounds(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        rows.forEach { row ->
-            val rowChildren = remember(row.children, row.parentPath, rootChip) {
-                if (row.parentPath.isBlank() && rootChip != null) {
-                    listOf(rootChip) + row.children
+        visibleRows.forEach { row ->
+            val rowChildren = remember(row.children, row.parentPath, rootChip, leadingChips) {
+                if (row.parentPath.isBlank()) {
+                    buildList {
+                        rootChip?.let(::add)
+                        addAll(leadingChips)
+                        addAll(row.children)
+                    }
                 } else {
                     row.children
                 }
             }
             val selectedPath = when {
+                row.parentPath.isBlank() && selectedLeadingPath != null -> selectedLeadingPath
                 row.parentPath.isBlank() && rootChip != null && currentFilter is MainViewModel.NoteFilter.All -> rootChip.path
                 else -> row.selectedPath
             }
@@ -152,6 +171,7 @@ fun FolderPathStrip(
                     rowChildren.forEach { folder ->
                         key(folder.path) {
                             val isRootChip = rootChip != null && row.parentPath.isBlank() && folder.path == rootChip.path
+                            val isLeadingChip = row.parentPath.isBlank() && leadingChips.any { it.path == folder.path }
                             val isHighlighted = folder.path == selectedPath
                             // recursive 模式下，被选中并显示全部子笔记的高亮分类项追加" · 全部"后缀
                             val displayText =
@@ -165,7 +185,7 @@ fun FolderPathStrip(
                                 selected = isHighlighted,
                                 modifier = Modifier.bringIntoViewRequester(requesters.getValue(folder.path)),
                                 onClick = {
-                                    if (isRootChip) {
+                                    if (isRootChip || isLeadingChip) {
                                         onOpenFolder(folder.path)
                                     } else if (isHighlighted) {
                                         // 点击高亮（当前选中）的分类标签 → 显示该文件夹全部子笔记
@@ -176,6 +196,11 @@ fun FolderPathStrip(
                                     }
                                 },
                             )
+                        }
+                    }
+                    if (editMode) {
+                        IconButton(onClick = { onAddFolder(row.parentPath) }) {
+                            Icon(Icons.Outlined.Add, contentDescription = "在此分类添加分类项")
                         }
                     }
                 }

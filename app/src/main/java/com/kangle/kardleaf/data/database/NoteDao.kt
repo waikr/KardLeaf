@@ -36,12 +36,12 @@ interface NoteDao {
     fun getArchivedNotes(): Flow<List<NoteEntity>>
 
     @Query(
-        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE folder = :folder AND isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE folder = :folder AND isTrashed = 0 AND isArchived = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
     )
     fun getNotesByFolder(folder: String): Flow<List<NoteEntity>>
 
     @Query(
-        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE (folder = :folder OR folder LIKE :folderPrefix) AND isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE (folder = :folder OR folder LIKE :folderPrefix) AND isTrashed = 0 AND isArchived = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
     )
     fun getNotesByFolderRecursive(
         folder: String,
@@ -49,7 +49,7 @@ interface NoteDao {
     ): Flow<List<NoteEntity>>
 
     @Query(
-        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isFavorite = 1 AND isTrashed = 0 ORDER BY lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE isFavorite = 1 AND isTrashed = 0 AND isArchived = 0 ORDER BY lastModifiedMs DESC",
     )
     fun getFavoriteNotes(): Flow<List<NoteEntity>>
 
@@ -86,19 +86,15 @@ interface NoteDao {
             filePath AS noteId,
             CASE
                 WHEN title LIKE '%' || :query || '%' THEN '标题'
-                WHEN folder LIKE '%' || :query || '%' THEN '文件夹'
-                WHEN yamlTags LIKE '%' || :query || '%' THEN '标签'
                 ELSE '正文'
             END AS scope,
             CASE
                 WHEN title LIKE '%' || :query || '%' THEN title
-                WHEN folder LIKE '%' || :query || '%' THEN folder
-                WHEN yamlTags LIKE '%' || :query || '%' THEN yamlTags
                 WHEN content LIKE '%' || :query || '%' THEN
                     (CASE WHEN instr(lower(content), lower(:query)) > 61 THEN '...' ELSE '' END) ||
                     trim(replace(replace(substr(content, max(instr(lower(content), lower(:query)) - 60, 1), 60 + length(:query) + 90), char(13), ' '), char(10), ' ')) ||
                     (CASE WHEN instr(lower(content), lower(:query)) + length(:query) + 90 <= length(content) THEN '...' ELSE '' END)
-                ELSE yamlTags
+                ELSE ''
             END AS snippet,
             CASE
                 WHEN content LIKE '%' || :query || '%' THEN instr(lower(content), lower(:query)) - 1
@@ -108,9 +104,7 @@ interface NoteDao {
         WHERE isTrashed = 0
         AND (
             title LIKE '%' || :query || '%'
-            OR folder LIKE '%' || :query || '%'
             OR content LIKE '%' || :query || '%'
-            OR yamlTags LIKE '%' || :query || '%'
         )
         ORDER BY lastModifiedMs DESC
         LIMIT :limit
@@ -120,6 +114,9 @@ interface NoteDao {
         query: String,
         limit: Int,
     ): Flow<List<NoteSearchMatch>>
+
+    @Query("SELECT * FROM notes ORDER BY lastModifiedMs DESC")
+    fun getAllSearchableNotes(): Flow<List<NoteEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNote(note: NoteEntity)
@@ -288,16 +285,16 @@ interface NoteDao {
         yamlTags: String,
     )
 
-    @Query("SELECT yamlTags FROM notes WHERE yamlTags != '' AND isTrashed = 0")
+    @Query("SELECT yamlTags FROM notes WHERE yamlTags != '' AND isTrashed = 0 AND isArchived = 0")
     fun getAllYamlTagRows(): Flow<List<String>>
 
     @Query(
-        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE yamlTags LIKE '%' || :needle || '%' AND isTrashed = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, substr(contentPreview, 1, 200) AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE yamlTags LIKE '%' || :needle || '%' AND isTrashed = 0 AND isArchived = 0 ORDER BY isPinned DESC, lastModifiedMs DESC",
     )
     fun getNotesByYamlTag(needle: String): Flow<List<NoteEntity>>
 
     @Query(
-        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE yamlTags LIKE '%' || :needle || '%' AND isTrashed = 0",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE yamlTags LIKE '%' || :needle || '%' AND isTrashed = 0 AND isArchived = 0",
     )
     suspend fun getNotesByYamlTagSync(needle: String): List<NoteEntity>
 

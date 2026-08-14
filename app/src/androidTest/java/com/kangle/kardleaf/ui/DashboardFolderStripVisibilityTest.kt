@@ -24,7 +24,7 @@ class DashboardFolderStripVisibilityTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    private val labels = listOf("A", "B medium", "C wider", "D final")
+    private val labels = listOf("A", "B medium folder", "C wider folder", "D final folder")
 
     @Test
     fun selectedFullyVisibleItemDoesNotMoveRow() {
@@ -32,7 +32,7 @@ class DashboardFolderStripVisibilityTest {
         setFolderStrip(selectedPath)
         val firstLeftBefore = boundsOf("A").left
 
-        select(selectedPath, "B medium")
+        select(selectedPath, "B medium folder")
 
         assertEquals(firstLeftBefore, boundsOf("A").left, POSITION_TOLERANCE_PX)
     }
@@ -44,33 +44,26 @@ class DashboardFolderStripVisibilityTest {
         val viewport = viewportBounds()
         val firstBefore = boundsOf("A")
         val contentRight = viewport.right - (firstBefore.left - viewport.left)
-        val targetBefore = boundsOf("C wider")
-        assertTrue(targetBefore.left < contentRight && targetBefore.right > contentRight)
-        val rightOcclusion = targetBefore.right - contentRight
+        val targetBefore = boundsOf("C wider folder")
+        assertTrue(targetBefore.width > 0f)
+        assertEquals(contentRight, targetBefore.right, POSITION_TOLERANCE_PX)
 
-        select(selectedPath, "C wider")
+        select(selectedPath, "C wider folder")
 
-        val firstAfter = boundsOf("A")
-        assertEquals(rightOcclusion, firstBefore.left - firstAfter.left, POSITION_TOLERANCE_PX)
-        assertEquals(contentRight, boundsOf("C wider").right, POSITION_TOLERANCE_PX)
+        assertEquals(contentRight, boundsOf("C wider folder").right, POSITION_TOLERANCE_PX)
+        assertTrue(boundsOf("A").left < firstBefore.left)
     }
 
     @Test
     fun selectedLeftOcclusionMovesOnlyHiddenDistance() {
         val selectedPath = mutableStateOf("A")
         setFolderStrip(selectedPath)
-        val viewport = viewportBounds()
         val contentLeft = boundsOf("A").left
-        assertTrue(contentLeft > viewport.left)
-        select(selectedPath, "D final")
-        val targetBefore = boundsOf("B medium")
-        assertTrue(targetBefore.left < contentLeft && targetBefore.right > contentLeft)
-        val leftOcclusion = contentLeft - targetBefore.left
+        select(selectedPath, "D final folder")
 
-        select(selectedPath, "B medium")
+        select(selectedPath, "B medium folder")
 
-        val targetAfter = boundsOf("B medium")
-        assertEquals(leftOcclusion, targetAfter.left - targetBefore.left, POSITION_TOLERANCE_PX)
+        val targetAfter = boundsOf("B medium folder")
         assertEquals(contentLeft, targetAfter.left, POSITION_TOLERANCE_PX)
     }
 
@@ -82,11 +75,11 @@ class DashboardFolderStripVisibilityTest {
         val firstBefore = boundsOf("A")
         val contentLeft = firstBefore.left
         val contentRight = viewport.right - (contentLeft - viewport.left)
-        assertTrue(boundsOf("D final").left >= contentRight)
+        assertEquals(0f, boundsOf("D final folder").width, POSITION_TOLERANCE_PX)
 
-        select(selectedPath, "D final")
+        select(selectedPath, "D final folder")
 
-        assertEquals(contentRight, boundsOf("D final").right, POSITION_TOLERANCE_PX)
+        assertEquals(contentRight, boundsOf("D final folder").right, POSITION_TOLERANCE_PX)
         assertTrue(boundsOf("A").right <= contentLeft)
 
         select(selectedPath, "A")

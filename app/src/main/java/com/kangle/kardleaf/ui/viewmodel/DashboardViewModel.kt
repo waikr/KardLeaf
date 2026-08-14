@@ -27,11 +27,12 @@ internal class DashboardViewModel(private val prefs: PrefsManager) {
     fun isHiddenFolderPath(folder: String, hiddenFolders: Set<String>): Boolean {
         val normalized = normalizePath(folder)
         if (normalized.isBlank()) return false
+        if (normalized.split('/').any { it.startsWith('.') }) return true
         return hiddenFolders.any { normalized == it || normalized.startsWith("$it/") }
     }
 
     fun withoutHiddenFolders(notes: List<Note>, hiddenFolders: Set<String>): List<Note> =
-        if (hiddenFolders.isEmpty()) notes else notes.filterNot { isHiddenFolderPath(it.folder, hiddenFolders) }
+        notes.filterNot { isHiddenFolderPath(it.folder, hiddenFolders) }
 
     fun customSortPathSummary(paths: Collection<String>, limit: Int = 5): String {
         val normalized = paths.map(::normalizePath)

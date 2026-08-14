@@ -22,3 +22,4 @@ dev_docs/
 node_modules/
 app/src/main/codemirror-editor/node_modules/
 /更新模板.md
+/artifacts

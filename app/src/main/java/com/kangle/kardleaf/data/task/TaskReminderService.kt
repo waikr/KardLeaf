@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.VibrationEffect
+import android.os.VibrationAttributes
 import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.core.app.NotificationManagerCompat
@@ -169,13 +170,33 @@ class TaskReminderService : Service() {
                     @Suppress("DEPRECATION")
                     getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
                 }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator?.vibrate(VibrationEffect.createWaveform(ALERT_VIBRATION_PATTERN, 0))
-                } else {
-                    @Suppress("DEPRECATION")
-                    vibrator?.vibrate(ALERT_VIBRATION_PATTERN, 0)
+                val audioAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+                when {
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
+                        vibrator?.vibrate(
+                            VibrationEffect.createWaveform(ALERT_VIBRATION_PATTERN, 0),
+                            VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM),
+                        )
+                    }
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> {
+                        vibrator?.vibrate(
+                            VibrationEffect.createWaveform(ALERT_VIBRATION_PATTERN, 0),
+                            audioAttributes,
+                        )
+                    }
+                    else -> {
+                        @Suppress("DEPRECATION")
+                        vibrator?.vibrate(ALERT_VIBRATION_PATTERN, 0, audioAttributes)
+                    }
                 }
-                KardLeafLog.i(TASK_REMINDER_LOG_TAG, "service vibration requested id=$taskId hasVibrator=${vibrator != null}")
+                KardLeafLog.i(
+                    TASK_REMINDER_LOG_TAG,
+                    "service vibration requested id=$taskId hasVibrator=${vibrator != null} " +
+                        "usage=${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) "ALARM" else "LEGACY"}",
+                )
             }.onFailure { error ->
                 KardLeafLog.e(TASK_REMINDER_LOG_TAG, "service vibration failed id=$taskId", error)
             }

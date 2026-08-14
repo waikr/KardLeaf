@@ -106,6 +106,8 @@
     <string name="widget_note_list_title">笔记列表</string>
     <string name="widget_note_list_desc">查看最近的卡叶笔记</string>
     <string name="widget_note_empty">暂无笔记</string>
+    <string name="widget_daily_note_label">每日笔记</string>
+    <string name="widget_daily_note_desc">查看和编辑今天的笔记</string>
     <string name="widget_folder_picker_title">选择浏览目录</string>
     <string name="widget_folder_picker_loading">正在读取目录…</string>
     <string name="widget_folder_all_notes">全部笔记</string>
@@ -120,7 +122,7 @@
     <string name="shortcut_quick_note_short">新建笔记</string>
     <string name="shortcut_quick_note_long">快速新建笔记</string>
     <string name="shortcut_search_short">全文搜索</string>
-    <string name="shortcut_search_long">搜索全部笔记内容</string>
+    <string name="shortcut_search_long">搜索全部笔记</string>
     <string name="shortcut_widgets_short">添加桌面插件</string>
     <string name="shortcut_widgets_long">选择并添加桌面小组件</string>
     <string name="shortcut_quick_memo_short">速记</string>

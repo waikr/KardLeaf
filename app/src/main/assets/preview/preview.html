@@ -544,7 +544,6 @@
         const statusDiv = document.getElementById('preview-status');
         const LARGE_MARKDOWN_RENDER_LIMIT = 500000;
         const LARGE_PREVIEW_IMMEDIATE_TEXT_LIMIT = 80000;
-        const SOURCE_OFFSET_MAX_CHARS = 80000;
         const EMBEDDED_IMAGE_DATA_URI_REGEX = /data:image\/[^\s)]+;base64,[A-Za-z0-9+/=]+/g;
         let currentMarkdownSource = '';
         let previewRenderToken = 0;
@@ -706,26 +705,25 @@
             return currentLineStartOffsets[line];
         }
 
-        function assignSourceOffsets(source) {
-            const tokens = md.parse(source, {});
-            const selectorByType = {
-                heading_open: 'h1,h2,h3,h4,h5,h6',
-                paragraph_open: 'p',
-                list_item_open: 'li',
-                fence: 'pre',
-                code_block: 'pre',
-                blockquote_open: 'blockquote',
-                table_open: 'table'
+        function assignSourceOffsets(tokens, renderLineMap) {
+            const supportedTypes = new Set([
+                'heading_open',
+                'paragraph_open',
+                'list_item_open',
+                'fence',
+                'code_block',
+                'blockquote_open',
+                'table_open'
+            ]);
+            const sourceOffsetForRenderLine = (line) => {
+                if (line <= 0) return 0;
+                if (line >= renderLineMap.length) return currentMarkdownSource.length;
+                return offsetForLine(renderLineMap[line]);
             };
-            const used = new WeakSet();
             tokens.forEach((token) => {
-                const selector = selectorByType[token.type];
-                if (!selector || !token.map) return;
-                const element = Array.from(contentDiv.querySelectorAll(selector)).find((candidate) => !used.has(candidate));
-                if (!element) return;
-                used.add(element);
-                element.dataset.sourceStart = String(offsetForLine(token.map[0]));
-                element.dataset.sourceEnd = String(offsetForLine(token.map[1]));
+                if (!supportedTypes.has(token.type) || !token.map) return;
+                token.attrSet('data-source-start', String(sourceOffsetForRenderLine(token.map[0])));
+                token.attrSet('data-source-end', String(sourceOffsetForRenderLine(token.map[1])));
             });
         }
 
@@ -787,6 +785,87 @@
             return Math.round(sourceLength * ratio);
         };
 
+        window.getMarkdownViewportAnchor = function () {
+            const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+            const scrollTop = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
+            if (scrollTop <= 1) {
+                return { offset: 0, viewportFraction: 0, edge: 'start', scrollTop, maxScroll };
+            }
+            if (maxScroll > 0 && scrollTop >= maxScroll - 1) {
+                return {
+                    offset: currentMarkdownSource.length,
+                    viewportFraction: 1,
+                    edge: 'end',
+                    scrollTop,
+                    maxScroll
+                };
+            }
+            return {
+                offset: window.getMarkdownOffsetAtPoint(window.innerWidth / 2, window.innerHeight / 2),
+                viewportFraction: 0.5,
+                edge: 'center',
+                scrollTop,
+                maxScroll
+            };
+        };
+
+        window.scrollToMarkdownAnchor = function (rawAnchor) {
+            const sourceLength = currentMarkdownSource.length;
+            const anchor = rawAnchor && typeof rawAnchor === 'object' ? rawAnchor : {};
+            const target = Math.max(0, Math.min(sourceLength, Number(anchor.offset) || 0));
+            const edge = String(anchor.edge || 'center');
+            const viewportFraction = Math.max(0, Math.min(1, Number(anchor.viewportFraction) || 0.5));
+            const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+            if (edge === 'start') {
+                window.scrollTo(0, 0);
+                return { status: 'ok', offset: target, edge, scrollTop: Math.round(window.scrollY), maxScroll };
+            }
+            if (edge === 'end') {
+                window.scrollTo(0, maxScroll);
+                return { status: 'ok', offset: target, edge, scrollTop: Math.round(window.scrollY), maxScroll };
+            }
+            const blocks = Array.from(contentDiv.querySelectorAll('[data-source-start]'));
+            let block = blocks
+                .filter((candidate) => {
+                    const start = parseInt(candidate.dataset.sourceStart || '0', 10);
+                    const end = parseInt(candidate.dataset.sourceEnd || String(sourceLength), 10);
+                    return target >= start && (target < end || target === sourceLength);
+                })
+                .sort((left, right) => {
+                    const leftSpan = parseInt(left.dataset.sourceEnd || String(sourceLength), 10) - parseInt(left.dataset.sourceStart || '0', 10);
+                    const rightSpan = parseInt(right.dataset.sourceEnd || String(sourceLength), 10) - parseInt(right.dataset.sourceStart || '0', 10);
+                    return leftSpan - rightSpan;
+                })[0];
+            if (!block && blocks.length) {
+                block = blocks.reduce((best, candidate) => {
+                    const bestStart = parseInt(best.dataset.sourceStart || '0', 10);
+                    const candidateStart = parseInt(candidate.dataset.sourceStart || '0', 10);
+                    return Math.abs(candidateStart - target) < Math.abs(bestStart - target) ? candidate : best;
+                });
+            }
+            if (!block) {
+                const ratio = sourceLength > 0 ? target / sourceLength : 0;
+                window.scrollTo(0, Math.round(maxScroll * ratio));
+                return { status: 'fallback', offset: target, edge, scrollTop: Math.round(window.scrollY), maxScroll };
+            }
+            const start = parseInt(block.dataset.sourceStart || '0', 10);
+            const end = parseInt(block.dataset.sourceEnd || String(sourceLength), 10);
+            const fraction = end > start ? Math.max(0, Math.min(1, (target - start) / (end - start))) : 0;
+            const rect = block.getBoundingClientRect();
+            const absoluteY = window.scrollY + rect.top + rect.height * fraction;
+            const targetY = Math.max(0, Math.min(maxScroll, absoluteY - window.innerHeight * viewportFraction));
+            window.scrollTo(0, Math.round(targetY));
+            return { status: 'ok', offset: target, edge, scrollTop: Math.round(window.scrollY), maxScroll };
+        };
+
+        window.getMarkdownOffsetAtViewportAnchor = function () {
+            return window.getMarkdownViewportAnchor().offset;
+        };
+
+        window.scrollToMarkdownOffset = function (rawOffset) {
+            return window.scrollToMarkdownAnchor({ offset: rawOffset, viewportFraction: 0.5, edge: 'center' });
+        };
+
         function looksLikePreviewTableSeparator(text) {
             return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(String(text || ''));
         }
@@ -801,9 +880,14 @@
         function normalizeMarkdownTables(source) {
             const lines = String(source || '').split('\n');
             const out = [];
+            const lineMap = [];
             let changed = false;
             let inFence = false;
             let fenceChar = '';
+            const pushLine = (line, sourceLine) => {
+                out.push(line);
+                lineMap.push(sourceLine);
+            };
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i];
                 const fence = /^\s*(```+|~~~+)/.exec(line);
@@ -811,24 +895,30 @@
                     const marker = fence[1].charAt(0);
                     if (!inFence) { inFence = true; fenceChar = marker; }
                     else if (marker === fenceChar) { inFence = false; fenceChar = ''; }
-                    out.push(line);
+                    pushLine(line, i);
                     continue;
                 }
                 if (!inFence && i + 1 < lines.length && looksLikePreviewTableRow(line) && looksLikePreviewTableSeparator(lines[i + 1])) {
-                    if (out.length && out[out.length - 1].trim() !== '') { out.push(''); changed = true; }
-                    out.push(line);
+                    if (out.length && out[out.length - 1].trim() !== '') { pushLine('', i); changed = true; }
+                    pushLine(line, i);
                     i += 1;
-                    out.push(lines[i]);
+                    pushLine(lines[i], i);
                     while (i + 1 < lines.length && looksLikePreviewTableRow(lines[i + 1]) && !looksLikePreviewTableSeparator(lines[i + 1])) {
                         i += 1;
-                        out.push(lines[i]);
+                        pushLine(lines[i], i);
                     }
-                    if (i + 1 < lines.length && lines[i + 1].trim() !== '') { out.push(''); changed = true; }
+                    if (i + 1 < lines.length && lines[i + 1].trim() !== '') { pushLine('', i + 1); changed = true; }
                     continue;
                 }
-                out.push(line);
+                pushLine(line, i);
             }
-            return changed ? out.join('\n') : source;
+            return { source: changed ? out.join('\n') : source, lineMap };
+        }
+
+        function notifyPreviewRenderCompleted(androidToken, status) {
+            if (window.Android && window.Android.onPreviewRenderCompleted) {
+                window.Android.onPreviewRenderCompleted(androidToken, String(status || 'unknown'));
+            }
         }
 
         function wrapRenderedTables() {
@@ -845,8 +935,11 @@
             if (token !== previewRenderToken || androidToken !== androidPreviewToken) return 'stale';
             const start = performance.now();
             try {
-                const renderSource = normalizeMarkdownTables(source);
-                const html = md.render(renderSource);
+                const normalized = normalizeMarkdownTables(source);
+                const env = {};
+                const tokens = md.parse(normalized.source, env);
+                assignSourceOffsets(tokens, normalized.lineMap);
+                const html = md.renderer.render(tokens, md.options, env);
                 if (token !== previewRenderToken || androidToken !== androidPreviewToken) return 'stale';
                 if (source.length > 0 && !html.trim()) {
                     throw new Error('empty rendered html');
@@ -855,20 +948,19 @@
                 contentDiv.classList.remove('large-plain-preview');
                 contentDiv.innerHTML = html;
                 wrapRenderedTables();
-                if (source.length <= SOURCE_OFFSET_MAX_CHARS) {
-                    assignSourceOffsets(source);
-                }
                 attachCheckboxListeners();
                 attachImageClickListeners();
                 attachWikilinkClickListeners();
                 attachCodeBlockCopyButtons();
                 tracePreviewRendered(source);
                 console.log('[KardLeafPreview] render markdown done len=' + source.length + ' elapsed=' + (performance.now() - start).toFixed(1) + 'ms');
+                notifyPreviewRenderCompleted(androidToken, 'markdown');
                 return 'markdown';
             } catch (error) {
                 console.error('[KardLeafPreview] render failed: ' + error);
                 setPreviewStatus('preview-error', 'Markdown 预览渲染失败，已显示纯文本，避免页面空白。');
                 renderPlainPreview(source);
+                notifyPreviewRenderCompleted(androidToken, 'plain_error');
                 return 'plain_error';
             }
         }
@@ -1078,6 +1170,7 @@
                 setPreviewStatus('preview-warning', '快速预览：当前笔记很大，已完整显示纯文本内容，暂不进行全文 Markdown 渲染以避免卡死。');
                 renderPlainPreview(source);
                 console.log('[KardLeafPreview] render plain large len=' + source.length + ' cost=' + renderCost + ' limit=' + LARGE_MARKDOWN_RENDER_LIMIT);
+                notifyPreviewRenderCompleted(incomingAndroidToken, 'plain_large');
                 return 'plain_large';
             }
 

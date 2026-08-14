@@ -69,8 +69,12 @@ import com.kangle.kardleaf.ui.KardLeafCustomFeatures
 import com.kangle.kardleaf.ui.editor.host.ToolbarIconButton
 import com.kangle.kardleaf.ui.showToast
 import com.kangle.kardleaf.ui.theme.KardLeafTheme
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Date
@@ -94,6 +98,7 @@ class NoteWidgetQuickAddActivity : ComponentActivity() {
         get() = intent.getStringExtra(EXTRA_NOTE_ID).orEmpty()
 
     private var editingNote: Note? = null
+    private lateinit var repositoryDeferred: Deferred<RoomNoteRepository?>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -110,6 +115,7 @@ class NoteWidgetQuickAddActivity : ComponentActivity() {
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         window.attributes = window.attributes.apply { dimAmount = 0.42f }
+        repositoryDeferred = lifecycleScope.async(Dispatchers.IO) { prepareQuickRepository() }
 
         if (editNoteId.isBlank()) {
             showEditor(null)
@@ -146,17 +152,23 @@ class NoteWidgetQuickAddActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun loadExistingNote(noteId: String): Note? {
+    private suspend fun loadExistingNote(noteId: String): Note? =
+        repositoryDeferred.await()?.getNote(noteId)
+
+    private suspend fun prepareQuickRepository(): RoomNoteRepository? {
         val appContext = applicationContext
         val prefsManager = PrefsManager(appContext)
         val rootUri = prefsManager.getRootUri() ?: return null
-        val repository = RoomNoteRepository(
-            appContext,
-            MetadataManager(appContext),
-            prefsManager,
-        )
-        repository.setRootFolder(rootUri, scanImmediately = false)
-        return repository.getNote(noteId)
+        return quickRepositoryMutex.withLock {
+            if (cachedQuickRepositoryRootUri == rootUri) {
+                cachedQuickRepository?.let { return@withLock it }
+            }
+            val repository = RoomNoteRepository(appContext, MetadataManager(appContext), prefsManager)
+            if (!repository.setRootFolderForQuickSave(rootUri)) return@withLock null
+            cachedQuickRepositoryRootUri = rootUri
+            cachedQuickRepository = repository
+            repository
+        }
     }
 
     override fun finish() {
@@ -181,22 +193,15 @@ class NoteWidgetQuickAddActivity : ComponentActivity() {
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val prefsManager = PrefsManager(appContext)
-                    val rootUri = prefsManager.getRootUri()
+                    val repository = repositoryDeferred.await()
                         ?: return@runCatching SaveResult(false, "请先在应用中选择笔记库")
-                    val repository = RoomNoteRepository(
-                        appContext,
-                        MetadataManager(appContext),
-                        prefsManager,
-                    )
-                    repository.setRootFolder(rootUri, scanImmediately = false)
                     val now = Date()
                     val finalTitle = title.trim().ifBlank {
                         KardLeafCustomFeatures.formatUnnamedNoteTitle(appContext, now)
                     }
                     val current = editingNote
                     val savedPath = if (current == null) {
-                        repository.saveNote(
+                        repository.saveNoteFromQuickEditor(
                             Note(
                                 file = targetFolder.takeIf { it.isNotBlank() }
                                     ?.let { folder -> File(folder, "new_note_placeholder") }
@@ -210,7 +215,7 @@ class NoteWidgetQuickAddActivity : ComponentActivity() {
                             ),
                         )
                     } else {
-                        repository.saveNote(
+                        repository.saveNoteFromQuickEditor(
                             current.copy(
                                 title = finalTitle,
                                 content = content,
@@ -230,6 +235,7 @@ class NoteWidgetQuickAddActivity : ComponentActivity() {
                             "saved mode=${if (current == null) "new" else "edit"} path=$savedPath folder=${current?.folder ?: targetFolder} titleLen=${finalTitle.length} contentLen=${content.length} pinned=$isPinned",
                         )
                         NoteListWidgetProvider.refreshAllWidgets(appContext)
+                        DailyNoteWidgetProvider.refreshAllWidgets(appContext)
                         SaveResult(true, if (current == null) "已保存笔记" else "已更新笔记")
                     }
                 }.getOrElse { error ->
@@ -294,6 +300,14 @@ class NoteWidgetQuickAddActivity : ComponentActivity() {
     )
 
     companion object {
+        private val quickRepositoryMutex = Mutex()
+
+        @Volatile
+        private var cachedQuickRepositoryRootUri: String? = null
+
+        @Volatile
+        private var cachedQuickRepository: RoomNoteRepository? = null
+
         internal const val EXTRA_TARGET_FOLDER = "kardleaf_widget_quick_add_folder"
         internal const val EXTRA_INITIAL_TITLE = "kardleaf_widget_quick_add_initial_title"
         internal const val EXTRA_INITIAL_CONTENT = "kardleaf_widget_quick_add_initial_content"

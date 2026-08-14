@@ -23,7 +23,7 @@ object KardLeafCustomFeatures {
     const val UseDynamicColor = false
     const val DefaultUnnamedNoteDateFormat = "yyyy.MM.dd.HHmmss"
     const val DefaultUnnamedNoteFileNameTemplate = ""
-    val DefaultOpenNoteMode = OpenNoteMode.PREVIEW
+    val DefaultOpenNoteMode = OpenNoteMode.EDIT
     const val DefaultEditDoubleTapPreview = false
 
     fun editorKernelIcon(kernel: PrefsManager.EditorKernel): ImageVector = when (kernel) {

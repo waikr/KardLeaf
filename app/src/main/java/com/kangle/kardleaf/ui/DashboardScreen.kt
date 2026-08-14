@@ -8,6 +8,7 @@ import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
@@ -95,10 +96,10 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
@@ -200,6 +201,7 @@ fun DashboardScreen(
     onCreateDrawingClick: () -> Unit = {},
     onOpenPrivacy: () -> Unit = {},
     edgeDrawerWidthPx: Float = 0f,
+    rootFolderName: String = "",
     pauseBackgroundWork: Boolean = false,
     sampleCleanupPromptRequestId: Long = 0L,
     onSampleCleanupPromptConsumed: () -> Unit = {},
@@ -242,18 +244,22 @@ fun DashboardScreen(
     val pendingDeleteIds by viewModel.pendingDeleteIds.collectAsState()
     val isInSelectionMode = selectedNotes.isNotEmpty()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val searchOptions by viewModel.searchOptions.collectAsState()
+    val isSearchActive = searchQuery.isNotBlank() || searchOptions.hasMetadataFilters
     val openSearchRequest by viewModel.openSearchRequest.collectAsState()
     val shouldShowHomeBottomToolbar =
         !isPermissionNeeded &&
             !isInSelectionMode &&
             currentFilter !is MainViewModel.NoteFilter.Random &&
-            searchQuery.isBlank() &&
+            !isSearchActive &&
             homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR
     val homeBottomToolbarItems = homeBottomToolbarItemOrder
         .filter { it !in homeBottomToolbarHiddenItems }
         .filter { homeBottomToolbarItemAvailable(it, currentFilter) }
     val isLoading by viewModel.isLoading.collectAsState()
-    val shouldShowInitialNoteLoading = isLoading && allNotes.isEmpty()
+    val isImportingLibrary by viewModel.isImportingLibrary.collectAsState()
+    val isVaultSwitchRefreshing by viewModel.isVaultSwitchRefreshing.collectAsState()
+    val shouldShowInitialNoteLoading = isLoading && allNotes.isEmpty() && !isImportingLibrary
     val scrollToTopEvents by viewModel.homeScrollToTopEvents.collectAsState()
     val context = LocalContext.current
     val unnamedNoteDateFormat = KardLeafCustomFeatures.getUnnamedNoteDateFormat(context)
@@ -376,6 +382,10 @@ fun DashboardScreen(
     var showManualRefreshProgress by remember { mutableStateOf(false) }
     var manualRefreshLoadingSeen by remember { mutableStateOf(false) }
     var showFolderNavigationPanel by remember { mutableStateOf(false) }
+    val folderNavigationChevronRotation by animateFloatAsState(
+        targetValue = if (showFolderNavigationPanel) 180f else 0f,
+        label = "DashboardFolderChevron",
+    )
     var folderNavigationPanelProgress by remember { mutableStateOf(0f) }
     var folderNavigationPanelCloseJob by remember { mutableStateOf<Job?>(null) }
     var showSampleCleanupPrompt by remember { mutableStateOf(false) }
@@ -780,7 +790,7 @@ fun DashboardScreen(
             shareNotesPending.isNotEmpty() -> shareNotesPending = emptyList()
             showSearch -> {
                 showSearch = false
-                viewModel.onSearchQueryChanged("")
+                viewModel.clearSearch()
             }
             isInSelectionMode -> viewModel.clearSelection()
             viewModel.navigateUpFolder() -> Unit
@@ -926,162 +936,175 @@ fun DashboardScreen(
                     },
                 )
             } else {
-                TopAppBar(
-                    title = {
-                        Box(
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(50.dp),
-                            contentAlignment = Alignment.CenterStart,
-                        ) {
-                            AnimatedVisibility(
-                                visible = !showSearch,
-                                enter = fadeIn(),
-                                exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.Start),
+                Column {
+                    TopAppBar(
+                        title = {
+                            Box(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .height(50.dp),
+                                contentAlignment = Alignment.CenterStart,
                             ) {
-                                Row(
-                                    modifier =
-                                        Modifier.clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null,
-                                        ) {
-                                            if (showFolderNavigationPanel) {
-                                                closeFolderNavigationPanel()
-                                            } else {
-                                                openFolderNavigationPanel()
-                                            }
-                                        },
-                                    verticalAlignment = Alignment.CenterVertically,
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = !showSearch,
+                                    enter = fadeIn(),
+                                    exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.Start),
                                 ) {
-                                    Text(
-                                        text = previewDashboardTitlePath?.let(::dashboardTitleForPath) ?: dashboardTitle(currentFilter),
-                                        style = MaterialTheme.typography.titleLarge,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Outlined.KeyboardArrowDown,
-                                        contentDescription = if (showFolderNavigationPanel) "收起分类导航" else "展开分类导航",
+                                    Row(
+                                        modifier =
+                                            Modifier.clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = null,
+                                            ) {
+                                                if (showFolderNavigationPanel) {
+                                                    closeFolderNavigationPanel()
+                                                } else {
+                                                    openFolderNavigationPanel()
+                                                }
+                                            },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = previewDashboardTitlePath?.let(::dashboardTitleForPath) ?: dashboardTitle(currentFilter),
+                                            style = MaterialTheme.typography.titleLarge,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Outlined.KeyboardArrowDown,
+                                            contentDescription = if (showFolderNavigationPanel) "收起分类导航" else "展开分类导航",
+                                            modifier =
+                                                Modifier
+                                                    .padding(start = 2.dp)
+                                                    .size(22.dp)
+                                                    .graphicsLayer { rotationZ = folderNavigationChevronRotation },
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = showSearch,
+                                    enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
+                                    exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End),
+                                ) {
+                                    Surface(
                                         modifier =
                                             Modifier
-                                                .padding(start = 2.dp)
-                                                .size(22.dp)
-                                                .rotate(if (showFolderNavigationPanel) 180f else 0f),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                .fillMaxWidth()
+                                                .height(50.dp),
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        tonalElevation = 2.dp,
+                                    ) {
+                                        SearchBar(
+                                            viewModel = viewModel,
+                                            requestFocus = showSearch,
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = onOpenDrawer) {
+                                Icon(Icons.Outlined.Menu, contentDescription = stringResource(R.string.menu))
+                            }
+                        },
+                        actions = {
+                            if (showHomeWebClipAction) {
+                                IconButton(
+                                    onClick = {
+                                        focusManager.clearFocus()
+                                        showWebClipImportDialog = true
+                                    },
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Language,
+                                        contentDescription = "网页转 Markdown",
                                     )
                                 }
                             }
-                            AnimatedVisibility(
-                                visible = showSearch,
-                                enter = fadeIn() + expandHorizontally(expandFrom = Alignment.End),
-                                exit = fadeOut() + shrinkHorizontally(shrinkTowards = Alignment.End),
-                            ) {
-                                Surface(
-                                    modifier =
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .height(50.dp),
-                                    shape = CircleShape,
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    tonalElevation = 2.dp,
-                                ) {
-                                    SearchBar(viewModel = viewModel)
-                                }
-                            }
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = onOpenDrawer) {
-                            Icon(Icons.Outlined.Menu, contentDescription = stringResource(R.string.menu))
-                        }
-                    },
-                    actions = {
-                        if (showHomeWebClipAction) {
-                            IconButton(
-                                onClick = {
+                            IconButton(onClick = {
+                                if (showSearch) {
+                                    showSearch = false
                                     focusManager.clearFocus()
-                                    showWebClipImportDialog = true
-                                },
-                            ) {
+                                    viewModel.clearSearch()
+                                } else {
+                                    showSearch = true
+                                }
+                            }) {
                                 Icon(
-                                    Icons.Outlined.Language,
-                                    contentDescription = "网页转 Markdown",
+                                    Icons.Outlined.Search,
+                                    contentDescription = "搜索",
+                                    tint = if (showSearch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                        }
-                        IconButton(onClick = {
-                            showSearch = !showSearch
-                            focusManager.clearFocus()
-                        }) {
-                            Icon(
-                                Icons.Outlined.Search,
-                                contentDescription = "搜索",
-                                tint = if (showSearch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        SortButton(viewModel = viewModel)
-                        if (currentFilter is MainViewModel.NoteFilter.Trash) {
-                            var showMoreMenu by remember { mutableStateOf(false) }
-                            var lastMoreMenuDismissAt by remember { mutableStateOf(0L) }
-                            LaunchedEffect(showMoreMenu) {
-                                KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more state changed showMoreMenu=$showMoreMenu")
-                            }
-                            Box {
-                                IconButton(onClick = {
-                                    val now = SystemClock.uptimeMillis()
-                                    val ignoreReopen = !showMoreMenu && now - lastMoreMenuDismissAt < MENU_REOPEN_GUARD_MS
-                                    KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more click toggle menu filter=$currentFilter showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
-                                    if (!ignoreReopen) {
-                                        showMoreMenu = !showMoreMenu
-                                    }
-                                }) {
-                                    Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                            SortButton(viewModel = viewModel)
+                            if (currentFilter is MainViewModel.NoteFilter.Trash) {
+                                var showMoreMenu by remember { mutableStateOf(false) }
+                                var lastMoreMenuDismissAt by remember { mutableStateOf(0L) }
+                                LaunchedEffect(showMoreMenu) {
+                                    KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more state changed showMoreMenu=$showMoreMenu")
                                 }
-                                KardLeafDropdownMenu(
-                                    modifier =
-                                        Modifier.onPreviewKeyEvent { event ->
-                                            if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
-                                                KardLeafLog.d(
-                                                    BACK_TRACE_TAG,
-                                                    "Dashboard trash more popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showMoreMenu=$showMoreMenu",
-                                                )
-                                            }
-                                            false
-                                        },
-                                    expanded = showMoreMenu,
-                                    onDismissRequest = {
-                                        KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more onDismissRequest showMoreMenu=$showMoreMenu")
-                                        lastMoreMenuDismissAt = SystemClock.uptimeMillis()
-                                        showMoreMenu = false
-                                    },
-                                    properties = PopupProperties(
-                                        focusable = false,
-                                        dismissOnBackPress = false,
-                                        dismissOnClickOutside = true,
-                                    ),
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.empty_trash_desc)) },
-                                        leadingIcon = { Icon(Icons.Outlined.Delete, null) },
-                                        onClick = {
-                                            showEmptyTrashDialog = true
+                                Box {
+                                    IconButton(onClick = {
+                                        val now = SystemClock.uptimeMillis()
+                                        val ignoreReopen = !showMoreMenu && now - lastMoreMenuDismissAt < MENU_REOPEN_GUARD_MS
+                                        KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more click toggle menu filter=$currentFilter showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
+                                        if (!ignoreReopen) {
+                                            showMoreMenu = !showMoreMenu
+                                        }
+                                    }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                                    }
+                                    KardLeafDropdownMenu(
+                                        modifier =
+                                            Modifier.onPreviewKeyEvent { event ->
+                                                if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
+                                                    KardLeafLog.d(
+                                                        BACK_TRACE_TAG,
+                                                        "Dashboard trash more popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showMoreMenu=$showMoreMenu",
+                                                    )
+                                                }
+                                                false
+                                            },
+                                        expanded = showMoreMenu,
+                                        onDismissRequest = {
+                                            KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more onDismissRequest showMoreMenu=$showMoreMenu")
+                                            lastMoreMenuDismissAt = SystemClock.uptimeMillis()
                                             showMoreMenu = false
                                         },
-                                    )
-                                }
-                                BackHandler(enabled = showMoreMenu) {
-                                    KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more BackHandler hit, closing menu")
-                                    showMoreMenu = false
+                                        properties = PopupProperties(
+                                            focusable = false,
+                                            dismissOnBackPress = false,
+                                            dismissOnClickOutside = true,
+                                        ),
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.empty_trash_desc)) },
+                                            leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                            onClick = {
+                                                showEmptyTrashDialog = true
+                                                showMoreMenu = false
+                                            },
+                                        )
+                                    }
+                                    BackHandler(enabled = showMoreMenu) {
+                                        KardLeafLog.d(BACK_TRACE_TAG, "Dashboard trash more BackHandler hit, closing menu")
+                                        showMoreMenu = false
+                                    }
                                 }
                             }
-                        }
-                    },
-                    colors =
-                        TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                        ),
-                )
+                        },
+                        colors =
+                            TopAppBarDefaults.topAppBarColors(
+                                containerColor = MaterialTheme.colorScheme.surface,
+                            ),
+                    )
+                    AnimatedVisibility(visible = showSearch) {
+                        SearchFilterToolbar(viewModel)
+                    }
+                }
             }
         },
         snackbarHost = {
@@ -1217,7 +1240,7 @@ fun DashboardScreen(
         Column(
             modifier = Modifier.fillMaxSize(),
         ) {
-            if (showManualRefreshProgress) {
+            if (showManualRefreshProgress || isImportingLibrary || isVaultSwitchRefreshing) {
                 LinearProgressIndicator(
                     modifier =
                         Modifier
@@ -1253,24 +1276,24 @@ fun DashboardScreen(
             val useFolderPager =
                 (currentFilter is MainViewModel.NoteFilter.All ||
                     currentFilter is MainViewModel.NoteFilter.Label) &&
-                    searchQuery.isBlank() &&
+                    !isSearchActive &&
                     folderPagerPages.isNotEmpty()
             val customSortDragRefreshBlocked =
                 customSortDragModeEnabled &&
-                    searchQuery.isBlank() &&
+                    !isSearchActive &&
                     (currentFolderSortSettings?.order ?: sortOrder) == PrefsManager.SortOrder.CUSTOM
             LaunchedEffect(
                 currentFilter,
                 labels,
                 folderPagerKey,
                 useFolderPager,
-                searchQuery,
+                isSearchActive,
                 isInSelectionMode,
                 folderSortVersion,
             ) {
                 logDashboardCustomSortFlash {
                     "Dashboard pagerInputs filter=$currentFilter labels=${labels.size} pages=${folderPagerPathSummary(folderPagerPages)} " +
-                        "usePager=$useFolderPager searchBlank=${searchQuery.isBlank()} selection=$isInSelectionMode sortVersion=$folderSortVersion uiItems=${dashboardScreenUiItemsFlashSummary(uiItems)} notes=${notes.size}"
+                        "usePager=$useFolderPager searchActive=$isSearchActive selection=$isInSelectionMode sortVersion=$folderSortVersion uiItems=${dashboardScreenUiItemsFlashSummary(uiItems)} notes=${notes.size}"
                 }
             }
             var isFolderPagerVerticalGestureLocked by remember { mutableStateOf(false) }
@@ -1823,7 +1846,7 @@ fun DashboardScreen(
                                     val rootCustomSortDragAvailable =
                                         currentFilter is MainViewModel.NoteFilter.All &&
                                             currentFolderSortSettings?.order == PrefsManager.SortOrder.CUSTOM &&
-                                            searchQuery.isBlank() &&
+                                            !isSearchActive &&
                                             !isInSelectionMode
                                     val rootCustomSortDragHandleEnabled =
                                         rootCustomSortDragAvailable &&
@@ -1881,6 +1904,7 @@ fun DashboardScreen(
                                         viewMode = viewMode,
                                         cardDensity = cardDensity,
                                         showFolderTags = currentFilter is MainViewModel.NoteFilter.All || currentFilter is MainViewModel.NoteFilter.Favorites,
+                                        rootFolderName = rootFolderName,
                                         showYamlTags = showYamlTagsOnLooseCards,
                                         showModifiedDate = showModifiedDateOnCards,
                                         modifiedDateFormat = cardModifiedDateFormat,
@@ -1956,7 +1980,7 @@ fun DashboardScreen(
                                     val pageCustomSortDragAvailable =
                                         !isRecursive &&
                                             pageSortOrder == PrefsManager.SortOrder.CUSTOM &&
-                                            searchQuery.isBlank() &&
+                                            !isSearchActive &&
                                             !isInSelectionMode
                                     val pageCustomSortDragHandleEnabled =
                                         pageCustomSortDragAvailable &&
@@ -2023,6 +2047,7 @@ fun DashboardScreen(
                                         viewMode = viewMode,
                                         cardDensity = cardDensity,
                                         showFolderTags = isCurrentPage && isRecursive,
+                                        rootFolderName = rootFolderName,
                                         showYamlTags = showYamlTagsOnLooseCards,
                                         showModifiedDate = showModifiedDateOnCards,
                                         modifiedDateFormat = cardModifiedDateFormat,
@@ -2091,7 +2116,7 @@ fun DashboardScreen(
                                     currentFilter is MainViewModel.NoteFilter.All ||
                                         (folderFilter != null && !folderFilter.recursive && currentFolderPath.isNotBlank())
                                 canCustomSortCurrentFilter &&
-                                    searchQuery.isBlank() &&
+                                    !isSearchActive &&
                                     !isInSelectionMode &&
                                     (currentFolderSortSettings?.order ?: sortOrder) == PrefsManager.SortOrder.CUSTOM
                             }
@@ -2106,7 +2131,7 @@ fun DashboardScreen(
                             ) {
                                 logDashboardCustomSortFlash {
                                     "Dashboard singlePageRender filter=$currentFilter path=$currentFolderPath sort=$sortOrder " +
-                                        "drag=$currentFolderCustomSortDragEnabled searchBlank=${searchQuery.isBlank()} selection=$isInSelectionMode items=${dashboardScreenUiItemsFlashSummary(uiItems)} notes=${notes.size}"
+                                        "drag=$currentFolderCustomSortDragEnabled searchActive=$isSearchActive selection=$isInSelectionMode items=${dashboardScreenUiItemsFlashSummary(uiItems)} notes=${notes.size}"
                                 }
                             }
 
@@ -2118,6 +2143,7 @@ fun DashboardScreen(
                                 viewMode = viewMode,
                                 cardDensity = cardDensity,
                                 showFolderTags = currentFilter is MainViewModel.NoteFilter.All || currentFilter is MainViewModel.NoteFilter.Favorites,
+                                rootFolderName = rootFolderName,
                                 showYamlTags = showYamlTagsOnLooseCards,
                                 showModifiedDate = showModifiedDateOnCards,
                                 modifiedDateFormat = cardModifiedDateFormat,

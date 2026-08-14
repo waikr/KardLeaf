@@ -32,6 +32,9 @@ class PrefsManagerCompatibilityTest {
                 assertEquals(PrefsManager.DEFAULT_APP_LANGUAGE, getAppLanguage())
                 assertTrue(isNoteSidePanelsEnabled())
                 assertFalse(isModifiedDateOnCardsVisible())
+                assertTrue(getHiddenFolderPaths().contains(PrefsManager.DEFAULT_IMAGE_FOLDER))
+                assertTrue(getHiddenFolderPaths().contains(PrefsManager.DEFAULT_QUICK_NOTE_FOLDER_NAME))
+                assertFalse(getHiddenFolderPaths().contains(PrefsManager.LEGACY_TASK_FOLDER_NAME))
             }
 
             legacy.edit()

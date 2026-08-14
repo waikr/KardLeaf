@@ -63,6 +63,7 @@ class NoteListWidgetService : RemoteViewsService() {
 
         override fun getViewAt(position: Int): RemoteViews {
             val note = notes.getOrNull(position)
+            val palette = WidgetTheme.configuredPalette(context, WidgetTheme.Kind.NOTE, appWidgetId)
             val hideTitle = NoteListWidgetProvider.isTitleHidden(context, appWidgetId)
             val previewLines = NoteListWidgetProvider.previewLineCount(context, appWidgetId)
             val layoutId = if (hideTitle) {
@@ -71,15 +72,18 @@ class NoteListWidgetService : RemoteViewsService() {
                 R.layout.widget_note_list_item
             }
             return RemoteViews(context.packageName, layoutId).apply {
+                WidgetTheme.applyBackground(this, R.id.note_widget_item, palette?.surface)
                 if (note != null) {
                     val clickIntent = Intent().apply {
                         putExtra(NoteWidgetQuickAddActivity.EXTRA_NOTE_ID, note.filePath)
                     }
                     if (!hideTitle) {
                         setTextViewText(R.id.note_widget_item_title, NoteListWidgetProvider.compactTitle(note))
+                        WidgetTheme.applyText(this, R.id.note_widget_item_title, palette?.onSurface)
                         setOnClickFillInIntent(R.id.note_widget_item_title, clickIntent)
                     }
                     setTextViewText(R.id.note_widget_item_body, NoteListWidgetProvider.compactBody(note))
+                    WidgetTheme.applyText(this, R.id.note_widget_item_body, palette?.muted)
                     setInt(R.id.note_widget_item_body, "setMaxLines", previewLines)
                     setOnClickFillInIntent(R.id.note_widget_item_body, clickIntent)
                     setOnClickFillInIntent(R.id.note_widget_item, clickIntent)

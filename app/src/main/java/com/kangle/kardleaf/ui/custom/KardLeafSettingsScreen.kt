@@ -61,10 +61,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import com.kangle.kardleaf.AppIconManager
 import com.kangle.kardleaf.AppUpdateCheckResult
 import com.kangle.kardleaf.AppUpdateChecker
 import com.kangle.kardleaf.BuildConfig
+import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.HistoryCleanupPreview
 import com.kangle.kardleaf.data.model.NoteRecordSummary
 import com.kangle.kardleaf.data.ai.KardLeafAiClient
@@ -111,11 +111,27 @@ private const val SETTINGS_TRACE_TAG = "KardLeafSettingsTrace"
 private const val DIAGNOSTIC_LOGCAT_MAX_CHARS = 2_000_000
 private const val DIAGNOSTIC_LOGCAT_TIMEOUT_SECONDS = 5L
 
+private data class GitChangedFileDetail(
+    val path: String,
+    val modifiedMs: Long,
+)
+
+private fun parseGitChangedFileDetails(raw: String): List<GitChangedFileDetail> =
+    raw.lineSequence().mapNotNull { line ->
+        val separator = line.lastIndexOf('\t')
+        if (separator <= 0) return@mapNotNull null
+        GitChangedFileDetail(
+            path = line.substring(0, separator),
+            modifiedMs = line.substring(separator + 1).toLongOrNull() ?: 0L,
+        )
+    }.toList()
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
 @Composable
 fun KardLeafSettingsScreen(
     onBack: () -> Unit,
     onSelectDatabase: () -> Unit,
+    onSelectTaskFolder: () -> Unit = {},
     onSettingsChanged: () -> Unit,
     onRestartNeeded: () -> Unit = {},
     onExportUserData: () -> Unit = {},
@@ -209,7 +225,6 @@ fun KardLeafSettingsScreen(
     var appThemeMode by remember { mutableStateOf(prefsManager.getAppThemeMode()) }
     var modernThemeColorStyle by remember { mutableStateOf(prefsManager.getModernThemeColorStyle()) }
     var cleanListFeatureIconStyle by remember { mutableStateOf(prefsManager.getCleanListFeatureIconStyle()) }
-    var appIcon by remember { mutableStateOf(AppIconManager.current(context)) }
     var themeColor by remember { mutableStateOf(prefsManager.getThemeColor()) }
     var customThemeColorArgb by remember { mutableStateOf(prefsManager.getCustomThemeColorArgb()) }
     var customThemeColorText by remember { mutableStateOf(argbToThemeHex(customThemeColorArgb)) }
@@ -561,13 +576,11 @@ fun KardLeafSettingsScreen(
             themeBackgroundColor != PrefsManager.ThemeBackgroundColor.WHITE ||
 
             globalCornerRadiusDp != PrefsManager.THEME_CORNER_RADIUS_FOLLOW ||
-            homeCornerRadiusDp != PrefsManager.THEME_CORNER_RADIUS_FOLLOW ||
-            appIcon != AppIconManager.AppIcon.DEFAULT
+            homeCornerRadiusDp != PrefsManager.THEME_CORNER_RADIUS_FOLLOW
         appThemeStyle = PrefsManager.AppThemeStyle.CLEAN_LIST
         appThemeMode = PrefsManager.AppThemeMode.SYSTEM
         modernThemeColorStyle = PrefsManager.ModernThemeColorStyle.CLASSIC
         cleanListFeatureIconStyle = PrefsManager.CleanListFeatureIconStyle.MODERN
-        appIcon = AppIconManager.AppIcon.DEFAULT
         themeColor = PrefsManager.ThemeColor.BLUE
         themeBackgroundColor = PrefsManager.ThemeBackgroundColor.WHITE
         globalCornerRadiusDp = PrefsManager.THEME_CORNER_RADIUS_FOLLOW
@@ -580,7 +593,6 @@ fun KardLeafSettingsScreen(
         prefsManager.saveThemeBackgroundColor(themeBackgroundColor)
         prefsManager.saveGlobalCornerRadiusDp(globalCornerRadiusDp)
         prefsManager.saveHomeCornerRadiusDp(homeCornerRadiusDp)
-        AppIconManager.apply(context, appIcon)
         if (changed) onRestartNeeded()
     }
 
@@ -792,7 +804,6 @@ fun KardLeafSettingsScreen(
         appThemeMode = PrefsManager.AppThemeMode.SYSTEM
         modernThemeColorStyle = PrefsManager.ModernThemeColorStyle.CLASSIC
         cleanListFeatureIconStyle = PrefsManager.CleanListFeatureIconStyle.MODERN
-        appIcon = AppIconManager.AppIcon.DEFAULT
         themeColor = PrefsManager.ThemeColor.BLUE
         themeBackgroundColor = PrefsManager.ThemeBackgroundColor.WHITE
         globalCornerRadiusDp = PrefsManager.THEME_CORNER_RADIUS_FOLLOW
@@ -865,7 +876,6 @@ fun KardLeafSettingsScreen(
         prefsManager.saveThemeBackgroundColor(themeBackgroundColor)
         prefsManager.saveGlobalCornerRadiusDp(globalCornerRadiusDp)
         prefsManager.saveHomeCornerRadiusDp(homeCornerRadiusDp)
-        AppIconManager.apply(context, appIcon)
         prefsManager.saveDrawerEdgeWidthDp(PrefsManager.DEFAULT_DRAWER_EDGE_WIDTH_DP)
         prefsManager.saveDrawerStyle(drawerStyle)
         prefsManager.saveDrawerItemOrder(PrefsManager.DrawerItemId.DEFAULT_ORDER)
@@ -1364,7 +1374,7 @@ fun KardLeafSettingsScreen(
                                 SettingsChoiceRow(
                                     icon = Icons.Outlined.SwapVert,
                                     title = if (direction == PrefsManager.SortDirection.DESCENDING) "降序" else "升序",
-                                    subtitle = if (direction == PrefsManager.SortDirection.DESCENDING) "新内容在前" else "旧内容在前",
+                                    subtitle = "",
                                     selected = sortDirection == direction,
                                     onClick = {
                                         sortDirection = direction
@@ -1804,7 +1814,9 @@ fun KardLeafSettingsScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { settingsDialog = null }) {
+                TextButton(
+                    onClick = { settingsDialog = null },
+                ) {
                     Text("完成")
                 }
             },
@@ -1944,7 +1956,7 @@ fun KardLeafSettingsScreen(
                         SettingsChoiceRow(
                             icon = Icons.Outlined.Description,
                             title = if (direction == PrefsManager.SortDirection.DESCENDING) "降序" else "升序",
-                            subtitle = if (direction == PrefsManager.SortDirection.DESCENDING) "新内容在前" else "旧内容在前",
+                            subtitle = "",
                             selected = sortDirection == direction,
                             onClick = {
                                 sortDirection = direction
@@ -1964,15 +1976,6 @@ fun KardLeafSettingsScreen(
                         customAccentColor = Color(customThemeColorArgb),
                         customBackgroundColor = Color(customThemeBackgroundColorArgb),
                     )
-                    SettingsSectionTitle("应用图标", "选择后桌面图标会刷新，部分桌面可能需要几秒")
-                    AppIconChoiceGrid(
-                        selectedIcon = appIcon,
-                        onIconClick = { icon ->
-                            appIcon = icon
-                            AppIconManager.apply(context, icon)
-                        },
-                    )
-                    SettingsSectionDivider()
                     SettingsSectionTitle(
                         text = "黑夜模式",
                         subtitle = "选择跟随系统、固定浅色或固定深色",
@@ -2667,7 +2670,10 @@ fun KardLeafSettingsScreen(
                     val visibleItems = drawerOrder.filter { it !in hiddenItems }
                     val hiddenDrawerItems = drawerOrder.filter { it in hiddenItems }
 
-                    val availableGroupLineTargets = visibleItems.drop(1).filter { it !in drawerGroupStartItems }
+                    val availableGroupLineTargets = visibleItems.filter { it !in drawerGroupStartItems }
+                    val defaultGroupLineTarget = availableGroupLineTargets.firstOrNull {
+                        it == PrefsManager.DrawerItemId.ALL_NOTES
+                    } ?: availableGroupLineTargets.firstOrNull()
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -2676,9 +2682,9 @@ fun KardLeafSettingsScreen(
                             SettingsSectionTitle("显示")
                         }
                         TextButton(
-                            enabled = availableGroupLineTargets.isNotEmpty(),
+                            enabled = defaultGroupLineTarget != null,
                             onClick = {
-                                availableGroupLineTargets.lastOrNull()?.let { target ->
+                                defaultGroupLineTarget?.let { target ->
                                     saveDrawerGroupStartItems(drawerGroupStartItems + target)
                                 }
                             },
@@ -3275,7 +3281,14 @@ fun KardLeafSettingsScreen(
                 "taskReminders" -> {
                     val notificationsAllowed = TaskReminderScheduler.areNotificationsEnabled(context)
                     val exactAllowed = TaskReminderScheduler.canScheduleExactAlarms(context)
-                    SettingsSectionTitle("任务与提醒", "任务数据独立存储，不会改写 Markdown 文件")
+                    SettingsSectionTitle("任务与提醒", "任务正文写入 Markdown，提醒和备注保存在 Room")
+                    val taskFolder = prefsManager.getTaskFolderPath()
+                    SettingsActionRow(
+                        icon = Icons.Outlined.Folder,
+                        title = "任务清单数据位置",
+                        subtitle = if (taskFolder.isBlank()) "根目录/任务清单.md" else "根目录/$taskFolder/任务清单.md",
+                        onClick = onSelectTaskFolder,
+                    )
                     SettingsPageText("通知权限：${if (notificationsAllowed) "已允许" else "未允许"}")
                     SettingsPageText("精确提醒权限：${if (exactAllowed) "可用" else "不可用，将使用非精确提醒降级"}")
                     SettingsActionRow(
@@ -3327,6 +3340,38 @@ fun KardLeafSettingsScreen(
                         onOpenNote = onOpenRecordNote,
                     )
                 }
+                "changedFiles" -> {
+                    val changedFiles = remember {
+                        parseGitChangedFileDetails(BuildConfig.KARDLEAF_GIT_CHANGED_FILE_DETAILS)
+                    }
+                    val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
+                    if (changedFiles.isEmpty()) {
+                        SettingsPageText("当前没有修改文件")
+                    } else {
+                        SettingsListGroup {
+                            changedFiles.forEach { file ->
+                                val modifiedTime = file.modifiedMs.takeIf { it > 0L }
+                                    ?.let { dateFormat.format(Date(it)) }
+                                    ?: "unknown"
+                                SettingsBaseRow(
+                                    icon = Icons.Outlined.Description,
+                                    title = file.path,
+                                    subtitle = "",
+                                    onClick = {},
+                                    trailing = {
+                                        Text(
+                                            text = modifiedTime,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
                 "about" -> {
                     val packageInfo = remember {
                         runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
@@ -3347,7 +3392,7 @@ fun KardLeafSettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Image(
-                            painter = painterResource(id = appIcon.iconResId),
+                            painter = painterResource(id = R.mipmap.ic_app_icon_default),
                             contentDescription = null,
                             modifier = Modifier
                                 .size(76.dp)
@@ -3367,32 +3412,41 @@ fun KardLeafSettingsScreen(
                     SettingsActionRow(
                         icon = Icons.Outlined.Info,
                         title = "版本",
-                        subtitle = versionName.ifBlank { "1.6.0" },
+                        subtitle = versionName.ifBlank { "1.8.0" },
                         onClick = {},
                     )
                     if (BuildConfig.KARDLEAF_DEV_VARIANT || BuildConfig.DEBUG) {
                         SettingsActionRow(
                             icon = Icons.Outlined.Update,
-                            title = "最近安装/更新时间",
+                            title = "更新时间",
                             subtitle = installUpdateTime.ifBlank { "unknown" },
                             onClick = {},
                         )
                         SettingsActionRow(
                             icon = Icons.Outlined.FolderOpen,
-                            title = "当前工作区（未提交）",
+                            title = "当前工作区",
                             subtitle = BuildConfig.KARDLEAF_GIT_CHANGED_FILES.ifBlank { "unknown" },
+                            onClick = { openSettingsPage("changedFiles") },
+                        )
+                        SettingsActionRow(
+                            icon = Icons.Outlined.Folder,
+                            title = "当前工作树",
+                            subtitle = BuildConfig.KARDLEAF_GIT_WORKTREE.ifBlank { "unknown" },
+                            onClick = {},
+                        )
+                        SettingsActionRow(
+                            icon = Icons.Outlined.Code,
+                            title = "当前分支",
+                            subtitle = BuildConfig.KARDLEAF_GIT_BRANCH.ifBlank { "unknown" },
                             onClick = {},
                         )
                         SettingsActionRow(
                             icon = Icons.Outlined.Code,
                             title = "Git 节点",
-                            subtitle = BuildConfig.KARDLEAF_GIT_COMMIT.ifBlank { "unknown" },
-                            onClick = {},
-                        )
-                        SettingsActionRow(
-                            icon = Icons.Outlined.Info,
-                            title = "提交信息",
-                            subtitle = BuildConfig.KARDLEAF_GIT_MESSAGE.ifBlank { "unknown" },
+                            subtitle = listOf(
+                                BuildConfig.KARDLEAF_GIT_COMMIT,
+                                BuildConfig.KARDLEAF_GIT_MESSAGE,
+                            ).filter { it.isNotBlank() }.joinToString("\n").ifBlank { "unknown" },
                             onClick = {},
                         )
                     }

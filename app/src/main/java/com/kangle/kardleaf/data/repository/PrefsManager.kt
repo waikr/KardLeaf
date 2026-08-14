@@ -2,6 +2,7 @@
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import com.kangle.kardleaf.BuildConfig
 import com.kangle.kardleaf.data.repository.prefs.DashboardPreferences
 import com.kangle.kardleaf.data.repository.prefs.EditorPreferences
@@ -35,10 +36,26 @@ class PrefsManager(context: Context) {
     private val editorPreferences = EditorPreferences(prefs)
     private val dashboardPreferences = DashboardPreferences(prefs)
 
+    init {
+        prefs.getString(KEY_ROOT_URI, null)?.let { uri ->
+            if (getVaults().none { it.uri == uri }) registerVault(uri, fallbackVaultName(uri))
+        }
+    }
+
     companion object {
         private const val PREFS_NAME = "kardleaf_prefs"
         private const val OLD_PREFS_NAME = "keepnotes_prefs"
         private const val KEY_ROOT_URI = "root_uri"
+        private const val KEY_VAULTS = "vaults"
+
+        internal fun activeVaultDatabaseName(context: Context): String {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val rootUri = prefs.getString(KEY_ROOT_URI, null) ?: return DEFAULT_VAULT_DATABASE_NAME
+            return VaultRegistryCodec.decode(prefs.getString(KEY_VAULTS, null))
+                .firstOrNull { it.uri == rootUri }
+                ?.databaseName
+                ?: DEFAULT_VAULT_DATABASE_NAME
+        }
         private const val KEY_SORT_ORDER = "sort_order"
         private const val KEY_SORT_DIRECTION = "sort_direction"
         private const val KEY_VIEW_MODE = "view_mode"
@@ -108,12 +125,21 @@ class PrefsManager(context: Context) {
         private const val KEY_UPDATE_CHECK_ETAG = "update_check_etag"
         private const val KEY_UPDATE_CHECK_CACHE = "update_check_cache"
         private const val KEY_SHOW_MARKDOWN_TASKS_IN_TASK_LIST = "show_markdown_tasks_in_task_list"
+        private const val KEY_TASK_FOLDER_PATH_PREFIX = "task_folder_path_v2_"
+        private const val KEY_PENDING_TASK_TRASH_IDS_PREFIX = "pending_task_trash_ids_v1_"
+        private const val KEY_PENDING_TASK_DELETE_IDS_PREFIX = "pending_task_delete_ids_v1_"
+        private const val KEY_PENDING_TASK_RESTORE_IDS_PREFIX = "pending_task_restore_ids_v1_"
         private const val KEY_QUICK_NOTE_HIDDEN_DEFAULT_MIGRATED = "quick_note_hidden_default_migrated"
+        private const val LEGACY_KEY_TASK_FOLDER_HIDDEN_DEFAULT_MIGRATED = "task_folder_hidden_default_migrated"
+        private const val KEY_DAILY_NOTE_FOLDER = "daily_note_folder"
         val DEFAULT_APP_LOGGING_ENABLED = BuildConfig.KARDLEAF_DEV_VARIANT
         const val DEFAULT_AUTO_UPDATE_CHECK_ENABLED = true
         const val DEFAULT_WEBDAV_REALTIME_POLL_INTERVAL_MS = 1_000L
         const val DEFAULT_TRASH_FOLDER_NAME = ".trash"
         const val DEFAULT_QUICK_NOTE_FOLDER_NAME = "速记"
+        const val LEGACY_TASK_FOLDER_NAME = "任务"
+        const val DEFAULT_TASK_FOLDER_NAME = ".KardLeaf"
+        const val DEFAULT_DAILY_NOTE_FOLDER_NAME = "每日笔记"
         const val LEGACY_DRAFT_FOLDER_NAME = "草稿"
         const val DEFAULT_IMAGE_FOLDER = "attachments"
         const val DEFAULT_DRAWER_EDGE_WIDTH_DP = 40
@@ -159,6 +185,7 @@ class PrefsManager(context: Context) {
         const val MAX_PREVIEW_DOUBLE_TAP_INTERVAL_MS = 600
         const val MIN_HOME_BOTTOM_TOOLBAR_BUTTON_SIZE_DP = 36
         const val MAX_HOME_BOTTOM_TOOLBAR_BUTTON_SIZE_DP = 56
+
     }
 
     enum class SortOrder {
@@ -570,12 +597,81 @@ class PrefsManager(context: Context) {
     }
 
     fun saveRootUri(uri: String) {
-        prefs.edit().putString(KEY_ROOT_URI, uri).apply()
+        val displayName = getVaults().firstOrNull { it.uri == uri }?.displayName ?: fallbackVaultName(uri)
+        activateVault(uri, displayName)
     }
 
     fun getRootUri(): String? {
         return prefs.getString(KEY_ROOT_URI, null)
     }
+
+    fun saveTaskFolderPath(folder: String) {
+        prefs.edit().putString(taskFolderPathKey(), normalizeNotePath(folder)).apply()
+    }
+
+    fun getTaskFolderPath(): String =
+        normalizeNotePath(prefs.getString(taskFolderPathKey(), DEFAULT_TASK_FOLDER_NAME).orEmpty())
+
+    private fun taskFolderPathKey(): String = KEY_TASK_FOLDER_PATH_PREFIX + getActiveVaultDatabaseName()
+
+    fun saveDailyNoteFolder(folder: String) {
+        prefs.edit().putString(KEY_DAILY_NOTE_FOLDER, normalizeNotePath(folder)).apply()
+    }
+
+    fun getDailyNoteFolder(): String =
+        normalizeNotePath(prefs.getString(KEY_DAILY_NOTE_FOLDER, DEFAULT_DAILY_NOTE_FOLDER_NAME).orEmpty())
+
+    fun getVaults(): List<VaultInfo> = VaultRegistryCodec.decode(prefs.getString(KEY_VAULTS, null))
+
+    fun getActiveVault(): VaultInfo? {
+        val rootUri = getRootUri() ?: return null
+        return getVaults().firstOrNull { it.uri == rootUri }
+    }
+
+    fun getActiveVaultDatabaseName(): String =
+        getActiveVault()?.databaseName ?: DEFAULT_VAULT_DATABASE_NAME
+
+    fun registerVault(
+        uri: String,
+        displayName: String,
+    ): VaultInfo {
+        val vaults = getVaults()
+        val existing = vaults.firstOrNull { it.uri == uri }
+        val vault = VaultInfo(
+            uri = uri,
+            displayName = displayName.trim().ifBlank { fallbackVaultName(uri) },
+            databaseName = existing?.databaseName
+                ?: if (vaults.isEmpty()) DEFAULT_VAULT_DATABASE_NAME else databaseNameForVault(uri),
+        )
+        val updated = if (existing == null) vaults + vault else vaults.map { if (it.uri == uri) vault else it }
+        prefs.edit().putString(KEY_VAULTS, VaultRegistryCodec.encode(updated)).apply()
+        return vault
+    }
+
+    fun activateVault(
+        uri: String,
+        displayName: String,
+    ): VaultInfo {
+        val vault = registerVault(uri, displayName)
+        prefs.edit().putString(KEY_ROOT_URI, uri).apply()
+        return vault
+    }
+
+    fun removeVault(uri: String): VaultInfo? {
+        val vaults = getVaults()
+        val removed = vaults.firstOrNull { it.uri == uri } ?: return null
+        val editor = prefs.edit().putString(KEY_VAULTS, VaultRegistryCodec.encode(vaults.filterNot { it.uri == uri }))
+        if (getRootUri() == uri) editor.remove(KEY_ROOT_URI)
+        editor.apply()
+        return removed
+    }
+
+    private fun fallbackVaultName(uri: String): String =
+        Uri.parse(uri).lastPathSegment
+            ?.substringAfterLast(':')
+            ?.substringAfterLast('/')
+            ?.takeIf { it.isNotBlank() }
+            ?: "笔记库"
 
     fun saveTrashFolderName(name: String) {
         val normalized = normalizeTrashFolderName(name)
@@ -657,7 +753,7 @@ class PrefsManager(context: Context) {
 
     fun getHiddenFolderPaths(): Set<String> {
         val saved = prefs.getStringSet(KEY_HIDDEN_FOLDER_PATHS, null)
-        val source = if (prefs.getBoolean(KEY_QUICK_NOTE_HIDDEN_DEFAULT_MIGRATED, false)) {
+        val withQuickNote = if (prefs.getBoolean(KEY_QUICK_NOTE_HIDDEN_DEFAULT_MIGRATED, false)) {
             saved ?: setOf(getImageFolder(), DEFAULT_QUICK_NOTE_FOLDER_NAME, LEGACY_DRAFT_FOLDER_NAME)
         } else {
             val migrated = (saved ?: setOf(getImageFolder())).toMutableSet().apply {
@@ -669,6 +765,16 @@ class PrefsManager(context: Context) {
                 .putBoolean(KEY_QUICK_NOTE_HIDDEN_DEFAULT_MIGRATED, true)
                 .apply()
             migrated
+        }
+        val source = if (prefs.getBoolean(LEGACY_KEY_TASK_FOLDER_HIDDEN_DEFAULT_MIGRATED, false)) {
+            val migrated = withQuickNote - LEGACY_TASK_FOLDER_NAME
+            prefs.edit()
+                .putStringSet(KEY_HIDDEN_FOLDER_PATHS, migrated)
+                .remove(LEGACY_KEY_TASK_FOLDER_HIDDEN_DEFAULT_MIGRATED)
+                .apply()
+            migrated
+        } else {
+            withQuickNote
         }
         return source
             .map(::normalizeNotePath)
@@ -693,6 +799,94 @@ class PrefsManager(context: Context) {
 
     fun isShowMarkdownTasksInTaskListEnabled(): Boolean =
         prefs.getBoolean(KEY_SHOW_MARKDOWN_TASKS_IN_TASK_LIST, false)
+
+    internal fun getPendingTaskTrashIds(): Set<Long> =
+        prefs
+            .getStringSet(pendingTaskTrashIdsKey(), emptySet())
+            .orEmpty()
+            .mapNotNull { it.toLongOrNull() }
+            .toSet()
+
+    internal fun addPendingTaskTrashIds(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        val pending = getPendingTaskTrashIds() + ids
+        prefs.edit().putStringSet(pendingTaskTrashIdsKey(), pending.map(Long::toString).toSet()).apply()
+    }
+
+    internal fun clearPendingTaskTrashIds(ids: Collection<Long> = emptySet()) {
+        val pending = getPendingTaskTrashIds()
+        val remaining = if (ids.isEmpty()) emptySet() else pending - ids.toSet()
+        prefs.edit().apply {
+            if (remaining.isEmpty()) remove(pendingTaskTrashIdsKey())
+            else putStringSet(pendingTaskTrashIdsKey(), remaining.map(Long::toString).toSet())
+        }.apply()
+    }
+
+    internal fun getPendingTaskDeleteIds(): Set<Long> =
+        prefs
+            .getStringSet(pendingTaskDeleteIdsKey(), emptySet())
+            .orEmpty()
+            .mapNotNull { it.toLongOrNull() }
+            .toSet()
+
+    internal fun addPendingTaskDeleteIds(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        val pending = getPendingTaskDeleteIds() + ids
+        prefs.edit().putStringSet(pendingTaskDeleteIdsKey(), pending.map(Long::toString).toSet()).apply()
+    }
+
+    internal fun clearPendingTaskDeleteIds(ids: Collection<Long> = emptySet()) {
+        val pending = getPendingTaskDeleteIds()
+        val remaining = if (ids.isEmpty()) emptySet() else pending - ids.toSet()
+        prefs.edit().apply {
+            if (remaining.isEmpty()) remove(pendingTaskDeleteIdsKey())
+            else putStringSet(pendingTaskDeleteIdsKey(), remaining.map(Long::toString).toSet())
+        }.apply()
+    }
+
+    internal fun getPendingTaskRestoreIds(): Set<Long> =
+        prefs
+            .getStringSet(pendingTaskRestoreIdsKey(), emptySet())
+            .orEmpty()
+            .mapNotNull { it.toLongOrNull() }
+            .toSet()
+
+    internal fun addPendingTaskRestoreIds(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        val pending = getPendingTaskRestoreIds() + ids
+        prefs.edit().putStringSet(pendingTaskRestoreIdsKey(), pending.map(Long::toString).toSet()).apply()
+    }
+
+    internal fun clearPendingTaskRestoreIds(ids: Collection<Long> = emptySet()) {
+        val pending = getPendingTaskRestoreIds()
+        val remaining = if (ids.isEmpty()) emptySet() else pending - ids.toSet()
+        prefs.edit().apply {
+            if (remaining.isEmpty()) remove(pendingTaskRestoreIdsKey())
+            else putStringSet(pendingTaskRestoreIdsKey(), remaining.map(Long::toString).toSet())
+        }.apply()
+    }
+
+    private fun pendingTaskTrashIdsKey(): String = KEY_PENDING_TASK_TRASH_IDS_PREFIX + getActiveVaultDatabaseName()
+
+    private fun pendingTaskDeleteIdsKey(): String = KEY_PENDING_TASK_DELETE_IDS_PREFIX + getActiveVaultDatabaseName()
+
+    private fun pendingTaskRestoreIdsKey(): String = KEY_PENDING_TASK_RESTORE_IDS_PREFIX + getActiveVaultDatabaseName()
+
+    internal fun legacyTaskFolderPath(): String? =
+        prefs.getString("task_folder_path", null)
+            ?.trim()
+            ?.replace("\\", "/")
+            ?.trim('/')
+            ?.takeIf { path ->
+                path.isNotBlank() && path.split('/').none { segment ->
+                    segment.isBlank() || segment == "." || segment == ".." ||
+                        segment.contains(Regex("[\\\\:*?\"<>|]"))
+                }
+            }
+
+    internal fun clearLegacyTaskFolderPath() {
+        prefs.edit().remove("task_folder_path").apply()
+    }
 
     fun saveThemeColor(color: ThemeColor) {
         prefs.edit().putString(KEY_THEME_COLOR, color.name).apply()
@@ -853,13 +1047,13 @@ class PrefsManager(context: Context) {
         val raw = prefs.getStringSet(KEY_DRAWER_GROUP_START_ITEMS, null)
             ?: return getDefaultDrawerGroupStartItems()
         return raw.mapNotNull { runCatching { DrawerItemId.valueOf(it) }.getOrNull() }
-            .filter { it != DrawerItemId.DEFAULT_ORDER.first() }
+            .filter { it in DrawerItemId.DEFAULT_ORDER }
             .toSet()
     }
 
     fun saveDrawerGroupStartItems(groupStartItems: Set<DrawerItemId>) {
         val safeItems = groupStartItems
-            .filter { it in DrawerItemId.DEFAULT_ORDER && it != DrawerItemId.DEFAULT_ORDER.first() }
+            .filter { it in DrawerItemId.DEFAULT_ORDER }
             .map { it.name }
             .toSet()
         prefs.edit().putStringSet(KEY_DRAWER_GROUP_START_ITEMS, safeItems).apply()

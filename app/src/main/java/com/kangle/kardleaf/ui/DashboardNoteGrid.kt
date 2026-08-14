@@ -116,6 +116,7 @@ fun NoteGrid(
     viewMode: PrefsManager.ViewMode,
     cardDensity: PrefsManager.CardDensity,
     showFolderTags: Boolean,
+    rootFolderName: String,
     showYamlTags: Boolean,
     showModifiedDate: Boolean,
     modifiedDateFormat: String,
@@ -372,6 +373,7 @@ fun NoteGrid(
                                                 isSelected = selectedNotes.contains(item.note.file.path),
                                                 cardDensity = cardDensity,
                                                 showFolderTag = showFolderTags,
+                                                rootFolderName = rootFolderName,
                                                 showYamlTags = showYamlTags,
                                                 showModifiedDate = showModifiedDate,
                                                 modifiedDateFormat = modifiedDateFormat,
@@ -433,6 +435,7 @@ fun NoteGrid(
                                             isSelected = selectedNotes.contains(item.note.file.path),
                                             cardDensity = cardDensity,
                                             showFolderTag = showFolderTags,
+                                            rootFolderName = rootFolderName,
                                             showYamlTags = showYamlTags,
                                             showModifiedDate = showModifiedDate,
                                             modifiedDateFormat = modifiedDateFormat,
@@ -500,6 +503,7 @@ fun NoteGrid(
                                 isSelected = selectedNotes.contains(item.note.file.path),
                                 cardDensity = cardDensity,
                                 showFolderTag = showFolderTags,
+                                rootFolderName = rootFolderName,
                                 showYamlTags = showYamlTags,
                                 showModifiedDate = showModifiedDate,
                                 modifiedDateFormat = modifiedDateFormat,
@@ -546,7 +550,7 @@ internal fun buildGesturePreviewItems(
     }
     val filtered =
         notes.filter {
-            !it.isTrashed && it.folder == folder
+            !it.isTrashed && !it.isArchived && it.folder == folder
         }
     return buildGesturePreviewItemsForFolderNotes(
         notes = filtered,

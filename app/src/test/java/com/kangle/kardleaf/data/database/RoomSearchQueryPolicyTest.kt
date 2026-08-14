@@ -8,19 +8,18 @@ import java.nio.file.Path
 
 class RoomSearchQueryPolicyTest {
     @Test
-    fun noteSearchDoesNotLikeFullContent() {
+    fun noteSearchUsesFullContentLike() {
         val source = readSource("src/main/java/com/kangle/kardleaf/data/database/NoteDao.kt")
 
-        assertFalse(source.contains("content LIKE '%' || :query || '%'"))
-        assertTrue(source.contains("contentPreview LIKE '%' || :query || '%'"))
+        assertTrue(source.contains("OR content LIKE '%' || :query || '%'"))
     }
 
     @Test
-    fun historySearchUsesPreviewInsteadOfFullContentLike() {
+    fun historySearchMatchesFullContentAndReturnsPreview() {
         val source = readSource("src/main/java/com/kangle/kardleaf/data/database/NoteHistoryDao.kt")
 
-        assertFalse(source.contains(" OR content LIKE '%' || :query || '%'"))
-        assertTrue(source.contains("substr(content, 1, 200) LIKE '%' || :query || '%'"))
+        assertTrue(source.contains("OR content LIKE '%' || :query || '%'"))
+        assertTrue(source.contains("substr(content, 1, 200) AS content"))
     }
 
     @Test

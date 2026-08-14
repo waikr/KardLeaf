@@ -61,7 +61,9 @@ const refreshWikiImagesEffect = StateEffect.define<null>();
 
 let editor: EditorControl | null = null;
 let suppressBridgeDepth = 0;
-let livePreviewEnabled = true;
+const initialLivePreviewEnabled =
+  new URLSearchParams(window.location.search).get('livePreview') !== 'false';
+let livePreviewEnabled = initialLivePreviewEnabled;
 let readOnly = false;
 let currentFontSize = 16;
 let currentLineHeight = 1.55;
@@ -385,15 +387,26 @@ function setTouchSelecting(view: EditorView, selecting: boolean) {
   });
 }
 
+function nativeSelectionVisibleBottom(rect: DOMRect) {
+  const keyboardInset = Math.max(
+    0,
+    lastAndroidKeyboardInsetPx,
+    lastViewportKeyboardInsetPx,
+    computeViewportKeyboardInsetPx(),
+  );
+  return Math.max(rect.top + 1, rect.bottom - keyboardInset);
+}
+
 function nativeSelectionEdgeVelocity(view: EditorView, y: number) {
   const rect = view.scrollDOM.getBoundingClientRect();
-  const edgeSize = Math.min(72, rect.height * 0.18);
+  const visibleBottom = nativeSelectionVisibleBottom(rect);
+  const edgeSize = Math.min(72, Math.max(1, visibleBottom - rect.top) * 0.18);
   if (y < rect.top + edgeSize) {
     const depth = Math.max(0, Math.min(1, (rect.top + edgeSize - y) / edgeSize));
     return -(3 + depth * depth * 21);
   }
-  if (y > rect.bottom - edgeSize) {
-    const depth = Math.max(0, Math.min(1, (y - (rect.bottom - edgeSize)) / edgeSize));
+  if (y > visibleBottom - edgeSize) {
+    const depth = Math.max(0, Math.min(1, (y - (visibleBottom - edgeSize)) / edgeSize));
     return 3 + depth * depth * 21;
   }
   return 0;
@@ -440,7 +453,7 @@ function runNativeSelectionAutoScroll(timestamp: number) {
   if (scrollDelta !== 0) {
     const rect = scroller.getBoundingClientRect();
     const x = Math.max(rect.left + 4, Math.min(rect.right - 4, nativeSelectionDrag.x));
-    const y = velocity < 0 ? rect.top + 4 : rect.bottom - 4;
+    const y = velocity < 0 ? rect.top + 4 : nativeSelectionVisibleBottom(rect) - 4;
     const pos = view.posAtCoords({ x, y });
     if (typeof pos === 'number') {
       const safePos = Math.max(0, Math.min(view.state.doc.length, pos));
@@ -497,7 +510,9 @@ function handleNativeSelectionPointer(action: unknown, rawX: unknown, rawY: unkn
     nativeSelectionDrag.x = Number.isFinite(x) ? x : nativeSelectionDrag.x;
     nativeSelectionDrag.y = Number.isFinite(y) ? y : nativeSelectionDrag.y;
     const selection = view.state.selection.main;
-    if (!nativeSelectionDrag.active && selectionRevision !== nativeSelectionDrag.revisionAtDown) {
+    const selectionChanged = selectionRevision !== nativeSelectionDrag.revisionAtDown;
+    const edgeDrag = !selection.empty && nativeSelectionEdgeVelocity(view, nativeSelectionDrag.y) !== 0;
+    if (!nativeSelectionDrag.active && (selectionChanged || edgeDrag)) {
       const anchorDelta = Math.abs(selection.anchor - nativeSelectionDrag.downAnchor);
       const headDelta = Math.abs(selection.head - nativeSelectionDrag.downHead);
       nativeSelectionDrag.active = true;
@@ -508,7 +523,8 @@ function handleNativeSelectionPointer(action: unknown, rawX: unknown, rawY: unkn
       log(
         'KardLeafAutoScrollTrace',
         `start cursorOnly=${nativeSelectionDrag.cursorOnly} fixed=${nativeSelectionDrag.fixedAnchor} ` +
-          `selection=${selection.from}-${selection.to} x=${nativeSelectionDrag.x.toFixed(1)} y=${nativeSelectionDrag.y.toFixed(1)}`,
+          `selection=${selection.from}-${selection.to} reason=${selectionChanged ? 'selection-change' : 'edge'} ` +
+          `x=${nativeSelectionDrag.x.toFixed(1)} y=${nativeSelectionDrag.y.toFixed(1)}`,
       );
     }
     if (nativeSelectionDrag.active) scheduleNativeSelectionAutoScroll();
@@ -1026,7 +1042,7 @@ function createKardLeafBridgePlugin(): EditorPlugin {
             lastSelectionSetAt = nowMs();
             notifySelection();
           }
-          if (update.docChanged && update.view.hasFocus) scheduleEnsureCursorVisible('docChanged');
+          if (update.docChanged && update.view.hasFocus) scheduleDelayedCursorEnsures('docChanged');
           if (update.docChanged) notifyHistoryState();
         }),
         EditorView.domEventHandlers({
@@ -1110,21 +1126,25 @@ function createKardLeafBridgePlugin(): EditorPlugin {
 
 function buildPlugins(): EditorPlugin[] {
   return [
-    mathPlugin(),
-    tablePlugin(),
-    mermaidPlugin(),
-    admonitionPlugin(),
-    codeBlockPlugin({ mode: 'inline' }),
-    blockImagePlugin({
-      maxLoadAttempts: 1,
-      onImageClick: notifyLocalImageClicked,
-    }),
-    rawHtmlPlugin(),
+    ...(livePreviewEnabled
+      ? [
+          mathPlugin(),
+          tablePlugin(),
+          mermaidPlugin(),
+          admonitionPlugin(),
+          codeBlockPlugin({ mode: 'inline' }),
+          blockImagePlugin({
+            maxLoadAttempts: 1,
+            onImageClick: notifyLocalImageClicked,
+          }),
+          rawHtmlPlugin(),
+          createKardLeafWikiImagePlugin(),
+        ]
+      : []),
     smartPastePlugin(),
     slashCommandPlugin(),
     wikilinkPlugin(),
     selectionToolbarPlugin(),
-    createKardLeafWikiImagePlugin(),
     createKardLeafBridgePlugin(),
   ];
 }
@@ -1390,7 +1410,10 @@ function createEditorInstance(initialText = '', initialSelection?: { anchor: num
   notifyHistoryState(true);
   notifySelection();
   setStatus('');
-  log('KardLeafCM6', `editor ready version=${VERSION}`);
+  log(
+    'KardLeafCM6',
+    `editor ready version=${VERSION} livePreview=${livePreviewEnabled} renderPlugins=${livePreviewEnabled}`,
+  );
   callBridge('onEditorReady', [VERSION, editor.view.state.doc.length]);
 }
 
@@ -1647,6 +1670,23 @@ function installFallbackApi() {
     getScrollMetrics() {
       return { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
     },
+    getViewportAnchor() {
+      return {
+        offset: fallbackTextArea?.selectionStart ?? 0,
+        viewportFraction: 0.5,
+        edge: 'CENTER',
+      };
+    },
+    getViewportAnchorOffset() {
+      return fallbackTextArea?.selectionStart ?? 0;
+    },
+    scrollViewportToAnchor(anchor: unknown) {
+      const data = anchor && typeof anchor === 'object' ? anchor as Record<string, unknown> : {};
+      return (this as Record<string, (...args: unknown[]) => unknown>).scrollToOffset(data.offset);
+    },
+    scrollViewportToOffset(offset: unknown) {
+      return (this as Record<string, (...args: unknown[]) => unknown>).scrollToOffset(offset);
+    },
     getScrollInfo() {
       return { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
     },
@@ -1704,10 +1744,21 @@ function installEditorApi() {
       return 'ok';
     },
     setLivePreviewEnabled(enabled: unknown) {
-      livePreviewEnabled = !!enabled;
+      const requested = !!enabled;
+      if (requested !== initialLivePreviewEnabled) {
+        log(
+          'KardLeafCM6',
+          `live preview requested=${requested} initial=${initialLivePreviewEnabled} action=reload_required`,
+        );
+        return 'reload_required';
+      }
+      livePreviewEnabled = requested;
       if (!livePreviewEnabled) hideTableToolbar();
       updateRuntimeSettings();
-      log('KardLeafCM6', `live preview enabled=${livePreviewEnabled}`);
+      log(
+        'KardLeafCM6',
+        `live preview requested=${requested} initial=${initialLivePreviewEnabled} effective=${livePreviewEnabled}`,
+      );
       return 'ok';
     },
     setDarkMode(enabled: unknown) {
@@ -1783,6 +1834,78 @@ function installEditorApi() {
         scrollHeight: Math.round(scroller.scrollHeight || 0),
         clientHeight: Math.round(scroller.clientHeight || 0),
       };
+    },
+    getViewportAnchor() {
+      const view = editor?.view;
+      if (!view) return null;
+      const scroller = view.scrollDOM;
+      const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      const edge = scroller.scrollTop <= 1
+        ? 'START'
+        : scroller.scrollTop >= maxScroll - 1
+          ? 'END'
+          : 'CENTER';
+      const rect = scroller.getBoundingClientRect();
+      const centerY = rect.top + rect.height / 2;
+      const offset = edge === 'START'
+        ? 0
+        : edge === 'END'
+          ? view.state.doc.length
+          : view.lineBlockAtHeight(centerY - view.documentTop).from;
+      const anchor = {
+        offset: Math.max(0, Math.min(view.state.doc.length, offset)),
+        viewportFraction: 0.5,
+        edge,
+        scrollTop: Math.round(scroller.scrollTop),
+        maxScroll: Math.round(maxScroll),
+      };
+      log(
+        'KardLeafCM6Scroll',
+        `viewport anchor offset=${anchor.offset} edge=${edge} scrollTop=${anchor.scrollTop} maxScroll=${anchor.maxScroll}`,
+      );
+      return anchor;
+    },
+    getViewportAnchorOffset() {
+      const anchor = (window.KardLeafEditor?.getViewportAnchor as (() => { offset?: number } | null) | undefined)?.();
+      return anchor?.offset ?? -1;
+    },
+    scrollViewportToAnchor(rawAnchor: unknown) {
+      const view = editor?.view;
+      if (!view) return 'missing';
+      const anchor = rawAnchor && typeof rawAnchor === 'object'
+        ? rawAnchor as Record<string, unknown>
+        : {};
+      const scroller = view.scrollDOM;
+      const edge = String(anchor.edge ?? 'CENTER').toUpperCase();
+      const target = Math.max(0, Math.min(view.state.doc.length, Number(anchor.offset) || 0));
+      const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      if (edge === 'START') {
+        scroller.scrollTop = 0;
+      } else if (edge === 'END') {
+        scroller.scrollTop = maxScroll;
+      } else {
+        const fraction = Math.max(0, Math.min(1, Number(anchor.viewportFraction) || 0.5));
+        const block = view.lineBlockAt(target);
+        const desiredY = scroller.getBoundingClientRect().top + scroller.clientHeight * fraction;
+        scroller.scrollTop = Math.max(
+          0,
+          Math.min(maxScroll, scroller.scrollTop + view.documentTop + block.top - desiredY),
+        );
+      }
+      window.requestAnimationFrame(() => emitScrollMetrics('modeSwitchAnchor'));
+      const result = `ok:${edge}:${target}:${Math.round(scroller.scrollTop)}`;
+      log('KardLeafCM6Scroll', `viewport anchor apply ${result}`);
+      return result;
+    },
+    scrollViewportToOffset(offset: unknown) {
+      const view = editor?.view;
+      if (!view) return 'missing';
+      const target = Math.max(0, Math.min(view.state.doc.length, Number(offset) || 0));
+      return (window.KardLeafEditor?.scrollViewportToAnchor as ((anchor: unknown) => unknown) | undefined)?.({
+        offset: target,
+        viewportFraction: 0.5,
+        edge: 'CENTER',
+      }) ?? 'missing';
     },
     getScrollInfo() {
       const getMetrics = window.KardLeafEditor?.getScrollMetrics as (() => unknown) | undefined;

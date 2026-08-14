@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.AtomicFile
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
@@ -162,12 +163,14 @@ fun RelationshipGraphScreen(
     var customGraphs by remember { mutableStateOf<List<CustomRelationshipGraph>>(emptyList()) }
     var selectedGraphId by remember { mutableStateOf<String?>(null) }
     var customLoaded by remember { mutableStateOf(false) }
+    var customEditMode by remember { mutableStateOf(false) }
     var showGraphMenu by remember { mutableStateOf(false) }
     var showCreateGraphDialog by remember { mutableStateOf(false) }
     var showRenameGraphDialog by remember { mutableStateOf(false) }
     var showDeleteGraphDialog by remember { mutableStateOf(false) }
     var showNodeDialog by remember { mutableStateOf(false) }
     var editingNodeId by remember { mutableStateOf<String?>(null) }
+    var pendingChildParentId by remember { mutableStateOf<String?>(null) }
     var selectedNodeId by remember { mutableStateOf<String?>(null) }
     var showRelationDialog by remember { mutableStateOf(false) }
     var showRelationsManager by remember { mutableStateOf(false) }
@@ -226,22 +229,17 @@ fun RelationshipGraphScreen(
                             Icon(Icons.Outlined.Refresh, contentDescription = "刷新关系图")
                         }
                     } else {
+                        TextButton(onClick = { customEditMode = !customEditMode }) {
+                            Text(if (customEditMode) "完成" else "编辑")
+                        }
                         Box {
                             IconButton(onClick = { showGraphMenu = true }) {
-                                Icon(Icons.Outlined.MoreVert, contentDescription = "管理自制关系图")
+                                Icon(Icons.Outlined.MoreVert, contentDescription = "管理知识关系图")
                             }
                             DropdownMenu(
                                 expanded = showGraphMenu,
                                 onDismissRequest = { showGraphMenu = false },
                             ) {
-                                DropdownMenuItem(
-                                    text = { Text("新建关系图") },
-                                    leadingIcon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-                                    onClick = {
-                                        showGraphMenu = false
-                                        showCreateGraphDialog = true
-                                    },
-                                )
                                 DropdownMenuItem(
                                     text = { Text("重命名当前关系图") },
                                     leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
@@ -276,35 +274,40 @@ fun RelationshipGraphScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            TabRow(selectedTabIndex = selectedTab.ordinal) {
+            TabRow(
+                selectedTabIndex = selectedTab.ordinal,
+                modifier = Modifier.height(48.dp),
+            ) {
                 Tab(
                     selected = selectedTab == RelationshipGraphTab.NOTE,
                     onClick = {
                         selectedTab = RelationshipGraphTab.NOTE
                         searchQuery = ""
+                        customEditMode = false
                     },
                     text = { Text("笔记关系图") },
-                    icon = { Icon(Icons.Outlined.AccountTree, contentDescription = null) },
                 )
                 Tab(
                     selected = selectedTab == RelationshipGraphTab.CUSTOM,
                     onClick = {
                         selectedTab = RelationshipGraphTab.CUSTOM
                         searchQuery = ""
+                        customEditMode = false
                     },
-                    text = { Text("自制关系图") },
-                    icon = { Icon(Icons.Outlined.Link, contentDescription = null) },
+                    text = { Text("知识关系图") },
                 )
             }
 
-            if (selectedTab == RelationshipGraphTab.CUSTOM && customGraphs.size > 1) {
+            if (selectedTab == RelationshipGraphTab.CUSTOM && customLoaded) {
                 CustomGraphSelector(
                     graphs = customGraphs,
                     selectedGraphId = selectedGraphId,
                     onSelect = {
                         selectedGraphId = it
                         selectedNodeId = null
+                        customEditMode = false
                     },
+                    onCreate = { showCreateGraphDialog = true },
                 )
             }
 
@@ -337,8 +340,8 @@ fun RelationshipGraphScreen(
                     }
                     selectedTab == RelationshipGraphTab.CUSTOM && customGraphData.nodes.isEmpty() -> {
                         GraphEmptyHint(
-                            title = "开始制作人物关系图",
-                            message = "先添加人物节点，再创建人物之间的关系。",
+                            title = "开始制作知识关系图",
+                            message = "先添加节点，再创建节点之间的关系。",
                             modifier = Modifier.align(Alignment.Center),
                         )
                     }
@@ -350,6 +353,7 @@ fun RelationshipGraphScreen(
                             query = searchQuery,
                             isDark = isDark,
                             showEdgeLabels = selectedTab == RelationshipGraphTab.CUSTOM,
+                            editingEnabled = selectedTab == RelationshipGraphTab.CUSTOM && customEditMode,
                             onNodeClick = { nodeId ->
                                 if (selectedTab == RelationshipGraphTab.NOTE) {
                                     noteByPath[normalizeGraphPath(nodeId)]?.let(onNoteClick)
@@ -358,7 +362,7 @@ fun RelationshipGraphScreen(
                                 }
                             },
                             onNodeLongPress = { nodeId ->
-                                if (selectedTab == RelationshipGraphTab.CUSTOM) {
+                                if (selectedTab == RelationshipGraphTab.CUSTOM && customEditMode) {
                                     selectedNodeId = nodeId
                                     editingNodeId = nodeId
                                     showNodeDialog = true
@@ -369,7 +373,7 @@ fun RelationshipGraphScreen(
                     }
                 }
 
-                if (selectedTab == RelationshipGraphTab.CUSTOM && customLoaded) {
+                if (selectedTab == RelationshipGraphTab.CUSTOM && customLoaded && customEditMode) {
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
@@ -386,19 +390,26 @@ fun RelationshipGraphScreen(
                         FloatingActionButton(
                             onClick = {
                                 editingNodeId = null
+                                pendingChildParentId = null
                                 showNodeDialog = true
                             },
                         ) {
-                            Icon(Icons.Outlined.Add, contentDescription = "添加人物节点")
+                            Icon(Icons.Outlined.Add, contentDescription = "添加节点")
                         }
                     }
                 }
 
-                if (selectedTab == RelationshipGraphTab.CUSTOM && selectedCustomNode != null) {
+                if (selectedTab == RelationshipGraphTab.CUSTOM && customEditMode && selectedCustomNode != null) {
                     SelectedCustomNodeCard(
                         node = selectedCustomNode,
                         onEdit = {
                             editingNodeId = selectedCustomNode.id
+                            pendingChildParentId = null
+                            showNodeDialog = true
+                        },
+                        onAddChild = {
+                            editingNodeId = null
+                            pendingChildParentId = selectedCustomNode.id
                             showNodeDialog = true
                         },
                         onAddRelation = {
@@ -434,14 +445,15 @@ fun RelationshipGraphScreen(
 
     if (showCreateGraphDialog) {
         TextValueDialog(
-            title = "新建自制关系图",
+            title = "新建知识关系图",
             label = "关系图名称",
-            initialValue = "人物关系图",
+            initialValue = "知识关系图",
             confirmText = "新建",
             onDismiss = { showCreateGraphDialog = false },
             onConfirm = { title ->
                 val graph = CustomRelationshipGraph(id = UUID.randomUUID().toString(), title = title)
                 persistGraphs(customGraphs + graph, graph.id)
+                customEditMode = true
                 showCreateGraphDialog = false
             },
         )
@@ -483,11 +495,15 @@ fun RelationshipGraphScreen(
 
     if (showNodeDialog && selectedGraph != null) {
         val editingNode = selectedGraph.nodes.firstOrNull { it.id == editingNodeId }
+        val childParent = selectedGraph.nodes.firstOrNull { it.id == pendingChildParentId }
         NodeEditorDialog(
             node = editingNode,
+            parentTitle = childParent?.title,
+            initialGroup = childParent?.group.orEmpty(),
             onDismiss = {
                 showNodeDialog = false
                 editingNodeId = null
+                pendingChildParentId = null
             },
             onConfirm = { name, group ->
                 val nextNode = editingNode?.copy(title = name, group = group)
@@ -501,10 +517,26 @@ fun RelationshipGraphScreen(
                 } else {
                     selectedGraph.nodes.map { if (it.id == editingNode.id) nextNode else it }
                 }
-                persistGraphs(customGraphs.map { if (it.id == selectedGraph.id) it.copy(nodes = nextNodes) else it })
+                val parentId = pendingChildParentId?.takeIf { id -> selectedGraph.nodes.any { it.id == id } }
+                val nextEdges = if (editingNode == null && parentId != null) {
+                    selectedGraph.edges + RelationshipGraphEdge(
+                        id = UUID.randomUUID().toString(),
+                        source = parentId,
+                        target = nextNode.id,
+                        directed = true,
+                    )
+                } else {
+                    selectedGraph.edges
+                }
+                persistGraphs(
+                    customGraphs.map {
+                        if (it.id == selectedGraph.id) it.copy(nodes = nextNodes, edges = nextEdges) else it
+                    },
+                )
                 selectedNodeId = nextNode.id
                 showNodeDialog = false
                 editingNodeId = null
+                pendingChildParentId = null
             },
         )
     }
@@ -562,20 +594,22 @@ private fun RelationshipGraphSearchBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         OutlinedTextField(
             value = query,
             onValueChange = onQueryChange,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .height(52.dp),
             label = { Text("筛选节点") },
             singleLine = true,
         )
         Text(
             text = "$nodeCount 点 · $edgeCount 线",
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -586,37 +620,47 @@ private fun CustomGraphSelector(
     graphs: List<CustomRelationshipGraph>,
     selectedGraphId: String?,
     onSelect: (String) -> Unit,
+    onCreate: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selected = graphs.firstOrNull { it.id == selectedGraphId } ?: graphs.firstOrNull()
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        OutlinedButton(
-            onClick = { expanded = true },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                text = selected?.title.orEmpty(),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-        ) {
-            graphs.forEach { graph ->
-                DropdownMenuItem(
-                    text = { Text(graph.title) },
-                    onClick = {
-                        expanded = false
-                        onSelect(graph.id)
-                    },
+        Box(modifier = Modifier.weight(1f)) {
+            OutlinedButton(
+                onClick = { expanded = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp),
+            ) {
+                Text(
+                    text = selected?.title.orEmpty(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                graphs.forEach { graph ->
+                    DropdownMenuItem(
+                        text = { Text(graph.title) },
+                        onClick = {
+                            expanded = false
+                            onSelect(graph.id)
+                        },
+                    )
+                }
+            }
+        }
+        IconButton(onClick = onCreate) {
+            Icon(Icons.Outlined.Add, contentDescription = "新建知识关系图")
         }
     }
 }
@@ -651,6 +695,7 @@ private fun GraphEmptyHint(
 private fun SelectedCustomNodeCard(
     node: RelationshipGraphNode,
     onEdit: () -> Unit,
+    onAddChild: () -> Unit,
     onAddRelation: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
@@ -662,21 +707,28 @@ private fun SelectedCustomNodeCard(
         shadowElevation = 4.dp,
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(node.title, style = MaterialTheme.typography.titleSmall, maxLines = 1)
-            if (node.group.isNotBlank()) {
-                Text(
-                    node.group,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(node.title, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                    if (node.group.isNotBlank()) {
+                        Text(
+                            node.group,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                TextButton(onClick = onAddChild) { Text("添加子节点") }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 TextButton(onClick = onEdit) { Text("编辑") }
                 TextButton(onClick = onAddRelation) { Text("连线") }
-                TextButton(onClick = onDelete) { Text("删除") }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Outlined.DeleteOutline, contentDescription = "删除节点")
+                }
             }
         }
     }
@@ -823,27 +875,46 @@ private fun TextValueDialog(
 @Composable
 private fun NodeEditorDialog(
     node: RelationshipGraphNode?,
+    parentTitle: String? = null,
+    initialGroup: String = "",
     onDismiss: () -> Unit,
     onConfirm: (name: String, group: String) -> Unit,
 ) {
-    var name by remember(node?.id) { mutableStateOf(node?.title.orEmpty()) }
-    var group by remember(node?.id) { mutableStateOf(node?.group.orEmpty()) }
+    var name by remember(node?.id, parentTitle) { mutableStateOf(node?.title.orEmpty()) }
+    var group by remember(node?.id, parentTitle, initialGroup) {
+        mutableStateOf(node?.group ?: initialGroup)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (node == null) "添加人物" else "编辑人物") },
+        title = {
+            Text(
+                when {
+                    node != null -> "编辑人物"
+                    parentTitle != null -> "添加子节点"
+                    else -> "添加节点"
+                },
+            )
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("人物名称") },
+                    label = { Text("节点名称") },
                     singleLine = true,
                 )
+                if (parentTitle != null) {
+                    Text(
+                        text = "保存后自动连接到「$parentTitle」",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 OutlinedTextField(
                     value = group,
                     onValueChange = { group = it },
                     label = { Text("分组（可选）") },
-                    supportingText = { Text("例如：主角阵营、王室、反派") },
+                    supportingText = { Text("例如：主角、地点、概念") },
                     singleLine = true,
                 )
             }
@@ -877,11 +948,11 @@ private fun RelationEditorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("添加人物关系") },
+        title = { Text("添加节点关系") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 GraphNodeChoiceField(
-                    label = "起点人物",
+                    label = "起点节点",
                     nodes = graph.nodes,
                     selectedId = sourceId,
                     onSelect = { selected ->
@@ -892,7 +963,7 @@ private fun RelationEditorDialog(
                     },
                 )
                 GraphNodeChoiceField(
-                    label = "终点人物",
+                    label = "终点节点",
                     nodes = graph.nodes,
                     selectedId = targetId,
                     onSelect = { targetId = it },
@@ -967,10 +1038,10 @@ private fun RelationsManagerDialog(
     val nodeTitles = remember(graph.nodes) { graph.nodes.associate { it.id to it.title } }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("人物关系") },
+        title = { Text("节点关系") },
         text = {
             if (graph.edges.isEmpty()) {
-                Text("还没有人物关系。")
+                Text("还没有节点关系。")
             } else {
                 LazyColumn(modifier = Modifier.height(320.dp)) {
                     items(graph.edges, key = { it.id }) { edge ->
@@ -1053,7 +1124,7 @@ private fun normalizeGraphPath(path: String): String = path.replace('\\', '/').t
 private fun defaultCustomRelationshipGraph(): CustomRelationshipGraph =
     CustomRelationshipGraph(
         id = UUID.randomUUID().toString(),
-        title = "人物关系图",
+        title = "知识关系图",
     )
 
 private class CustomRelationshipGraphStore(context: Context) {
@@ -1068,7 +1139,7 @@ private class CustomRelationshipGraphStore(context: Context) {
             for (index in 0 until array.length()) {
                 val graphObject = array.optJSONObject(index) ?: continue
                 val graphId = graphObject.optString("id").ifBlank { UUID.randomUUID().toString() }
-                val title = graphObject.optString("title").ifBlank { "人物关系图" }
+                val title = graphObject.optString("title").ifBlank { "知识关系图" }
                 val nodesArray = graphObject.optJSONArray("nodes") ?: JSONArray()
                 val nodes = buildList {
                     for (nodeIndex in 0 until nodesArray.length()) {
@@ -1175,6 +1246,7 @@ private fun RelationshipGraphWebView(
     query: String,
     isDark: Boolean,
     showEdgeLabels: Boolean,
+    editingEnabled: Boolean,
     onNodeClick: (String) -> Unit,
     onNodeLongPress: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -1182,13 +1254,13 @@ private fun RelationshipGraphWebView(
     val currentOnNodeClick = rememberUpdatedState(onNodeClick)
     val currentOnNodeLongPress = rememberUpdatedState(onNodeLongPress)
     val html = remember(isDark) { buildRelationshipGraphHtml(isDark) }
-    val updateScript = remember(graph, settings, query, showEdgeLabels) {
-        buildRelationshipGraphUpdateScript(graph, settings, query, showEdgeLabels)
+    val updateScript = remember(graph, settings, query, showEdgeLabels, editingEnabled) {
+        buildRelationshipGraphUpdateScript(graph, settings, query, showEdgeLabels, editingEnabled)
     }
-    val signature = remember(graph, settings, query, isDark, showEdgeLabels) {
+    val signature = remember(graph, settings, query, isDark, showEdgeLabels, editingEnabled) {
         graph.nodes.joinToString("|") { it.id + it.title + it.group }.hashCode().toString() + ":" +
             graph.edges.joinToString("|") { it.id + it.source + it.target + it.label }.hashCode() + ":" +
-            settings.hashCode() + ":" + query.hashCode() + ":" + isDark + ":" + showEdgeLabels
+            settings.hashCode() + ":" + query.hashCode() + ":" + isDark + ":" + showEdgeLabels + ":" + editingEnabled
     }
 
     AndroidView(
@@ -1204,6 +1276,14 @@ private fun RelationshipGraphWebView(
                 isVerticalScrollBarEnabled = false
                 overScrollMode = View.OVER_SCROLL_NEVER
                 isLongClickable = false
+                setOnTouchListener { view, event ->
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> view.parent?.requestDisallowInterceptTouchEvent(true)
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                            view.parent?.requestDisallowInterceptTouchEvent(false)
+                    }
+                    false
+                }
                 this.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = false
@@ -1329,6 +1409,7 @@ private fun buildRelationshipGraphUpdateScript(
     settings: RelationshipGraphSettings,
     query: String,
     showEdgeLabels: Boolean,
+    editingEnabled: Boolean,
 ): String {
     val nodes = JSONArray().apply {
         graph.nodes.forEach { node ->
@@ -1359,6 +1440,7 @@ private fun buildRelationshipGraphUpdateScript(
         .put("edges", edges)
         .put("query", query)
         .put("showEdgeLabels", showEdgeLabels)
+        .put("editingEnabled", editingEnabled)
         .put(
             "settings",
             JSONObject()
@@ -1432,10 +1514,11 @@ canvas { display: block; width: 100%; height: 100%; }
   let settings = { showOrphans:true, showArrows:false, nodeScale:1, linkScale:1, labelFade:.55, centerForce:1, repelForce:1, linkForce:1, linkDistance:1 };
   let query = '';
   let showEdgeLabels = false;
+  let editingEnabled = false;
   let tx = 0, ty = 0, scale = 1;
   let selectedId = null, hoverId = null;
   let alpha = 0, frameRequested = false, lastVisibleKey = '';
-  let pointerStart = null, dragNode = null, panStart = null, pinchStart = null;
+  let pointerStart = null, pressedNode = null, dragNode = null, panStart = null, pinchStart = null;
   let longPressTimer = null, longPressTriggered = false;
   const pointers = new Map();
 
@@ -1465,6 +1548,7 @@ canvas { display: block; width: 100%; height: 100%; }
   function worldToScreen(x, y) { return { x: x * scale + tx, y: y * scale + ty }; }
   function screenToWorld(x, y) { return { x: (x - tx) / scale, y: (y - ty) / scale }; }
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+  function graphTextScale() { return clamp(scale, .65, 2.2); }
   function nodeRadius(node) { return (3.2 + Math.sqrt(Math.max(0, node.degree || 0)) * 1.35) * settings.nodeScale; }
   function isOrphan(node) { return (node.degree || 0) === 0; }
 
@@ -1793,13 +1877,14 @@ canvas { display: block; width: 100%; height: 100%; }
 
       const point = worldToScreen(node.x, node.y);
       const radius = Math.max(3, nodeRadius(node) * scale);
-      const fontSize = candidate.mustShow ? 12.5 : orphan ? 9.5 : smallGraph ? 11.5 : 10.5;
+      const fontScale = graphTextScale();
+      const fontSize = (candidate.mustShow ? 12.5 : orphan ? 9.5 : smallGraph ? 11.5 : 10.5) * fontScale;
       ctx.font = (candidate.selected ? '600 ' : '500 ') + fontSize + 'px system-ui, sans-serif';
       const maxWidth = Math.max(72, Math.min(190, width * .44));
       const text = ellipsizeText(node.title, maxWidth);
       const textWidth = ctx.measureText(text).width;
       const textHeight = fontSize * 1.22;
-      const gap = 4;
+      const gap = 4 * fontScale;
       const placements = [
         { x:point.x, y:point.y + radius + gap, align:'center', baseline:'top', box:{ left:point.x-textWidth/2-3, top:point.y+radius+gap-2, right:point.x+textWidth/2+3, bottom:point.y+radius+gap+textHeight+2 } },
         { x:point.x, y:point.y - radius - gap, align:'center', baseline:'bottom', box:{ left:point.x-textWidth/2-3, top:point.y-radius-gap-textHeight-2, right:point.x+textWidth/2+3, bottom:point.y-radius-gap+2 } },
@@ -1825,7 +1910,7 @@ canvas { display: block; width: 100%; height: 100%; }
       ctx.textAlign = chosen.align;
       ctx.textBaseline = chosen.baseline;
       ctx.lineJoin = 'round';
-      ctx.lineWidth = 3.4;
+      ctx.lineWidth = 3.4 * fontScale;
       ctx.strokeStyle = background;
       ctx.fillStyle = foreground;
       ctx.globalAlpha = candidate.muted ? .18 : candidate.highlighted || candidate.mustShow ? 1 : clamp((scale - baseThreshold + .55) / .55, .28, .9);
@@ -1875,15 +1960,16 @@ canvas { display: block; width: 100%; height: 100%; }
       if (showEdgeLabels && edge.label && (scale > 1.05 || highlighted)) {
         const mx = (source.x + target.x) / 2;
         const my = (source.y + target.y) / 2;
-        ctx.font = (10.5 / scale) + 'px system-ui, sans-serif';
+        const fontScale = graphTextScale();
+        ctx.font = (10.5 * fontScale / scale) + 'px system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.lineWidth = 3 / scale;
+        ctx.lineWidth = 3 * fontScale / scale;
         ctx.strokeStyle = background;
         ctx.fillStyle = foreground;
         ctx.globalAlpha = muted ? .14 : .82;
-        ctx.strokeText(edge.label, mx, my - 5 / scale);
-        ctx.fillText(edge.label, mx, my - 5 / scale);
+        ctx.strokeText(edge.label, mx, my - 5 * fontScale / scale);
+        ctx.fillText(edge.label, mx, my - 5 * fontScale / scale);
       }
     }
 
@@ -1989,11 +2075,12 @@ canvas { display: block; width: 100%; height: 100%; }
       const dx = values[1].x - values[0].x;
       const dy = values[1].y - values[0].y;
       pinchStart = { distance:Math.hypot(dx,dy), scale, tx, ty, center:{ x:(values[0].x+values[1].x)/2, y:(values[0].y+values[1].y)/2 }, world:screenToWorld((values[0].x+values[1].x)/2, (values[0].y+values[1].y)/2) };
-      dragNode = null; panStart = null;
+      pressedNode = null; dragNode = null; panStart = null;
       return;
     }
     const hit = hitNode(event.clientX, event.clientY);
-    if (hit) {
+    pressedNode = hit;
+    if (hit && editingEnabled) {
       dragNode = hit;
       hit.vx = 0; hit.vy = 0;
       longPressTimer = setTimeout(() => {
@@ -2003,6 +2090,7 @@ canvas { display: block; width: 100%; height: 100%; }
         }
       }, 520);
     } else {
+      dragNode = null;
       panStart = { x:event.clientX, y:event.clientY, tx, ty };
     }
   });
@@ -2042,19 +2130,20 @@ canvas { display: block; width: 100%; height: 100%; }
 
   function finishPointer(event) {
     clearLongPress();
-    const wasDragNode = dragNode;
+    const wasNode = dragNode || pressedNode;
     const duration = pointerStart ? performance.now() - pointerStart.time : 999;
     const distance = pointerStart ? Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) : 999;
     pointers.delete(event.pointerId);
     if (pointers.size < 2) pinchStart = null;
-    if (wasDragNode && !longPressTriggered && duration < 380 && distance < 10) {
-      selectedId = wasDragNode.id;
+    if (wasNode && !longPressTriggered && duration < 380 && distance < 10) {
+      selectedId = wasNode.id;
       if (window.KardLeafRelationshipGraph && window.KardLeafRelationshipGraph.onNodeClick) {
-        window.KardLeafRelationshipGraph.onNodeClick(wasDragNode.id);
+        window.KardLeafRelationshipGraph.onNodeClick(wasNode.id);
       }
-    } else if (!wasDragNode && panStart && distance < 10) {
+    } else if (!wasNode && panStart && distance < 10) {
       selectedId = null;
     }
+    pressedNode = null;
     dragNode = null;
     panStart = null;
     pointerStart = null;
@@ -2079,6 +2168,7 @@ canvas { display: block; width: 100%; height: 100%; }
     settings = { ...settings, ...(payload.settings || {}) };
     query = String(payload.query || '');
     showEdgeLabels = !!payload.showEdgeLabels;
+    editingEnabled = !!payload.editingEnabled;
     const newNodeKey = allNodes.map(node => node.id).sort().join('\u0001');
     rebuildVisibleGraph(oldNodeKey !== newNodeKey || !nodes.length);
   };

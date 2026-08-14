@@ -4,6 +4,12 @@ import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.ui.editor.api.EditorFastScrollMetrics
+import com.kangle.kardleaf.ui.editor.EditorViewportAnchor
+import com.kangle.kardleaf.ui.editor.codeMirrorCrLfCount
+import com.kangle.kardleaf.ui.editor.codeMirrorNormalizedLength
+import com.kangle.kardleaf.ui.editor.parseEditorViewportAnchor
+import com.kangle.kardleaf.ui.editor.toCodeMirrorAnchor
+import com.kangle.kardleaf.ui.editor.toJson
 import com.kangle.kardleaf.ui.editor.native.KardLeafEditorController
 import com.kangle.kardleaf.ui.editor.native.KardLeafEditorSnapshot
 import com.kangle.kardleaf.ui.ImageClickSource
@@ -50,6 +56,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -59,6 +66,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -91,12 +99,18 @@ private val CODEMIRROR_TABLE_TRACE_ENABLED: Boolean
 private val CODEMIRROR_IME_DEEP_TRACE_ENABLED: Boolean
     get() = KardLeafLog.isEnabled(CODEMIRROR_IME_TRACE_TAG)
 private const val CODEMIRROR_ASSET_BASE_URL = "file:///android_asset/codemirror-editor/index.html"
-private val CODEMIRROR_ASSET_URL =
-    if (CODEMIRROR_TABLE_TRACE_ENABLED) "$CODEMIRROR_ASSET_BASE_URL?cmTrace=1" else CODEMIRROR_ASSET_BASE_URL
 private const val CODEMIRROR_LIVE_PREVIEW_LARGE_DOC_LIMIT = 200_000
 private const val CODEMIRROR_IMAGE_PREVIEW_MAX_COUNT = 24
 private const val CODEMIRROR_IMAGE_PREVIEW_MAX_TOTAL_CHARS = 2_000_000
 private val CODEMIRROR_NEUTRAL_ACCENT = Color(0xFF9A9A9A)
+
+private fun buildCodeMirrorAssetUrl(livePreviewEnabled: Boolean): String =
+    buildString {
+        append(CODEMIRROR_ASSET_BASE_URL)
+        append("?livePreview=")
+        append(livePreviewEnabled)
+        if (CODEMIRROR_TABLE_TRACE_ENABLED) append("&cmTrace=1")
+    }
 
 private fun codeMirrorNavigationBlockReason(uri: Uri): String? {
     if (uri.scheme != "file") return "scheme"
@@ -104,7 +118,9 @@ private fun codeMirrorNavigationBlockReason(uri: Uri): String? {
     if (uri.userInfo != null) return "user_info"
     if (uri.port != -1) return "port"
     if (uri.path != "/android_asset/codemirror-editor/index.html") return "path"
-    if (!uri.query.isNullOrEmpty() && uri.query != "cmTrace=1") return "query"
+    if (uri.queryParameterNames.any { it != "livePreview" && it != "cmTrace" }) return "query"
+    if (uri.getQueryParameters("livePreview").let { it.size > 1 || it.any { value -> value != "true" && value != "false" } }) return "query"
+    if (uri.getQueryParameters("cmTrace").let { it.size > 1 || it.any { value -> value != "1" } }) return "query"
     return null
 }
 
@@ -125,6 +141,7 @@ private class CodeMirrorWebViewLifecycleState(
 ) {
     @Volatile
     var released: Boolean = false
+    var active: Boolean? = null
 }
 
 private fun WebView.codeMirrorLifecycleState(): CodeMirrorWebViewLifecycleState? =
@@ -423,6 +440,49 @@ class CodeMirrorWebViewScrollController {
         }
     }
 
+    fun scrollToOffset(offset: Int) {
+        val view = webView ?: return
+        if (view.isCodeMirrorReleased()) return
+        view.evaluateJavascript(
+            "if (window.KardLeafEditor && window.KardLeafEditor.scrollToOffset) { window.KardLeafEditor.scrollToOffset(${offset.coerceAtLeast(0)}); } else { 'missing'; }",
+            null,
+        )
+    }
+
+    internal fun getViewportAnchor(onResult: (EditorViewportAnchor?) -> Unit) {
+        val view = webView
+        if (view == null || view.isCodeMirrorReleased()) {
+            onResult(null)
+            return
+        }
+        view.evaluateJavascript(
+            "if (window.KardLeafEditor && window.KardLeafEditor.getViewportAnchor) { window.KardLeafEditor.getViewportAnchor(); } else { null; }",
+        ) { result ->
+            onResult(parseEditorViewportAnchor(result))
+        }
+    }
+
+    internal fun scrollViewportToAnchor(anchor: EditorViewportAnchor, onResult: (String?) -> Unit = {}) {
+        val view = webView
+        if (view == null || view.isCodeMirrorReleased()) {
+            onResult(null)
+            return
+        }
+        view.evaluateJavascript(
+            "if (window.KardLeafEditor && window.KardLeafEditor.scrollViewportToAnchor) { window.KardLeafEditor.scrollViewportToAnchor(${anchor.toJson()}); } else { 'missing'; }",
+        ) { result ->
+            if (view.isCodeMirrorReleased()) return@evaluateJavascript
+            parseCodeMirrorViewportAnchorScrollTop(result)?.let { lastScrollTop = it }
+            view.postOnAnimation {
+                if (!view.isCodeMirrorReleased()) onResult(result)
+            }
+        }
+    }
+
+    internal fun getScrollTop(): Int = lastScrollTop
+
+    internal fun hasFocus(): Boolean = webView?.hasFocus() == true
+
     fun refreshScrollMetrics() {
         val view = webView ?: return
         if (view.isCodeMirrorReleased()) return
@@ -435,6 +495,13 @@ class CodeMirrorWebViewScrollController {
         }
     }
 }
+
+internal fun parseCodeMirrorViewportAnchorScrollTop(result: String?): Int? =
+    result
+        ?.trim('"')
+        ?.takeIf { it.startsWith("ok:") }
+        ?.substringAfterLast(':')
+        ?.toIntOrNull()
 
 private data class CodeMirrorScrollMetrics(
     val scrollTop: Int,
@@ -770,7 +837,7 @@ private class CodeMirrorImeTraceWebView(context: Context) : WebView(context) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun KardLeafCodeMirrorEditor(
+internal fun KardLeafCodeMirrorEditor(
     initialTitle: String,
     initialContent: String,
     documentKey: String,
@@ -794,9 +861,13 @@ fun KardLeafCodeMirrorEditor(
     isDark: Boolean,
     showTitle: Boolean,
     livePreviewEnabled: Boolean = false,
+    active: Boolean = true,
     keyboardInsetPx: Int = 0,
     requestFocusToken: Int = 0,
+    onFocusRequestHandled: (Int) -> Unit = {},
     preferredFocusSelection: TextRange? = null,
+    initialViewportAnchor: EditorViewportAnchor? = null,
+    onInitialViewportAnchorApplied: (EditorViewportAnchor, String?) -> Unit = { _, _ -> },
     onDrawingImageClicked: (KardLeafImageClickTarget) -> Unit = {},
     wikilinkNotes: List<Note> = emptyList(),
     onInternalLinkOpen: (String) -> Unit = {},
@@ -807,6 +878,7 @@ fun KardLeafCodeMirrorEditor(
     modifier: Modifier = Modifier,
 ) {
     val webViewRef = remember { AtomicReference<WebView?>(null) }
+    val codeMirrorAssetUrl = buildCodeMirrorAssetUrl(livePreviewEnabled)
     val appContext = LocalContext.current.applicationContext
     val appColorScheme = MaterialTheme.colorScheme
     val codeMirrorBackgroundArgb = appColorScheme.background.toArgb()
@@ -826,6 +898,9 @@ fun KardLeafCodeMirrorEditor(
     val latestOnDrawingImageClicked by rememberUpdatedState(onDrawingImageClicked)
     val latestWikilinkNotes by rememberUpdatedState(wikilinkNotes)
     val latestOnInternalLinkOpen by rememberUpdatedState(onInternalLinkOpen)
+    val latestOnFocusRequestHandled by rememberUpdatedState(onFocusRequestHandled)
+    val latestInitialViewportAnchor by rememberUpdatedState(initialViewportAnchor)
+    val latestOnInitialViewportAnchorApplied by rememberUpdatedState(onInitialViewportAnchorApplied)
     val latestResolveImages by rememberUpdatedState(resolveImages)
     val latestInitialContent by rememberUpdatedState(initialContent)
     val latestIsDark by rememberUpdatedState(isDark)
@@ -912,6 +987,7 @@ fun KardLeafCodeMirrorEditor(
                 "focus token handled token=$requestFocusToken result=$result selection=${selection.start}:${selection.end} " +
                     "keyboardShown=$keyboardShown pageReady=$pageReady contentApplied=$codeMirrorContentApplied key=$documentKey",
             )
+            latestOnFocusRequestHandled(requestFocusToken)
         }
     }
 
@@ -934,12 +1010,20 @@ fun KardLeafCodeMirrorEditor(
     LaunchedEffect(pageReady, livePreviewEnabled) {
         if (pageReady) {
             val livePreviewFlag = if (livePreviewEnabled) "true" else "false"
-            webViewRef.get()?.evaluateJavascript(
+            val webView = webViewRef.get()
+            webView?.evaluateJavascript(
                 "if (window.KardLeafEditor && window.KardLeafEditor.setLivePreviewEnabled) { " +
-                    "window.KardLeafEditor.setLivePreviewEnabled($livePreviewFlag); 'ok'; " +
+                    "window.KardLeafEditor.setLivePreviewEnabled($livePreviewFlag); " +
                     "} else { 'missing'; }",
-                null,
-            )
+            ) { result ->
+                KardLeafLog.d(CODEMIRROR_TRACE_TAG, "live preview applied enabled=$livePreviewEnabled result=$result")
+                if (result?.contains("reload_required") == true) {
+                    KardLeafLog.d(
+                        CODEMIRROR_TRACE_TAG,
+                        "live preview deferred until next editor surface key=$documentKey",
+                    )
+                }
+            }
         }
     }
 
@@ -1037,6 +1121,14 @@ fun KardLeafCodeMirrorEditor(
             lastContentAppliedAt = 0L
             lastPushedContentLength = initialContent.length
             lastPushDocumentAt = pushStartedAt
+            val normalizedContentLength = codeMirrorNormalizedLength(initialContent)
+            val crlfCount = codeMirrorCrLfCount(initialContent)
+            KardLeafLog.d(
+                CODEMIRROR_TRACE_TAG,
+                "push document audit key=$documentKey rawLen=${initialContent.length} " +
+                    "normalizedLen=$normalizedContentLength crlfCount=$crlfCount " +
+                    "lfCount=${initialContent.count { it == '\n' }} attempt=$attempt",
+            )
             webViewRef.get()?.pushDocumentToCodeMirror(
                 content = initialContent,
                 selection = selection,
@@ -1263,12 +1355,20 @@ fun KardLeafCodeMirrorEditor(
                     }
                     val evalElapsed = SystemClock.elapsedRealtime() - evalStart
                     val text = decodeJavascriptStringResult(result)
+                    val cachedSnapshot = controller.getCachedSnapshot()
                     if (text == null) {
                         KardLeafLog.w(
                             CODEMIRROR_TRACE_TAG,
                             "snapshot request failed result=$result key=$documentKey eval=${evalElapsed}ms queue=${evalStart - requestAt}ms",
                         )
-                        callback(controller.getCachedSnapshot())
+                        callback(cachedSnapshot)
+                    } else if (text.isEmpty() && cachedSnapshot.content.isNotEmpty() && (!pageReady || !codeMirrorContentApplied)) {
+                        KardLeafLog.w(
+                            CODEMIRROR_TRACE_TAG,
+                            "snapshot ignored empty editor result key=$documentKey cachedLen=${cachedSnapshot.content.length} " +
+                                "pageReady=$pageReady contentApplied=$codeMirrorContentApplied",
+                        )
+                        callback(cachedSnapshot)
                     } else {
                         val selection = controller.getSelection()
                         controller.updateExternalContentSnapshot(text, selection)
@@ -1325,18 +1425,70 @@ fun KardLeafCodeMirrorEditor(
                 val wasApplied = codeMirrorContentApplied
                 val now = SystemClock.elapsedRealtime()
                 val sincePush = if (lastPushDocumentAt > 0L) now - lastPushDocumentAt else -1L
+                val rawContentLength = latestInitialContent.length
+                val normalizedContentLength = codeMirrorNormalizedLength(latestInitialContent)
+                val crlfCount = codeMirrorCrLfCount(latestInitialContent)
+                val matchesRawLength = contentLength == lastPushedContentLength && contentLength == rawContentLength
+                val matchesNormalizedLength = contentLength == normalizedContentLength
                 codeMirrorContentApplied = true
                 lastContentAppliedAt = now
+                KardLeafLog.d(
+                    CODEMIRROR_TRACE_TAG,
+                    "content apply audit key=$documentKey rawLen=$rawContentLength actualLen=$contentLength " +
+                        "pushedLen=$lastPushedContentLength normalizedLen=$normalizedContentLength " +
+                        "crlfCount=$crlfCount rawMatch=$matchesRawLength normalizedMatch=$matchesNormalizedLength " +
+                        "delta=${rawContentLength - contentLength}",
+                )
                 if (
                     !hasShownInitialContent &&
-                    contentLength == lastPushedContentLength &&
-                    contentLength == latestInitialContent.length
+                    (matchesRawLength || matchesNormalizedLength)
                 ) {
-                    hasShownInitialContent = true
-                    webViewRef.get()?.alpha = 1f
-                    KardLeafLog.d(
+                    val anchor = latestInitialViewportAnchor
+                    if (anchor == null) {
+                        hasShownInitialContent = true
+                        webViewRef.get()?.alpha = 1f
+                        KardLeafLog.d(
+                            CODEMIRROR_TRACE_TAG,
+                            "initial surface revealed key=$documentKey actualLen=$contentLength " +
+                                "rawLen=$rawContentLength normalizedLen=$normalizedContentLength",
+                        )
+                    } else {
+                        val codeMirrorAnchor = anchor.toCodeMirrorAnchor(latestInitialContent)
+                        KardLeafLog.d(
+                            CODEMIRROR_SCROLL_TRACE_TAG,
+                            "initial anchor apply start key=$documentKey pageReady=$pageReady contentApplied=true " +
+                                "rawAnchorOffset=${anchor.offset} codeMirrorAnchorOffset=${codeMirrorAnchor.offset} " +
+                                "pendingAnchorEdge=${anchor.edge} rawLen=$rawContentLength " +
+                                "normalizedLen=$normalizedContentLength crlfCount=$crlfCount " +
+                                "scrollTopBefore=${scrollController.getScrollTop()}",
+                        )
+                        scrollController.scrollViewportToAnchor(codeMirrorAnchor) { result ->
+                            if (result?.contains("ok:") != true) {
+                                KardLeafLog.w(
+                                    CODEMIRROR_SCROLL_TRACE_TAG,
+                                    "initial anchor apply failed key=$documentKey rawOffset=${anchor.offset} " +
+                                        "codeMirrorOffset=${codeMirrorAnchor.offset} result=$result",
+                                )
+                                return@scrollViewportToAnchor
+                            }
+                            hasShownInitialContent = true
+                            webViewRef.get()?.alpha = 1f
+                            KardLeafLog.d(
+                                CODEMIRROR_SCROLL_TRACE_TAG,
+                                "initial anchor apply result key=$documentKey rawOffset=${anchor.offset} " +
+                                    "codeMirrorOffset=${codeMirrorAnchor.offset} edge=${anchor.edge} " +
+                                    "anchorApplyResult=$result scrollTopAfter=${scrollController.getScrollTop()} " +
+                                    "hasFocus=${webViewRef.get()?.hasFocus()}",
+                            )
+                            latestOnInitialViewportAnchorApplied(anchor, result)
+                        }
+                    }
+                } else if (!hasShownInitialContent) {
+                    KardLeafLog.w(
                         CODEMIRROR_TRACE_TAG,
-                        "initial surface revealed len=$contentLength key=$documentKey",
+                        "initial content confirmation rejected key=$documentKey rawLen=$rawContentLength " +
+                            "actualLen=$contentLength pushedLen=$lastPushedContentLength " +
+                            "normalizedLen=$normalizedContentLength crlfCount=$crlfCount",
                     )
                 }
                 KardLeafLog.d(
@@ -1438,20 +1590,38 @@ fun KardLeafCodeMirrorEditor(
                 .fillMaxWidth()
                 .weight(1f),
         ) {
-            if (!hasShownInitialContent && initialContent.isNotEmpty()) {
-                Text(
-                    text = initialContent.take(2_000),
-                    color = textColor,
-                    fontSize = contentTextSize,
-                    lineHeight = (contentTextSize.value * contentLineHeightMultiplier).sp,
-                    letterSpacing = contentLetterSpacingSp.sp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 12.dp),
-                )
+            if (active && !hasShownInitialContent) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (showTitle) {
+                        Text(
+                            text = initialTitle.ifBlank { titleHint },
+                            color = if (initialTitle.isBlank()) hintColor else textColor,
+                            fontSize = titleTextSize,
+                            lineHeight = (titleTextSize.value * 1.5f).sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                        )
+                    }
+                    if (initialContent.isNotEmpty()) {
+                        Text(
+                            text = initialContent.take(2_000),
+                            color = textColor,
+                            fontSize = contentTextSize,
+                            lineHeight = (contentTextSize.value * contentLineHeightMultiplier).sp,
+                            letterSpacing = contentLetterSpacingSp.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = if (showTitle) 0.dp else 12.dp),
+                        )
+                    }
+                }
             }
-            AndroidView(
-                factory = { context ->
+            key(documentKey) {
+                AndroidView(
+                    factory = { context ->
                 val isDebuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
                 val codeMirrorWebView = CodeMirrorImeTraceWebView(context).apply {
                     traceKey = documentKey
@@ -1470,12 +1640,16 @@ fun KardLeafCodeMirrorEditor(
                     scrollController.attach(this)
                     KardLeafLog.d(
                         CODEMIRROR_TRACE_TAG,
-                        "factory create key=$documentKey initialContentLen=${initialContent.length}",
+                        "factory create key=$documentKey initialContentLen=${initialContent.length} active=$active " +
+                            "viewId=${System.identityHashCode(this)}",
                     )
                     WebView.setWebContentsDebuggingEnabled(isDebuggable)
                     setBackgroundColor(codeMirrorBackgroundArgb)
                     alpha = 0f
-                    visibility = View.VISIBLE
+                    visibility = if (active) View.VISIBLE else View.INVISIBLE
+                    isEnabled = active
+                    importantForAccessibility =
+                        if (active) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                     isVerticalScrollBarEnabled = false
                     isHorizontalScrollBarEnabled = false
                     isFocusable = true
@@ -1686,9 +1860,9 @@ fun KardLeafCodeMirrorEditor(
                         if (isCodeMirrorReleased()) return
                         KardLeafLog.d(
                             CODEMIRROR_TRACE_TAG,
-                            "CodeMirror page load requested reason=$reason key=$documentKey url=$CODEMIRROR_ASSET_URL width=$width height=$height attached=$isAttachedToWindow",
+                            "CodeMirror page load requested reason=$reason key=$documentKey url=$codeMirrorAssetUrl width=$width height=$height attached=$isAttachedToWindow",
                         )
-                        loadUrl(CODEMIRROR_ASSET_URL)
+                        loadUrl(codeMirrorAssetUrl)
                     }
                     lateinit var lifecycleState: CodeMirrorWebViewLifecycleState
                     val initialLoadRunnable = Runnable {
@@ -1725,8 +1899,21 @@ fun KardLeafCodeMirrorEditor(
                 lifecycleState.bridgeHost.replace(bridge, documentKey)
                 webViewRef.set(webView)
                 scrollController.attach(webView)
-                webView.visibility = View.VISIBLE
-                webView.alpha = if (hasShownInitialContent) 1f else 0f
+                webView.visibility = if (active) View.VISIBLE else View.INVISIBLE
+                webView.isEnabled = active
+                webView.importantForAccessibility =
+                    if (active) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                if (!active) webView.clearFocus()
+                webView.alpha = if (active && hasShownInitialContent) 1f else 0f
+                if (lifecycleState.active != active) {
+                    lifecycleState.active = active
+                    KardLeafLog.d(
+                        CODEMIRROR_TRACE_TAG,
+                        "modeSurface active=$active viewId=${System.identityHashCode(webView)} " +
+                            "visibility=${webView.visibility} alpha=${webView.alpha} size=${webView.width}x${webView.height} " +
+                            "pageReady=$pageReady contentApplied=$codeMirrorContentApplied",
+                    )
+                }
                 webView.setBackgroundColor(codeMirrorBackgroundArgb)
                 androidViewUpdateCount[0] += 1
                 val now = SystemClock.elapsedRealtime()
@@ -1765,7 +1952,8 @@ fun KardLeafCodeMirrorEditor(
                     webView.destroy()
                     KardLeafLog.d(CODEMIRROR_TRACE_TAG, "event=release_done")
                 },
-            )
+                )
+            }
         }
     }
 }

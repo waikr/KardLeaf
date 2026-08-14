@@ -18,18 +18,18 @@ val localProperties = Properties().apply {
 }
 
 fun readGitOutput(vararg args: String): String = runCatching {
-    val process = ProcessBuilder("git", *args)
+    val process = ProcessBuilder("git", "-c", "core.quotePath=false", *args)
         .directory(rootProject.projectDir)
-        .redirectErrorStream(true)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
         .start()
     val output = process.inputStream.bufferedReader().readText().trim()
     if (process.waitFor() == 0 && output.isNotBlank()) output else "unknown"
 }.getOrDefault("unknown")
 
 fun readGitLines(vararg args: String): List<String>? = runCatching {
-    val process = ProcessBuilder("git", *args)
+    val process = ProcessBuilder("git", "-c", "core.quotePath=false", *args)
         .directory(rootProject.projectDir)
-        .redirectErrorStream(true)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
         .start()
     val output = process.inputStream.bufferedReader().readLines()
     if (process.waitFor() == 0) output.filter { it.isNotBlank() } else null
@@ -43,24 +43,41 @@ fun buildConfigString(value: String): String =
         .replace("\n", "\\n") + "\""
 
 val currentGitCommit = readGitOutput("rev-parse", "--short", "HEAD")
+val currentGitWorktree = readGitOutput("rev-parse", "--show-toplevel")
+val currentGitBranch = readGitOutput("branch", "--show-current").let { branch ->
+    if (branch != "unknown") branch else readGitOutput("rev-parse", "--abbrev-ref", "HEAD")
+}
 val currentGitMessage = readGitOutput("log", "-1", "--pretty=%s")
-val currentGitChangedFiles = run {
+val currentGitChangedFilePaths: List<String>? = run {
     val trackedFiles = readGitLines("diff", "--name-only", "HEAD")
     val untrackedFiles = readGitLines("ls-files", "--others", "--exclude-standard")
     if (trackedFiles == null || untrackedFiles == null) {
-        "unknown"
+        null
     } else {
-        val files = (trackedFiles + untrackedFiles)
-            .map { it.substringAfterLast('/') }
-            .distinct()
-            .sorted()
-        when {
-            files.isEmpty() -> "无未提交文件"
-            files.size <= 50 -> "${files.size} 个：" + files.joinToString(" | ")
-            else -> "${files.size} 个：" + files.take(50).joinToString(" | ") + " | ..."
-        }
+        (trackedFiles + untrackedFiles).distinct().sorted()
     }
 }
+val currentGitChangedFiles = currentGitChangedFilePaths?.let { files ->
+    when {
+        files.isEmpty() -> "无未提交文件"
+        files.size <= 50 -> "${files.size} 个：" + files.joinToString(" | ") { it.substringAfterLast('/') }
+        else -> "${files.size} 个：" + files.take(50).joinToString(" | ") { it.substringAfterLast('/') } + " | ..."
+    }
+} ?: "unknown"
+val currentGitChangedFileDetails = currentGitChangedFilePaths?.joinToString("\n") { path ->
+    val modifiedMs = rootProject.file(path).takeIf { it.isFile }?.lastModified()?.takeIf { it > 0L } ?: 0L
+    "$path\t$modifiedMs"
+}.orEmpty()
+val currentGitLatestFileModifiedMs = readGitLines(
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+).orEmpty()
+    .mapNotNull { path ->
+        rootProject.file(path).takeIf { it.isFile }?.lastModified()?.takeIf { it > 0L }
+    }
+    .maxOrNull() ?: 0L
 
 android {
     namespace = "com.kangle.kardleaf"
@@ -71,11 +88,14 @@ android {
         applicationId = "com.kardleaf"
         minSdk = 23
         targetSdk = 34
-        versionCode = 170
-        versionName = "1.7.0"
+        versionCode = 180
+        versionName = "1.8.0"
         manifestPlaceholders["appLabel"] = "KardLeaf"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "KARDLEAF_TRIAL_GATEWAY_URL", buildConfigString("https://ai.waikrfaio.xyz"))
+        buildConfigField("String", "KARDLEAF_GIT_WORKTREE", buildConfigString(currentGitWorktree))
+        buildConfigField("String", "KARDLEAF_GIT_BRANCH", buildConfigString(currentGitBranch))
+        buildConfigField("long", "KARDLEAF_LATEST_FILE_MODIFIED_MS", currentGitLatestFileModifiedMs.toString())
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -90,6 +110,7 @@ android {
             buildConfigField("String", "KARDLEAF_GIT_COMMIT", buildConfigString(currentGitCommit))
             buildConfigField("String", "KARDLEAF_GIT_MESSAGE", buildConfigString(currentGitMessage))
             buildConfigField("String", "KARDLEAF_GIT_CHANGED_FILES", buildConfigString(currentGitChangedFiles))
+            buildConfigField("String", "KARDLEAF_GIT_CHANGED_FILE_DETAILS", buildConfigString(currentGitChangedFileDetails))
         }
         create("dev") {
             dimension = "distribution"
@@ -100,6 +121,7 @@ android {
             buildConfigField("String", "KARDLEAF_GIT_COMMIT", buildConfigString(currentGitCommit))
             buildConfigField("String", "KARDLEAF_GIT_MESSAGE", buildConfigString(currentGitMessage))
             buildConfigField("String", "KARDLEAF_GIT_CHANGED_FILES", buildConfigString(currentGitChangedFiles))
+            buildConfigField("String", "KARDLEAF_GIT_CHANGED_FILE_DETAILS", buildConfigString(currentGitChangedFileDetails))
         }
     }
 

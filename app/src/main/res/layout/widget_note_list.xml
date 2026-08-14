@@ -37,6 +37,7 @@
                 android:textSize="15sp" />
 
             <ImageView
+                android:id="@+id/note_widget_folder_arrow"
                 android:layout_width="16dp"
                 android:layout_height="16dp"
                 android:layout_marginStart="1dp"
