@@ -2,6 +2,7 @@ package com.kangle.kardleaf.ui.editor.host
 
 import com.kangle.kardleaf.ui.editor.api.EditorFastScrollMetrics
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.LocalPreviewImageResource
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -20,6 +21,7 @@ import android.view.VelocityTracker
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -36,6 +38,8 @@ import com.kangle.kardleaf.R
 import com.kangle.kardleaf.ui.editor.EditorViewportAnchor
 import com.kangle.kardleaf.ui.editor.parseEditorViewportAnchor
 import com.kangle.kardleaf.ui.editor.toJson
+import java.io.ByteArrayInputStream
+import java.net.URLConnection
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicLong
@@ -60,6 +64,48 @@ private fun isAllowedPreviewMainFrameUri(uri: Uri): Boolean {
             uri.getQueryParameters("dark").singleOrNull() in setOf("true", "false")
     }.getOrDefault(false)
 }
+
+private fun interceptLocalPreviewImage(
+    context: Context,
+    requestUri: Uri,
+): WebResourceResponse? {
+    if (!LocalPreviewImageResource.isRequest(requestUri)) return null
+    val sourceUri = LocalPreviewImageResource.decodeSourceUri(requestUri)
+        ?: return previewImageErrorResponse()
+    val stream = runCatching { context.contentResolver.openInputStream(sourceUri) }.getOrNull()
+        ?: return previewImageErrorResponse()
+    val mimeType =
+        LocalPreviewImageResource.mimeType(requestUri)
+            ?: context.contentResolver.getType(sourceUri)?.takeIf { it.startsWith("image/", ignoreCase = true) }
+            ?: URLConnection.guessContentTypeFromName(sourceUri.lastPathSegment.orEmpty())
+            ?: "application/octet-stream"
+    val strongVersion = LocalPreviewImageResource.hasStrongVersion(requestUri)
+    val responseHeaders = mutableMapOf(
+        "Cache-Control" to if (strongVersion) "public, max-age=31536000, immutable" else "no-store, no-cache, must-revalidate",
+        "Access-Control-Allow-Origin" to "*",
+        "Content-Disposition" to "inline",
+        "X-Content-Type-Options" to "nosniff",
+    )
+    if (!strongVersion) responseHeaders["Pragma"] = "no-cache"
+    return WebResourceResponse(
+        mimeType,
+        null,
+        200,
+        "OK",
+        responseHeaders,
+        stream,
+    )
+}
+
+private fun previewImageErrorResponse(): WebResourceResponse =
+    WebResourceResponse(
+        "text/plain",
+        "utf-8",
+        404,
+        "Not Found",
+        mapOf("Cache-Control" to "no-store"),
+        ByteArrayInputStream(ByteArray(0)),
+    )
 
 private fun handlePreviewMainFrameNavigation(
     context: Context,
@@ -925,6 +971,25 @@ fun PreviewWebView(
 
                 webViewClient =
                     object : WebViewClient() {
+                        override fun shouldInterceptRequest(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                        ): WebResourceResponse? {
+                            val requestUri = request?.url ?: return super.shouldInterceptRequest(view, request)
+                            return interceptLocalPreviewImage(context, requestUri)
+                                ?: super.shouldInterceptRequest(view, request)
+                        }
+
+                        @Suppress("DEPRECATION")
+                        override fun shouldInterceptRequest(
+                            view: WebView?,
+                            url: String?,
+                        ): WebResourceResponse? {
+                            val requestUri = url?.let(Uri::parse) ?: return super.shouldInterceptRequest(view, url)
+                            return interceptLocalPreviewImage(context, requestUri)
+                                ?: super.shouldInterceptRequest(view, url)
+                        }
+
                         override fun onPageStarted(
                             view: WebView?,
                             url: String?,

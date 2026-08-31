@@ -936,9 +936,10 @@ export function createBlockCodeExtension(options: BlockCodeOptions = {}): Extens
     update(deco, tr) {
       // 检查是否有 toggle 模式的源码切换
       const hasModeToggle = tr.effects.some((e) => e.is(setCodeBlockSourceMode));
+      const syntaxTreeChanged = syntaxTree(tr.startState) !== syntaxTree(tr.state);
 
-      // 如果文档、配置、选区或源码模式发生变化，重建装饰
-      if (tr.docChanged || tr.reconfigured || tr.selection || hasModeToggle) {
+      // 后台解析补全后也要重建，否则长文后半段代码块会缺少工具栏。
+      if (tr.docChanged || tr.reconfigured || tr.selection || hasModeToggle || syntaxTreeChanged) {
         return buildDecorations(tr.state, mode);
       }
       // 否则保持原装饰

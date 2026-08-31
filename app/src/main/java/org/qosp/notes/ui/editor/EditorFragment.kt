@@ -1448,7 +1448,7 @@ class EditorFragment : BaseFragment(R.layout.fragment_editor) {
             KardLeafCustomFeatures.DefaultToolbarOrder,
             emptySet(),
         )
-        val configuredIds = configuredItems.map(::toolbarMenuId)
+        val configuredIds = configuredItems.mapNotNull(::toolbarMenuId)
         val extraIds = listOf(
             R.id.action_insert_highlight,
             R.id.action_indent,
@@ -1481,12 +1481,15 @@ class EditorFragment : BaseFragment(R.layout.fragment_editor) {
         }
     }
 
-    private fun toolbarMenuId(item: KardLeafCustomFeatures.ToolbarItem): Int = when (item) {
+    private fun toolbarMenuId(item: KardLeafCustomFeatures.ToolbarItem): Int? = when (item) {
         KardLeafCustomFeatures.ToolbarItem.PREVIEW -> R.id.action_preview
         KardLeafCustomFeatures.ToolbarItem.UNDO -> R.id.action_undo
         KardLeafCustomFeatures.ToolbarItem.REDO -> R.id.action_redo
         KardLeafCustomFeatures.ToolbarItem.IMAGE -> R.id.action_insert_image
         KardLeafCustomFeatures.ToolbarItem.DRAWING -> R.id.action_insert_drawing
+        // These actions belong to the Compose editor toolbar; the legacy sandbox has no matching menu items.
+        KardLeafCustomFeatures.ToolbarItem.DATETIME,
+        KardLeafCustomFeatures.ToolbarItem.SYMBOLS -> null
         KardLeafCustomFeatures.ToolbarItem.HEADING -> R.id.action_insert_heading_1
         KardLeafCustomFeatures.ToolbarItem.HEADING2 -> R.id.action_insert_heading_2
         KardLeafCustomFeatures.ToolbarItem.HEADING3 -> R.id.action_insert_heading_3

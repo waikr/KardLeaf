@@ -7,6 +7,50 @@ import com.kangle.kardleaf.data.model.NoteSearchMatch
 import com.kangle.kardleaf.data.model.NoteSearchOptions
 import kotlinx.coroutines.flow.Flow
 
+data class RefreshResult(
+    val generation: Long,
+    val addedPaths: Set<String> = emptySet(),
+    val modifiedPaths: Set<String> = emptySet(),
+    val deletedPaths: Set<String> = emptySet(),
+    val success: Boolean = true,
+) {
+    val changed: Boolean
+        get() = addedPaths.isNotEmpty() || modifiedPaths.isNotEmpty() || deletedPaths.isNotEmpty()
+}
+
+data class MergeNotesOptions(
+    val includeTitles: Boolean = false,
+    val separator: String = DEFAULT_SEPARATOR,
+    val moveSourcesToTrash: Boolean = false,
+    val mergeMetadata: Boolean = false,
+) {
+    companion object {
+        const val DEFAULT_SEPARATOR = "\n\n"
+    }
+}
+
+data class MergeNotesResult(
+    val targetPath: String? = null,
+    val sourceCount: Int = 0,
+    val handledSourceCount: Int = 0,
+    val failedSourceCount: Int = 0,
+)
+
+internal fun mergeMarkdownBlocks(
+    notes: List<Note>,
+    includeTitles: Boolean,
+    separator: String,
+): String = notes.joinToString(separator) { note ->
+    buildString {
+        if (includeTitles) {
+            append("# ")
+            append(note.title)
+            append("\n\n")
+        }
+        append(note.content.trimEnd('\r', '\n'))
+    }
+}
+
 interface NoteRepository {
     fun getAllNotes(): Flow<List<Note>>
 
@@ -21,6 +65,11 @@ interface NoteRepository {
         oldFile: java.io.File? = null,
         saveHistory: Boolean = false,
     ): String
+
+    suspend fun mergeNotes(
+        noteIds: List<String>,
+        options: MergeNotesOptions = MergeNotesOptions(),
+    ): MergeNotesResult
 
     fun getNoteHistory(noteId: String): Flow<List<NoteHistory>>
 
@@ -89,5 +138,5 @@ interface NoteRepository {
 
     suspend fun cleanupExpiredTrash(olderThanDays: Int)
 
-    suspend fun refreshNotes()
+    suspend fun refreshNotes(): RefreshResult
 }

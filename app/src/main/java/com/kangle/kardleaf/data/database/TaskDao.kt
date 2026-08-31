@@ -17,8 +17,8 @@ interface TaskDao {
         SELECT * FROM tasks
         WHERE isTrashed = 0
         ORDER BY done ASC,
-            CASE WHEN reminderAt IS NULL THEN 1 ELSE 0 END ASC,
-            reminderAt ASC,
+            CASE WHEN COALESCE(dueAt, reminderAt) IS NULL THEN 1 ELSE 0 END ASC,
+            COALESCE(dueAt, reminderAt) ASC,
             updatedAt DESC
         """,
     )
@@ -68,8 +68,8 @@ interface TaskDao {
         SELECT * FROM tasks
         WHERE isTrashed = 0 AND done = 0
         ORDER BY
-            CASE WHEN reminderAt IS NULL THEN 1 ELSE 0 END ASC,
-            reminderAt ASC,
+            CASE WHEN COALESCE(dueAt, reminderAt) IS NULL THEN 1 ELSE 0 END ASC,
+            COALESCE(dueAt, reminderAt) ASC,
             updatedAt DESC
         LIMIT :limit
         """,

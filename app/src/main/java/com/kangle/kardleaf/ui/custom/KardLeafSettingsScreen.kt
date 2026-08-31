@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -15,6 +16,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -22,12 +24,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
@@ -49,6 +54,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,10 +63,12 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import com.kangle.kardleaf.AppUpdateCheckResult
 import com.kangle.kardleaf.AppUpdateChecker
 import com.kangle.kardleaf.BuildConfig
@@ -72,6 +80,7 @@ import com.kangle.kardleaf.data.ai.KardLeafAiConfig
 import com.kangle.kardleaf.data.ai.KardLeafAiPreferences
 import com.kangle.kardleaf.data.ai.KardLeafAiProvider
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.repository.VaultInfo
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.data.sync.WebDavCloudSyncManager
 import com.kangle.kardleaf.data.task.TaskReminderScheduler
@@ -85,11 +94,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.TextRange
@@ -98,8 +108,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import com.kangle.kardleaf.ui.SearchTextField
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -116,6 +128,14 @@ private data class GitChangedFileDetail(
     val modifiedMs: Long,
 )
 
+private data class SettingsSearchItem(
+    val icon: ImageVector,
+    val title: String,
+    val section: String,
+    val searchText: String,
+    val onClick: () -> Unit,
+)
+
 private fun parseGitChangedFileDetails(raw: String): List<GitChangedFileDetail> =
     raw.lineSequence().mapNotNull { line ->
         val separator = line.lastIndexOf('\t')
@@ -124,13 +144,18 @@ private fun parseGitChangedFileDetails(raw: String): List<GitChangedFileDetail> 
             path = line.substring(0, separator),
             modifiedMs = line.substring(separator + 1).toLongOrNull() ?: 0L,
         )
-    }.toList()
+    }.toList().sortedByDescending { it.modifiedMs }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
 @Composable
 fun KardLeafSettingsScreen(
     onBack: () -> Unit,
-    onSelectDatabase: () -> Unit,
+    vaults: List<VaultInfo> = emptyList(),
+    currentVault: VaultInfo? = null,
+    onAddVault: () -> Unit = {},
+    onSwitchVault: (VaultInfo) -> Unit = {},
+    onDeleteVault: (VaultInfo) -> Unit = {},
+    onRenameVault: (VaultInfo, String) -> Unit = { _, _ -> },
     onSelectTaskFolder: () -> Unit = {},
     onSettingsChanged: () -> Unit,
     onRestartNeeded: () -> Unit = {},
@@ -144,6 +169,8 @@ fun KardLeafSettingsScreen(
     onOpenRecordNote: (String) -> Unit = {},
     onCleanupHistory: () -> Unit = {},
     onWebDavVaultChanged: (List<String>) -> Unit = {},
+    onSetPrivacyPassword: suspend (String?, String) -> Result<Unit> = { _, _ -> Result.failure(IllegalStateException("隐私仓库不可用")) },
+    onRemovePrivacyPassword: suspend (String) -> Result<Unit> = { Result.failure(IllegalStateException("隐私仓库不可用")) },
     labels: List<String> = emptyList(),
 ) {
     val context = LocalContext.current
@@ -162,9 +189,15 @@ fun KardLeafSettingsScreen(
     val scope = rememberCoroutineScope()
     var settingsPage by remember { mutableStateOf("main") }
     var settingsDialog by remember { mutableStateOf<String?>(null) }
+    var settingsSearchQuery by remember { mutableStateOf("") }
     val mainScrollState = rememberScrollState()
     val detailScrollState = rememberScrollState()
+    val settingsPullRefreshState = rememberPullToRefreshState(positionalThreshold = 45.dp)
+    var showSettingsPullSearchHint by remember {
+        mutableStateOf(!prefsManager.hasSeenSettingsPullSearchHint())
+    }
     var savedMainScrollValue by remember { mutableStateOf(0) }
+    var settingsSearchOriginPage by remember { mutableStateOf("main") }
 
     fun openSettingsPage(page: String) {
         if (settingsPage == "main") {
@@ -175,6 +208,46 @@ fun KardLeafSettingsScreen(
 
     fun returnToSettingsMain() {
         settingsPage = "main"
+    }
+
+    fun openSettingsSearch() {
+        if (settingsPage == "search") return
+        showSettingsPullSearchHint = false
+        settingsSearchOriginPage = settingsPage
+        settingsSearchQuery = ""
+        settingsPage = "search"
+    }
+
+    fun returnFromSettingsPage() {
+        when (settingsPage) {
+            "main" -> onBack()
+            "search" -> {
+                settingsSearchQuery = ""
+                settingsPage = settingsSearchOriginPage
+            }
+            else -> returnToSettingsMain()
+        }
+    }
+
+    LaunchedEffect(settingsPullRefreshState.isRefreshing) {
+        if (settingsPullRefreshState.isRefreshing) {
+            settingsPullRefreshState.endRefresh()
+            openSettingsSearch()
+        }
+    }
+
+    LaunchedEffect(settingsPullRefreshState.verticalOffset > 0f) {
+        if (settingsPullRefreshState.verticalOffset > 0f) {
+            showSettingsPullSearchHint = false
+        }
+    }
+
+    LaunchedEffect(showSettingsPullSearchHint) {
+        if (showSettingsPullSearchHint) {
+            prefsManager.markSettingsPullSearchHintSeen()
+            delay(3_000)
+            showSettingsPullSearchHint = false
+        }
     }
 
     LaunchedEffect(settingsPage) {
@@ -235,6 +308,7 @@ fun KardLeafSettingsScreen(
     var showCustomThemeBackgroundColorDialog by remember { mutableStateOf(false) }
     var globalCornerRadiusDp by remember { mutableStateOf(prefsManager.getGlobalCornerRadiusDp()) }
     var homeCornerRadiusDp by remember { mutableStateOf(prefsManager.getHomeCornerRadiusDp()) }
+    var taskCornerRadiusDp by remember { mutableStateOf(prefsManager.getTaskCornerRadiusDp()) }
     var drawerEdgeWidthText by remember { mutableStateOf(prefsManager.getDrawerEdgeWidthDp().toString()) }
     var drawerStyle by remember { mutableStateOf(prefsManager.getDrawerStyle()) }
     var noteSidePanelsEnabled by remember { mutableStateOf(prefsManager.isNoteSidePanelsEnabled()) }
@@ -253,6 +327,7 @@ fun KardLeafSettingsScreen(
     var trashAutoCleanDaysText by remember { mutableStateOf(prefsManager.getTrashAutoCleanDays().toString()) }
     var passwordInputMode by remember { mutableStateOf(prefsManager.getPasswordInputMode()) }
     var toolbarOrder by remember { mutableStateOf(KardLeafCustomFeatures.getToolbarOrder(context)) }
+    var customSymbolsText by remember { mutableStateOf(KardLeafCustomFeatures.getCustomSymbols(context).joinToString("\n")) }
     var editorTopToolbarOrder by remember { mutableStateOf(prefsManager.getEditorTopToolbarItemOrder()) }
     var editorTopToolbarMoreItems by remember { mutableStateOf(prefsManager.getEditorTopToolbarMoreItems()) }
     var editorTopToolbarHiddenItems by remember { mutableStateOf(prefsManager.getEditorTopToolbarHiddenItems()) }
@@ -262,8 +337,9 @@ fun KardLeafSettingsScreen(
     var restoreLastFilter by remember { mutableStateOf(prefsManager.isRestoreLastFilterEnabled()) }
     var defaultStartLabel by remember { mutableStateOf(prefsManager.getDefaultStartLabel()) }
     var showLabelPicker by remember { mutableStateOf(false) }
-    var showVaultPathDialog by remember { mutableStateOf(false) }
+    var showHistorySettingsMenu by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
+    var showWebDavWarningDialog by remember { mutableStateOf(false) }
     var showCleanupHistoryDialog by remember { mutableStateOf(false) }
     var showDisableHistoryConfirmDialog by remember { mutableStateOf(false) }
     var showTrashFolderPicker by remember { mutableStateOf(false) }
@@ -278,6 +354,223 @@ fun KardLeafSettingsScreen(
     var updateCheckResult by remember { mutableStateOf<AppUpdateCheckResult?>(null) }
     var isExportingDiagnosticLog by remember { mutableStateOf(false) }
     var isExportingDevStorage by remember { mutableStateOf(false) }
+
+    fun openEditorTopToolbarSettings() {
+        noteSidePanelsEnabled = prefsManager.isNoteSidePanelsEnabled()
+        noteSidePanelOpenMode = prefsManager.getNoteSidePanelOpenMode()
+        editorTopToolbarOrder = prefsManager.getEditorTopToolbarItemOrder()
+        editorTopToolbarMoreItems = prefsManager.getEditorTopToolbarMoreItems()
+        editorTopToolbarHiddenItems = prefsManager.getEditorTopToolbarHiddenItems()
+        openSettingsPage("editorTopToolbar")
+    }
+
+    fun openHomeBottomToolbarSettings() {
+        homeBottomToolbarOrder = prefsManager.getHomeBottomToolbarItemOrder()
+        homeBottomToolbarHiddenItems = prefsManager.getHomeBottomToolbarHiddenItems()
+        homeBottomToolbarButtonSizeDp = prefsManager.getHomeBottomToolbarButtonSizeDp()
+        openSettingsPage("homeBottomToolbar")
+    }
+
+    fun openSelectionToolbarSettings() {
+        selectionToolbarOrder = prefsManager.getSelectionToolbarItemOrder()
+        selectionToolbarMoreItems = prefsManager.getSelectionToolbarMoreItems()
+        selectionToolbarHiddenItems = prefsManager.getSelectionToolbarHiddenItems()
+        openSettingsPage("selectionToolbar")
+    }
+
+    fun openAiSettings() {
+        val config = aiPreferences.load()
+        aiBaseUrl = if (config.provider == KardLeafAiProvider.TRIAL) "" else config.baseUrl
+        aiModel = if (config.provider == KardLeafAiProvider.TRIAL) "" else config.model
+        aiApiKey = if (config.provider == KardLeafAiProvider.TRIAL) "" else config.apiKey
+        aiProvider = config.provider
+        aiConnectionMessage = null
+        showAiSettingsDialog = true
+    }
+
+    fun pageSearchItem(
+        icon: ImageVector,
+        title: String,
+        section: String,
+        searchText: String,
+        page: String,
+    ) = SettingsSearchItem(icon, title, section, searchText) { openSettingsPage(page) }
+
+    fun dialogSearchItem(
+        icon: ImageVector,
+        title: String,
+        section: String,
+        searchText: String,
+        dialog: String,
+    ) = SettingsSearchItem(icon, title, section, searchText) { settingsDialog = dialog }
+
+    val settingsSearchItems = listOf(
+        SettingsSearchItem(Icons.Outlined.Folder, settingsText(settingsEnglish, "笔记库", "Vault"), "常规 / General", "笔记库 vault repository", { openSettingsPage("vault") }),
+        SettingsSearchItem(Icons.Outlined.Palette, settingsText(settingsEnglish, "主题设置", "Theme"), "常规 / General", "主题 theme 外观 appearance 配色 color", { openSettingsPage("theme") }),
+        SettingsSearchItem(Icons.Outlined.Tune, settingsText(settingsEnglish, "应用界面", "Interface"), "常规 / General", "应用界面 interface 布局 layout 排序 sorting 启动分类 icons", { openSettingsPage("interface") }),
+        SettingsSearchItem(Icons.Outlined.ViewAgenda, settingsText(settingsEnglish, "侧边栏", "Sidebar"), "常规 / General", "侧边栏 sidebar 抽屉 drawer", { openSettingsPage("drawerSettings") }),
+        SettingsSearchItem(Icons.Outlined.Home, settingsText(settingsEnglish, "首页", "Home"), "常规 / General", "首页 home", { openSettingsPage("home") }),
+        SettingsSearchItem(Icons.Outlined.Visibility, settingsText(settingsEnglish, "默认打开模式", "Default open mode"), "编辑器 / Editor", "默认打开模式 default open mode 编辑 preview", { settingsDialog = "openNote" }),
+        SettingsSearchItem(Icons.Outlined.Code, settingsText(settingsEnglish, "编辑器内核", "Editor engine"), "编辑器 / Editor", "编辑器内核 editor engine beta codemirror", { settingsDialog = "editorKernel" }),
+        SettingsSearchItem(Icons.Outlined.ViewHeadline, settingsText(settingsEnglish, "顶部工具栏", "Top toolbar"), "编辑器 / Editor", "顶部工具栏 top toolbar", { openEditorTopToolbarSettings() }),
+        SettingsSearchItem(Icons.Outlined.FormatListBulleted, settingsText(settingsEnglish, "底部工具栏", "Bottom toolbar"), "编辑器 / Editor", "底部工具栏 bottom toolbar", { openSettingsPage("toolbar") }),
+        SettingsSearchItem(Icons.Outlined.FontDownload, settingsText(settingsEnglish, "字体", "Font"), "编辑器 / Editor", "字体 font 字号 typography", { settingsDialog = "editorTypography" }),
+        SettingsSearchItem(Icons.Outlined.MoreHoriz, settingsText(settingsEnglish, "更多", "More"), "编辑器 / Editor", "编辑器更多 editor more", { openSettingsPage("editorMore") }),
+        SettingsSearchItem(Icons.Outlined.Backup, settingsText(settingsEnglish, "云同步", "Cloud sync"), "数据与安全 / Data & security", "云同步 cloud sync webdav", { openSettingsPage("webDav") }),
+        SettingsSearchItem(Icons.Outlined.History, settingsText(settingsEnglish, "历史版本", "Version history"), "数据与安全 / Data & security", "历史版本 version history", { openSettingsPage("history") }),
+        SettingsSearchItem(Icons.Outlined.Description, settingsText(settingsEnglish, "备注", "Remarks"), "数据与安全 / Data & security", "备注 remarks note", { openSettingsPage("remarkRecords") }),
+        SettingsSearchItem(Icons.Outlined.Lock, settingsText(settingsEnglish, "安全", "Security"), "数据与安全 / Data & security", "安全 security 密码 password", { openSettingsPage("security") }),
+        SettingsSearchItem(Icons.Outlined.Delete, settingsText(settingsEnglish, "回收站", "Trash"), "数据与安全 / Data & security", "回收站 trash", { openSettingsPage("trash") }),
+        SettingsSearchItem(Icons.Outlined.MoreHoriz, settingsText(settingsEnglish, "更多", "More"), "数据与安全 / Data & security", "数据与安全更多 data more", { openSettingsPage("dataMore") }),
+        SettingsSearchItem(Icons.Outlined.Language, settingsText(settingsEnglish, "语言", "Language"), "其他 / Other", "语言 language 中文 english", { settingsDialog = "appLanguage" }),
+        SettingsSearchItem(Icons.Outlined.SystemUpdate, settingsText(settingsEnglish, "更新", "Updates"), "其他 / Other", "更新 updates version", { openSettingsPage("updates") }),
+        SettingsSearchItem(Icons.Outlined.Info, settingsText(settingsEnglish, "关于", "About"), "其他 / Other", "关于 about", { openSettingsPage("about") }),
+        SettingsSearchItem(Icons.Outlined.Restore, settingsText(settingsEnglish, "重置", "Reset"), "其他 / Other", "重置 reset 恢复默认", { showResetDialog = true }),
+        SettingsSearchItem(Icons.Outlined.MoreHoriz, settingsText(settingsEnglish, "更多", "More"), "其他 / Other", "其他更多 other more", { openSettingsPage("otherMore") }),
+    ) + listOf(
+        pageSearchItem(Icons.Outlined.Language, "首页顶部显示保存网站", "首页 / Home", "首页顶部 保存网站 web clip", "home"),
+        pageSearchItem(Icons.Outlined.ViewHeadline, "首页底部工具栏", "首页 / Home", "首页底部工具栏 新建按钮 home toolbar", "homeBottomToolbar"),
+        pageSearchItem(Icons.Outlined.Reorder, "长按选择栏", "首页 / Home", "选择栏 selection toolbar 长按", "selectionToolbar"),
+        dialogSearchItem(Icons.Outlined.ViewAgenda, "布局模式", "应用界面 / Interface", "布局模式 列表 双列 layout list grid", "layout"),
+        dialogSearchItem(Icons.Outlined.ViewStream, "卡片密度", "应用界面 / Interface", "卡片密度 宽松 紧凑 density", "density"),
+        pageSearchItem(Icons.Outlined.Label, "宽松卡片显示标签", "应用界面 / Interface", "卡片 标签 YAML tags", "interface"),
+        pageSearchItem(Icons.Outlined.Schedule, "显示修改日期", "应用界面 / Interface", "修改日期 卡片时间", "interface"),
+        dialogSearchItem(Icons.Outlined.TextFields, "修改日期格式", "应用界面 / Interface", "修改日期格式 date format", "cardModifiedDateFormat"),
+        pageSearchItem(Icons.Outlined.Title, "显示文件名（标题）", "应用界面 / Interface", "文件名 标题 卡片 title", "interface"),
+        pageSearchItem(Icons.Outlined.CalendarToday, "显示纯日期文件名", "应用界面 / Interface", "纯日期文件名 日期标题", "interface"),
+        dialogSearchItem(Icons.Outlined.VisibilityOff, "自定义隐藏文件名", "应用界面 / Interface", "隐藏文件名 隐藏规则 filename", "hiddenFilenames"),
+        pageSearchItem(Icons.Outlined.Description, "详情页显示文件名（标题）", "应用界面 / Interface", "详情页 标题 文件名", "interface"),
+        pageSearchItem(Icons.Outlined.Info, "标题上方显示文件信息", "应用界面 / Interface", "标题 文件信息 时间 字数 分类", "interface"),
+        dialogSearchItem(Icons.Outlined.Sort, "排序方式", "应用界面 / Interface", "排序方式 排序字段 方向 sorting", "sort"),
+        pageSearchItem(Icons.Outlined.Restore, "恢复上次分类标签", "应用界面 / Interface", "恢复上次分类 标签 启动", "interface"),
+        pageSearchItem(Icons.Outlined.Folder, "默认启动分类", "应用界面 / Interface", "默认启动分类 默认文件夹", "interface"),
+        pageSearchItem(Icons.Outlined.Settings, "主题模式", "主题 / Theme", "主题模式 浅色 深色 自动", "theme"),
+        pageSearchItem(Icons.Outlined.Palette, "主题风格", "主题 / Theme", "主题风格 经典 圆润 清爽 极夜 霓彩", "theme"),
+        pageSearchItem(Icons.Outlined.Palette, "主题色彩", "主题 / Theme", "色彩 强调色 背景色 推荐配色 圆形色盘", "theme"),
+        pageSearchItem(Icons.Outlined.Apps, "功能项图标", "主题 / Theme", "功能项图标 图标样式", "theme"),
+        dialogSearchItem(Icons.Outlined.Palette, "预览主题", "编辑器 / Editor", "预览主题 Markdown GitHub Dracula Nord", "previewTheme"),
+        dialogSearchItem(Icons.Outlined.TouchApp, "双击进入编辑间隔", "编辑器 / Editor", "双击 编辑 间隔 毫秒", "doubleTap"),
+        dialogSearchItem(Icons.Outlined.Swipe, "侧滑面板弹出方式", "编辑器 / Editor", "侧滑 面板 手势 顶部工具栏", "sidePanelOpenMode"),
+        dialogSearchItem(Icons.Outlined.Code, "自动切换字数", "编辑器 / Editor", "自动切换 CodeMirror 字数 阈值", "autoCodeMirrorThreshold"),
+        SettingsSearchItem(Icons.Outlined.AutoAwesome, "AI 助手", "编辑器 / Editor", "AI assistant OpenAI API 模型", { openAiSettings() }),
+        pageSearchItem(Icons.Outlined.FormatListBulleted, "编辑底部工具栏常驻", "编辑器 / Editor", "编辑底部工具栏 常驻", "editorMore"),
+        pageSearchItem(Icons.Outlined.Visibility, "CodeMirror 实时预览", "编辑器 / Editor", "CodeMirror 实时预览 markdown", "editorMore"),
+        pageSearchItem(Icons.Outlined.Image, "编辑状态图片预览", "编辑器 / Editor", "编辑状态 图片预览", "editorMore"),
+        dialogSearchItem(Icons.Outlined.FontDownload, "字体大小", "编辑器 / Editor", "字体大小 font size", "editorTypography"),
+        dialogSearchItem(Icons.Outlined.FormatLineSpacing, "行高", "编辑器 / Editor", "行高 line height", "editorTypography"),
+        dialogSearchItem(Icons.Outlined.FormatLineSpacing, "字间距", "编辑器 / Editor", "字间距 letter spacing", "editorTypography"),
+        dialogSearchItem(Icons.Outlined.FormatLineSpacing, "段落间距", "编辑器 / Editor", "段落间距 paragraph spacing", "editorTypography"),
+        dialogSearchItem(Icons.Outlined.FontDownload, "字体样式", "编辑器 / Editor", "字体样式 font family 自定义字体", "editorTypography"),
+        pageSearchItem(Icons.Outlined.ViewHeadline, "顶部工具栏功能项", "编辑器 / Editor", "顶部工具栏 顶部展示 更多选项 隐藏", "editorTopToolbar"),
+        pageSearchItem(Icons.Outlined.FormatListBulleted, "底部工具栏功能项", "编辑器 / Editor", "底部工具栏 排列", "toolbar"),
+        pageSearchItem(Icons.Outlined.Reorder, "长按选择栏功能项", "编辑器 / Editor", "选择栏 顶部展示 更多选项 隐藏", "selectionToolbar"),
+        dialogSearchItem(Icons.Outlined.History, "历史版本数量", "数据与安全 / Data & security", "历史版本数量 保留数量", "historyLimit"),
+        pageSearchItem(Icons.Outlined.History, "清理旧历史版本", "数据与安全 / Data & security", "清理旧历史版本 历史记录", "history"),
+        pageSearchItem(Icons.Outlined.Folder, "回收站文件夹", "数据与安全 / Data & security", "回收站文件夹 垃圾箱", "trash"),
+        pageSearchItem(Icons.Outlined.Sort, "回收站排序", "数据与安全 / Data & security", "回收站排序 文件名 删除时间", "trash"),
+        dialogSearchItem(Icons.Outlined.DeleteSweep, "自动清理回收站", "数据与安全 / Data & security", "自动清理回收站 自动清理时间", "trashAutoClean"),
+        pageSearchItem(Icons.Outlined.Backup, "WebDAV 同步", "数据与安全 / Data & security", "WebDAV 云同步 服务器 用户名 密码 远程文件夹", "webDav"),
+        pageSearchItem(Icons.Outlined.Refresh, "实时同步", "数据与安全 / Data & security", "实时同步 检查间隔 轮询", "webDav"),
+        pageSearchItem(Icons.Outlined.SwapVert, "同步预览", "数据与安全 / Data & security", "同步预览 冲突 本地 远端", "webDav"),
+        pageSearchItem(Icons.Outlined.Search, "测试远端检查", "数据与安全 / Data & security", "测试远端检查 同步记录", "webDav"),
+        dialogSearchItem(Icons.Outlined.Backup, "数据备份", "数据与安全 / Data & security", "数据备份 导出 导入 JSON", "backup"),
+        pageSearchItem(Icons.Outlined.Schedule, "自动备份", "数据与安全 / Data & security", "自动备份 备份目录 每天 周期", "autoBackup"),
+        pageSearchItem(Icons.Outlined.Notifications, "任务与提醒", "数据与安全 / Data & security", "任务与提醒 通知 精确提醒", "taskReminders"),
+        pageSearchItem(Icons.Outlined.Folder, "任务清单数据位置", "数据与安全 / Data & security", "任务清单 位置 任务文件夹", "taskReminders"),
+        pageSearchItem(Icons.Outlined.Lock, "应用密码", "数据与安全 / Data & security", "应用锁 应用密码 指纹解锁", "security"),
+        pageSearchItem(Icons.Outlined.Shield, "隐私密码", "数据与安全 / Data & security", "隐私空间 隐私密码 指纹解锁", "security"),
+        dialogSearchItem(Icons.Outlined.Lock, "密码类型", "数据与安全 / Data & security", "密码类型 简单密码 复杂密码", "passwordMode"),
+        pageSearchItem(Icons.Outlined.Description, "有备注的笔记", "数据与安全 / Data & security", "备注记录 有备注笔记", "remarkRecords"),
+        pageSearchItem(Icons.Outlined.Image, "图片保存位置", "附件与文件 / Files", "图片保存位置 附件目录", "image"),
+        dialogSearchItem(Icons.Outlined.Image, "图片路径格式", "附件与文件 / Files", "图片路径格式 根路径 相对路径", "imagePath"),
+        pageSearchItem(Icons.Outlined.VisibilityOff, "隐藏的文件夹", "附件与文件 / Files", "隐藏文件夹 文件夹及子文件夹", "hiddenFolders"),
+        dialogSearchItem(Icons.Outlined.Description, "自动文件名", "附件与文件 / Files", "自动文件名 文件名模板", "autoFileName"),
+        dialogSearchItem(Icons.Outlined.TextFields, "日期格式", "附件与文件 / Files", "日期格式 未命名笔记标题", "date"),
+        pageSearchItem(Icons.Outlined.SystemUpdate, "自动检查更新", "其他 / Other", "自动检查更新 GitHub", "updates"),
+        pageSearchItem(Icons.Outlined.SystemUpdateAlt, "检查更新", "其他 / Other", "检查更新 最新版本", "updates"),
+        pageSearchItem(Icons.Outlined.BugReport, "开启日志", "其他 / Other", "日志 开启日志 详细日志", "otherMore"),
+        pageSearchItem(Icons.Outlined.BugReport, "导出诊断日志", "其他 / Other", "诊断日志 导出日志", "otherMore"),
+        pageSearchItem(Icons.Outlined.Info, "版本", "其他 / Other", "版本 version", "about"),
+        pageSearchItem(Icons.Outlined.FolderOpen, "当前工作区", "其他 / Other", "当前工作区 修改文件", "about"),
+        pageSearchItem(Icons.Outlined.Code, "当前分支", "其他 / Other", "当前分支 Git 节点", "about"),
+        pageSearchItem(Icons.Outlined.Add, "添加笔记库", "常规 / General", "添加笔记库 新建仓库 vault", "vault"),
+        pageSearchItem(Icons.Outlined.Settings, "侧边栏样式", "常规 / General", "侧边栏样式 布局 数据卡片 极简", "drawerSettings"),
+        pageSearchItem(Icons.Outlined.Reorder, "侧边栏调整", "常规 / General", "侧边栏调整 显示 隐藏 改名 分组", "drawerEdit"),
+        dialogSearchItem(Icons.Outlined.TouchApp, "侧边栏距离", "常规 / General", "侧边栏距离 划出距离 dp", "drawer"),
+        pageSearchItem(Icons.Outlined.Reorder, "添加分组线", "常规 / General", "添加分组线 侧边栏分组", "drawerEdit"),
+        pageSearchItem(Icons.Outlined.Settings, "全局圆角", "主题 / Theme", "全局圆角 圆角 dp", "theme"),
+        pageSearchItem(Icons.Outlined.Settings, "首页圆角", "主题 / Theme", "首页圆角 圆角 dp", "theme"),
+        pageSearchItem(Icons.Outlined.Settings, "任务圆角", "主题 / Theme", "任务圆角 圆角 dp", "theme"),
+        pageSearchItem(Icons.Outlined.Info, "笔记详情侧滑面板", "编辑器 / Editor", "笔记详情 侧滑面板 开关", "editorMore"),
+        pageSearchItem(Icons.Outlined.ViewHeadline, "显示方式", "首页 / Home", "显示方式 首页底部工具栏 简约新建按钮", "homeBottomToolbar"),
+        pageSearchItem(Icons.Outlined.Settings, "按钮大小", "首页 / Home", "按钮大小 首页底部工具栏 dp", "homeBottomToolbar"),
+        pageSearchItem(Icons.Outlined.Restore, "恢复默认大小", "首页 / Home", "恢复默认大小 按钮大小", "homeBottomToolbar"),
+        dialogSearchItem(Icons.Outlined.Visibility, "查看模式", "编辑器 / Editor", "查看模式 预览 preview", "openNote"),
+        dialogSearchItem(Icons.Outlined.Edit, "编辑模式", "编辑器 / Editor", "编辑模式 edit", "openNote"),
+        dialogSearchItem(Icons.Outlined.Code, "原生Alpha内核", "编辑器 / Editor", "原生Alpha 原生 Alpha native", "editorKernel"),
+        dialogSearchItem(Icons.Outlined.Code, "原生Beta内核", "编辑器 / Editor", "原生Beta 原生 Beta Quillpad", "editorKernel"),
+        dialogSearchItem(Icons.Outlined.Code, "WebView内核", "编辑器 / Editor", "WebView CodeMirror 实时预览", "editorKernel"),
+        pageSearchItem(Icons.Outlined.Folder, "基于仓库根路径", "附件与文件 / Files", "基于仓库根路径 图片引用", "imagePath"),
+        pageSearchItem(Icons.Outlined.Folder, "基于当前笔记相对路径", "附件与文件 / Files", "基于当前笔记相对路径 图片引用", "imagePath"),
+        pageSearchItem(Icons.Outlined.Folder, "当前笔记所在文件夹", "附件与文件 / Files", "当前笔记所在文件夹 图片存放位置", "imagePath"),
+        pageSearchItem(Icons.Outlined.Folder, "固定在图片保存位置", "附件与文件 / Files", "固定在图片保存位置 图片存放位置", "imagePath"),
+        dialogSearchItem(Icons.Outlined.FileUpload, "导出数据备份", "数据与安全 / Data & security", "导出数据备份 导出用户数据 JSON", "backup"),
+        dialogSearchItem(Icons.Outlined.FileDownload, "导入数据备份", "数据与安全 / Data & security", "导入数据备份 导入 JSON 恢复数据", "backup"),
+        pageSearchItem(Icons.Outlined.Search, "生成同步预览", "数据与安全 / Data & security", "生成同步预览 扫描本地远端 冲突", "webDav"),
+        pageSearchItem(Icons.Outlined.Sync, "开始文件级同步", "数据与安全 / Data & security", "开始文件级同步 上传 下载 冲突", "webDav"),
+        pageSearchItem(Icons.Outlined.Refresh, "刷新同步记录", "数据与安全 / Data & security", "刷新同步记录 WebDAV", "webDav"),
+        pageSearchItem(Icons.Outlined.DeleteSweep, "清空同步记录", "数据与安全 / Data & security", "清空同步记录 调试记录", "webDav"),
+        pageSearchItem(Icons.Outlined.Folder, "备份目录", "数据与安全 / Data & security", "备份目录 自动备份", "autoBackup"),
+        pageSearchItem(Icons.Outlined.Notifications, "系统通知设置", "数据与安全 / Data & security", "系统通知设置 通知权限", "taskReminders"),
+        pageSearchItem(Icons.Outlined.Schedule, "精确提醒权限", "数据与安全 / Data & security", "精确提醒权限 闹钟", "taskReminders"),
+        pageSearchItem(Icons.Outlined.Archive, "导出用户数据与缓存", "其他 / Other", "导出用户数据 缓存 ZIP", "otherMore"),
+        pageSearchItem(Icons.Outlined.Update, "更新时间", "其他 / Other", "更新时间 安装时间", "about"),
+        pageSearchItem(Icons.Outlined.Folder, "当前工作树", "其他 / Other", "当前工作树 worktree", "about"),
+        pageSearchItem(Icons.Outlined.Code, "Git 节点", "其他 / Other", "Git 节点 commit", "about"),
+        pageSearchItem(Icons.Outlined.Person, "作者", "其他 / Other", "作者 author", "about"),
+        pageSearchItem(Icons.Outlined.Code, "GitHub 仓库", "其他 / Other", "GitHub 仓库 repository", "about"),
+    ) + KardLeafCustomFeatures.ToolbarItem.values().map { item ->
+        pageSearchItem(
+            icon = toolbarItemIcon(item),
+            title = item.label,
+            section = "编辑器 / Editor",
+            searchText = "${item.label} ${item.name.lowercase(Locale.ROOT)} 工具栏 toolbar",
+            page = "toolbar",
+        )
+    } + PrefsManager.EditorTopToolbarItemId.values().map { item ->
+        pageSearchItem(
+            icon = editorTopToolbarItemIcon(item),
+            title = editorTopToolbarItemLabel(item),
+            section = "编辑器 / Editor",
+            searchText = "${editorTopToolbarItemLabel(item)} ${item.name.lowercase(Locale.ROOT)} 顶部工具栏",
+            page = "editorTopToolbar",
+        )
+    } + PrefsManager.SelectionToolbarItemId.values().map { item ->
+        pageSearchItem(
+            icon = selectionToolbarItemIcon(item),
+            title = selectionToolbarItemLabel(item),
+            section = "首页 / Home",
+            searchText = "${selectionToolbarItemLabel(item)} ${item.name.lowercase(Locale.ROOT)} 选择栏",
+            page = "selectionToolbar",
+        )
+    } + PrefsManager.HomeBottomToolbarItemId.values().map { item ->
+        pageSearchItem(
+            icon = homeBottomToolbarItemIcon(item),
+            title = homeBottomToolbarItemLabel(item),
+            section = "首页 / Home",
+            searchText = "${homeBottomToolbarItemLabel(item)} ${item.name.lowercase(Locale.ROOT)} 首页底部工具栏",
+            page = "homeBottomToolbar",
+        )
+    } + PrefsManager.DrawerItemId.values().map { item ->
+        val title = prefsManager.getDrawerItemLabel(item, drawerItemLabel(item))
+        pageSearchItem(
+            icon = drawerItemIcon(item),
+            title = title,
+            section = "常规 / General",
+            searchText = "$title ${drawerItemLabel(item)} ${item.name.lowercase(Locale.ROOT)} 侧边栏",
+            page = "drawerEdit",
+        )
+    }
 
     fun checkForAppUpdate() {
         if (updateCheckInProgress) return
@@ -303,14 +596,39 @@ fun KardLeafSettingsScreen(
         )
     }
 
+    if (showWebDavWarningDialog) {
+        AlertDialog(
+            onDismissRequest = { showWebDavWarningDialog = false },
+            title = { Text(settingsText(settingsEnglish, "云同步风险提示", "Cloud sync warning")) },
+            text = {
+                Text(
+                    settingsText(
+                        settingsEnglish,
+                        "WebDAV 尚未经严格测试，使用过程中可能存在风险。推荐使用 Syncthing 等第三方后台同步软件。",
+                        "WebDAV has not been rigorously tested and may carry risks. Syncthing or another third-party background sync tool is recommended.",
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showWebDavWarningDialog = false }) {
+                    Text(settingsText(settingsEnglish, "我知道了", "Got it"))
+                }
+            },
+        )
+    }
+
     LaunchedEffect(settingsPage) {
         when (settingsPage) {
+            "webDav" -> if (!prefsManager.hasSeenWebDavWarning()) {
+                prefsManager.markWebDavWarningSeen()
+                showWebDavWarningDialog = true
+            }
             "remarkRecords" -> {
                 isLoadingRecordSummaries = true
                 remarkNoteSummaries = runCatching { onLoadRemarkNoteSummaries() }.getOrDefault(emptyList())
                 isLoadingRecordSummaries = false
             }
-            "historyRecords" -> {
+            "history" -> {
                 isLoadingRecordSummaries = true
                 historyNoteSummaries = runCatching { onLoadHistoryNoteSummaries() }.getOrDefault(emptyList())
                 isLoadingRecordSummaries = false
@@ -567,33 +885,11 @@ fun KardLeafSettingsScreen(
         onRestartNeeded()
     }
 
-    fun resetTheme() {
-        val changed = appThemeStyle != PrefsManager.AppThemeStyle.CLEAN_LIST ||
-            appThemeMode != PrefsManager.AppThemeMode.SYSTEM ||
-            modernThemeColorStyle != PrefsManager.ModernThemeColorStyle.CLASSIC ||
-            cleanListFeatureIconStyle != PrefsManager.CleanListFeatureIconStyle.MODERN ||
-            themeColor != PrefsManager.ThemeColor.BLUE ||
-            themeBackgroundColor != PrefsManager.ThemeBackgroundColor.WHITE ||
-
-            globalCornerRadiusDp != PrefsManager.THEME_CORNER_RADIUS_FOLLOW ||
-            homeCornerRadiusDp != PrefsManager.THEME_CORNER_RADIUS_FOLLOW
-        appThemeStyle = PrefsManager.AppThemeStyle.CLEAN_LIST
-        appThemeMode = PrefsManager.AppThemeMode.SYSTEM
-        modernThemeColorStyle = PrefsManager.ModernThemeColorStyle.CLASSIC
-        cleanListFeatureIconStyle = PrefsManager.CleanListFeatureIconStyle.MODERN
-        themeColor = PrefsManager.ThemeColor.BLUE
-        themeBackgroundColor = PrefsManager.ThemeBackgroundColor.WHITE
-        globalCornerRadiusDp = PrefsManager.THEME_CORNER_RADIUS_FOLLOW
-        homeCornerRadiusDp = PrefsManager.THEME_CORNER_RADIUS_FOLLOW
-        prefsManager.saveAppThemeStyle(appThemeStyle)
-        prefsManager.saveAppThemeMode(appThemeMode)
-        prefsManager.saveModernThemeColorStyle(modernThemeColorStyle)
-        prefsManager.saveCleanListFeatureIconStyle(cleanListFeatureIconStyle)
-        prefsManager.saveThemeColor(themeColor)
-        prefsManager.saveThemeBackgroundColor(themeBackgroundColor)
-        prefsManager.saveGlobalCornerRadiusDp(globalCornerRadiusDp)
-        prefsManager.saveHomeCornerRadiusDp(homeCornerRadiusDp)
-        if (changed) onRestartNeeded()
+    fun applyTaskCornerRadiusDp(radiusDp: Int) {
+        if (taskCornerRadiusDp == radiusDp) return
+        taskCornerRadiusDp = radiusDp
+        prefsManager.saveTaskCornerRadiusDp(radiusDp)
+        onRestartNeeded()
     }
 
     fun openCleanupHistoryDialog() {
@@ -774,6 +1070,7 @@ fun KardLeafSettingsScreen(
         val oldCleanListFeatureIconStyle = prefsManager.getCleanListFeatureIconStyle()
         val oldGlobalCornerRadiusDp = prefsManager.getGlobalCornerRadiusDp()
         val oldHomeCornerRadiusDp = prefsManager.getHomeCornerRadiusDp()
+        val oldTaskCornerRadiusDp = prefsManager.getTaskCornerRadiusDp()
         dateFormat = KardLeafCustomFeatures.DefaultUnnamedNoteDateFormat
         autoFileNameTemplateFieldValue = TextFieldValue(KardLeafCustomFeatures.DefaultUnnamedNoteFileNameTemplate)
         openNoteMode = KardLeafCustomFeatures.DefaultOpenNoteMode
@@ -808,6 +1105,7 @@ fun KardLeafSettingsScreen(
         themeBackgroundColor = PrefsManager.ThemeBackgroundColor.WHITE
         globalCornerRadiusDp = PrefsManager.THEME_CORNER_RADIUS_FOLLOW
         homeCornerRadiusDp = PrefsManager.THEME_CORNER_RADIUS_FOLLOW
+        taskCornerRadiusDp = PrefsManager.DEFAULT_TASK_CORNER_RADIUS_DP
         drawerEdgeWidthText = PrefsManager.DEFAULT_DRAWER_EDGE_WIDTH_DP.toString()
         drawerStyle = PrefsManager.DrawerStyle.DEFAULT
         noteSidePanelsEnabled = PrefsManager.DEFAULT_NOTE_SIDE_PANELS_ENABLED
@@ -824,6 +1122,7 @@ fun KardLeafSettingsScreen(
         historyLimitText = PrefsManager.DEFAULT_HISTORY_VERSION_LIMIT.toString()
         cardDensity = PrefsManager.CardDensity.LOOSE
         toolbarOrder = KardLeafCustomFeatures.DefaultToolbarOrder
+        customSymbolsText = KardLeafCustomFeatures.DefaultCustomSymbols.joinToString("\n")
         selectionToolbarOrder = PrefsManager.SelectionToolbarItemId.DEFAULT_ORDER
         selectionToolbarMoreItems = PrefsManager.SelectionToolbarItemId.DEFAULT_MORE_ITEMS
         selectionToolbarHiddenItems = PrefsManager.SelectionToolbarItemId.DEFAULT_HIDDEN_ITEMS
@@ -854,6 +1153,7 @@ fun KardLeafSettingsScreen(
         prefsManager.saveHomeBottomToolbarItemOrder(homeBottomToolbarOrder)
         prefsManager.saveHomeBottomToolbarHiddenItems(homeBottomToolbarHiddenItems)
         KardLeafCustomFeatures.saveToolbarOrder(context, toolbarOrder)
+        KardLeafCustomFeatures.saveCustomSymbols(context, KardLeafCustomFeatures.DefaultCustomSymbols)
         prefsManager.saveSelectionToolbarItemOrder(selectionToolbarOrder)
         prefsManager.saveSelectionToolbarMoreItems(selectionToolbarMoreItems)
         prefsManager.saveSelectionToolbarHiddenItems(selectionToolbarHiddenItems)
@@ -876,6 +1176,8 @@ fun KardLeafSettingsScreen(
         prefsManager.saveThemeBackgroundColor(themeBackgroundColor)
         prefsManager.saveGlobalCornerRadiusDp(globalCornerRadiusDp)
         prefsManager.saveHomeCornerRadiusDp(homeCornerRadiusDp)
+        prefsManager.saveTaskCornerRadiusDp(taskCornerRadiusDp)
+        prefsManager.clearEditorTopToolbarItemLabels()
         prefsManager.saveDrawerEdgeWidthDp(PrefsManager.DEFAULT_DRAWER_EDGE_WIDTH_DP)
         prefsManager.saveDrawerStyle(drawerStyle)
         prefsManager.saveDrawerItemOrder(PrefsManager.DrawerItemId.DEFAULT_ORDER)
@@ -913,87 +1215,18 @@ fun KardLeafSettingsScreen(
             oldThemeBackgroundColor != themeBackgroundColor ||
             oldCleanListFeatureIconStyle != cleanListFeatureIconStyle ||
             oldGlobalCornerRadiusDp != globalCornerRadiusDp ||
-            oldHomeCornerRadiusDp != homeCornerRadiusDp
+            oldHomeCornerRadiusDp != homeCornerRadiusDp ||
+            oldTaskCornerRadiusDp != taskCornerRadiusDp
         ) {
             onRestartNeeded()
         }
     }
 
     updateCheckResult?.let { result ->
-        val update = result as? AppUpdateCheckResult.UpdateAvailable
-        AlertDialog(
-            onDismissRequest = { updateCheckResult = null },
-            title = {
-                Text(
-                    when (result) {
-                        is AppUpdateCheckResult.UpdateAvailable -> settingsText(settingsEnglish, "发现新版本", "Update available")
-                        is AppUpdateCheckResult.UpToDate -> settingsText(settingsEnglish, "已是最新版本", "Up to date")
-                        is AppUpdateCheckResult.Failed -> settingsText(settingsEnglish, "检查更新失败", "Update check failed")
-                    },
-                )
-            },
-            text = {
-                val message =
-                    when (result) {
-                        is AppUpdateCheckResult.UpdateAvailable -> buildString {
-                            append(settingsText(settingsEnglish, "当前版本：", "Current version: "))
-                            append(BuildConfig.VERSION_NAME)
-                            append("\n")
-                            append(settingsText(settingsEnglish, "最新版本：", "Latest version: "))
-                            append(result.release.tagName)
-                            if (result.release.publishedDate.isNotBlank()) {
-                                append("\n")
-                                append(settingsText(settingsEnglish, "发布日期：", "Published: "))
-                                append(result.release.publishedDate)
-                            }
-                            if (result.release.releaseNotes.isNotBlank()) {
-                                append("\n\n")
-                                append(result.release.releaseNotes)
-                            }
-                        }
-                        is AppUpdateCheckResult.UpToDate -> settingsText(
-                            settingsEnglish,
-                            "当前 ${BuildConfig.VERSION_NAME} 已是最新正式版本。",
-                            "Version ${BuildConfig.VERSION_NAME} is the latest stable release.",
-                        )
-                        is AppUpdateCheckResult.Failed -> result.message
-                    }
-                Text(
-                    text = message,
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        updateCheckResult = null
-                        if (update != null) {
-                            runCatching {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.release.downloadUrl)))
-                            }.onFailure {
-                                context.showToast(settingsText(settingsEnglish, "无法打开下载链接", "Unable to open download link"))
-                            }
-                        }
-                    },
-                ) {
-                    Text(
-                        if (update != null) {
-                            settingsText(settingsEnglish, "下载更新", "Download")
-                        } else {
-                            settingsText(settingsEnglish, "确定", "OK")
-                        },
-                    )
-                }
-            },
-            dismissButton = if (update != null) {
-                {
-                    TextButton(onClick = { updateCheckResult = null }) {
-                        Text(settingsText(settingsEnglish, "稍后", "Later"))
-                    }
-                }
-            } else {
-                null
-            },
+        AppUpdateDialog(
+            result = result,
+            settingsEnglish = settingsEnglish,
+            onDismiss = { updateCheckResult = null },
         )
     }
 
@@ -1057,62 +1290,6 @@ fun KardLeafSettingsScreen(
             dismissButton = {
                 TextButton(onClick = { cancelDisableHistoryVersions() }) {
                     Text("取消")
-                }
-            },
-        )
-    }
-
-
-    if (showVaultPathDialog) {
-        AlertDialog(
-            onDismissRequest = { showVaultPathDialog = false },
-            title = { Text("当前笔记库") },
-            text = {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f))
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(
-                            text = "当前路径",
-
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = displayRootPath(prefsManager.getRootUri()),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 4,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            showVaultPathDialog = false
-                            onSelectDatabase()
-                        },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Folder,
-                            contentDescription = "选择新的笔记库",
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showVaultPathDialog = false }) {
-                    Text("关闭")
                 }
             },
         )
@@ -1358,8 +1535,16 @@ fun KardLeafSettingsScreen(
                             PrefsManager.SortOrder.values().filter { it != PrefsManager.SortOrder.CUSTOM }.forEach { order ->
                                 SettingsChoiceRow(
                                     icon = Icons.Outlined.SortByAlpha,
-                                    title = if (order == PrefsManager.SortOrder.DATE_MODIFIED) "修改日期" else "标题",
-                                    subtitle = if (order == PrefsManager.SortOrder.DATE_MODIFIED) "按修改时间排序" else "按标题排序",
+                                    title = when (order) {
+                                        PrefsManager.SortOrder.DATE_MODIFIED -> "修改日期"
+                                        PrefsManager.SortOrder.DATE_CREATED -> "创建日期"
+                                        else -> "标题"
+                                    },
+                                    subtitle = when (order) {
+                                        PrefsManager.SortOrder.DATE_MODIFIED -> "按修改时间排序"
+                                        PrefsManager.SortOrder.DATE_CREATED -> "按创建时间排序"
+                                        else -> "按标题排序"
+                                    },
                                     selected = sortOrder == order,
                                     onClick = {
                                         sortOrder = order
@@ -1831,9 +2016,10 @@ fun KardLeafSettingsScreen(
             showResetDialog -> showResetDialog = false
             showCleanupHistoryDialog -> showCleanupHistoryDialog = false
             showDisableHistoryConfirmDialog -> cancelDisableHistoryVersions()
+            showHistorySettingsMenu -> showHistorySettingsMenu = false
+            showWebDavWarningDialog -> showWebDavWarningDialog = false
             settingsDialog != null -> settingsDialog = null
-            settingsPage == "main" -> onBack()
-            else -> returnToSettingsMain()
+            else -> returnFromSettingsPage()
         }
     }
 
@@ -1851,38 +2037,89 @@ fun KardLeafSettingsScreen(
                     MaterialTheme.colorScheme.surface
                 },
             )
+            val topBarActions: @Composable RowScope.() -> Unit = {
+                if (settingsPage == "history") {
+                    Box {
+                        IconButton(onClick = { showHistorySettingsMenu = true }) {
+                            Icon(Icons.Outlined.Settings, contentDescription = "历史版本设置")
+                        }
+                        KardLeafDropdownMenu(
+                            expanded = showHistorySettingsMenu,
+                            onDismissRequest = { showHistorySettingsMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("历史版本数量") },
+                                leadingIcon = { Icon(Icons.Outlined.History, contentDescription = null) },
+                                onClick = {
+                                    showHistorySettingsMenu = false
+                                    settingsDialog = "historyLimit"
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("清理旧历史版本") },
+                                leadingIcon = { Icon(Icons.Outlined.DeleteSweep, contentDescription = null) },
+                                onClick = {
+                                    showHistorySettingsMenu = false
+                                    openCleanupHistoryDialog()
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            val topBarTitle: @Composable () -> Unit = {
+                if (settingsPage == "search") {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        tonalElevation = 2.dp,
+                    ) {
+                        SearchTextField(
+                            value = settingsSearchQuery,
+                            onValueChange = { settingsSearchQuery = it },
+                            placeholder = settingsText(settingsEnglish, "搜索设置功能", "Search settings"),
+                            clearDescription = settingsText(settingsEnglish, "清除搜索", "Clear search"),
+                            requestFocus = true,
+                            onClear = { settingsSearchQuery = "" },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                } else {
+                    AnimatedContent(
+                        targetState = settingsPageTitle(settingsPage),
+                        label = "SettingsTitleAnimation",
+                    ) { title ->
+                        Text(title)
+                    }
+                }
+            }
             if (isCleanListSettings) {
                 CenterAlignedTopAppBar(
-                    title = {
-                        AnimatedContent(
-                            targetState = settingsPageTitle(settingsPage),
-                            label = "SettingsTitleAnimation",
-                        ) { title ->
-                            Text(title)
-                        }
-                    },
+                    title = topBarTitle,
                     navigationIcon = {
-                        IconButton(onClick = { if (settingsPage == "main") onBack() else returnToSettingsMain() }) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+                        if (settingsPage != "search") {
+                            IconButton(onClick = ::returnFromSettingsPage) {
+                                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+                            }
                         }
                     },
+                    actions = topBarActions,
                     colors = colors,
                 )
             } else {
                 TopAppBar(
-                    title = {
-                        AnimatedContent(
-                            targetState = settingsPageTitle(settingsPage),
-                            label = "SettingsTitleAnimation",
-                        ) { title ->
-                            Text(title)
-                        }
-                    },
+                    title = topBarTitle,
                     navigationIcon = {
-                        IconButton(onClick = { if (settingsPage == "main") onBack() else returnToSettingsMain() }) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+                        if (settingsPage != "search") {
+                            IconButton(onClick = ::returnFromSettingsPage) {
+                                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+                            }
                         }
                     },
+                    actions = topBarActions,
                     colors = colors,
                 )
             }
@@ -1916,12 +2153,80 @@ fun KardLeafSettingsScreen(
                 label = "SettingsPageAnimation",
                 modifier = Modifier.fillMaxSize(),
             ) { page ->
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .verticalScroll(if (page == "main") mainScrollState else detailScrollState),
+                        .then(
+                            if (page == "search") {
+                                Modifier
+                            } else {
+                                Modifier.nestedScroll(settingsPullRefreshState.nestedScrollConnection)
+                            },
+                        ),
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(if (page == "main") mainScrollState else detailScrollState),
+                    ) {
                     when (page) {
+                "search" -> SettingsSearchPage(
+                    items = settingsSearchItems,
+                    query = settingsSearchQuery,
+                    settingsEnglish = settingsEnglish,
+                    onResultClick = { item ->
+                        settingsSearchQuery = ""
+                        item.onClick()
+                    },
+                )
+                "vault" -> VaultSettingsPage(
+                    vaults = vaults,
+                    currentVault = currentVault,
+                    onAddVault = onAddVault,
+                    onSwitchVault = onSwitchVault,
+                    onDeleteVault = onDeleteVault,
+                    onRenameVault = onRenameVault,
+                )
+                "home" -> {
+                    SettingsSectionTitle(settingsText(settingsEnglish, "首页", "Home"))
+                    SettingsListGroup {
+                        SettingsSwitchRow(
+                            icon = Icons.Outlined.Language,
+                            title = settingsText(settingsEnglish, "首页顶部显示保存网站", "Show Save Website on home top bar"),
+                            subtitle = if (homeWebClipActionVisible) {
+                                settingsText(settingsEnglish, "已显示在首页顶部工具栏", "Shown on the home top bar")
+                            } else {
+                                settingsText(settingsEnglish, "默认隐藏，可从新建笔记顶部使用", "Hidden by default; available in new notes")
+                            },
+                            checked = homeWebClipActionVisible,
+                            onCheckedChange = { visible ->
+                                homeWebClipActionVisible = visible
+                                prefsManager.saveHomeWebClipActionVisible(visible)
+                                onSettingsChanged()
+                            },
+                        )
+                        SettingsActionRow(
+                            icon = if (homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) Icons.Outlined.ViewHeadline else Icons.Outlined.Add,
+                            title = settingsText(settingsEnglish, "首页底部工具栏", "Home toolbar"),
+                            subtitle = if (homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) {
+                                settingsText(settingsEnglish, "已显示 ${homeBottomToolbarOrder.count { it !in homeBottomToolbarHiddenItems }} 个图标，按钮 ${homeBottomToolbarButtonSizeDp}dp", "${homeBottomToolbarOrder.count { it !in homeBottomToolbarHiddenItems }} icons, ${homeBottomToolbarButtonSizeDp}dp buttons")
+                            } else {
+                                settingsText(settingsEnglish, "当前使用简约新建按钮", "Using simple new button")
+                            },
+                            onClick = {
+                                openHomeBottomToolbarSettings()
+                            },
+                        )
+                        SettingsActionRow(
+                            Icons.Outlined.Reorder,
+                            settingsText(settingsEnglish, "长按选择栏", "Selection toolbar"),
+                            settingsText(settingsEnglish, "调整顶部、更多和隐藏按钮", "Top, more and hidden buttons"),
+                            {
+                                openSelectionToolbarSettings()
+                            },
+                        )
+                    }
+                }
                 "layout" -> PrefsManager.ViewMode.values().forEach { mode ->
                     SettingsChoiceRow(
                         icon = Icons.Outlined.Description,
@@ -1940,8 +2245,16 @@ fun KardLeafSettingsScreen(
                     PrefsManager.SortOrder.values().filter { it != PrefsManager.SortOrder.CUSTOM }.forEach { order ->
                         SettingsChoiceRow(
                             icon = Icons.Outlined.Description,
-                            title = if (order == PrefsManager.SortOrder.DATE_MODIFIED) "修改日期" else "标题",
-                            subtitle = if (order == PrefsManager.SortOrder.DATE_MODIFIED) "按修改时间排序" else "按标题排序",
+                            title = when (order) {
+                                PrefsManager.SortOrder.DATE_MODIFIED -> "修改日期"
+                                PrefsManager.SortOrder.DATE_CREATED -> "创建日期"
+                                else -> "标题"
+                            },
+                            subtitle = when (order) {
+                                PrefsManager.SortOrder.DATE_MODIFIED -> "按修改时间排序"
+                                PrefsManager.SortOrder.DATE_CREATED -> "按创建时间排序"
+                                else -> "按标题排序"
+                            },
                             selected = sortOrder == order,
                             onClick = {
                                 sortOrder = order
@@ -1967,28 +2280,13 @@ fun KardLeafSettingsScreen(
                     }
                 }
                 "theme" -> {
-                    ThemePreviewCard(
-                        themeStyle = appThemeStyle,
-                        themeMode = appThemeMode,
-                        accentColor = themeColor,
-                        backgroundColor = themeBackgroundColor,
-                        modernColorStyle = modernThemeColorStyle,
-                        customAccentColor = Color(customThemeColorArgb),
-                        customBackgroundColor = Color(customThemeBackgroundColorArgb),
-                    )
-                    SettingsSectionTitle(
-                        text = "黑夜模式",
-                        subtitle = "选择跟随系统、固定浅色或固定深色",
-                    )
+                    SettingsSectionTitle("主题模式")
                     ThemeModeChoiceGrid(
                         selectedMode = appThemeMode,
                         onModeClick = { applyThemeMode(it) },
                     )
                     SettingsSectionDivider()
-                    SettingsSectionTitle(
-                        text = "主题风格",
-                        subtitle = "经典主题、圆润主题、清爽列表、极夜主题和霓彩主题使用不同组件形态",
-                    )
+                    SettingsSectionTitle(text = "主题风格")
                     ThemeStyleChoiceGrid(
                         styles = PrefsManager.AppThemeStyle.values()
                             .filter { it != PrefsManager.AppThemeStyle.NOW_IN_ANDROID },
@@ -1997,10 +2295,7 @@ fun KardLeafSettingsScreen(
                     )
                     if (appThemeStyle == PrefsManager.AppThemeStyle.MODERN) {
                         SettingsSectionDivider()
-                        SettingsSectionTitle(
-                            text = "色彩",
-                            subtitle = "经典保留当前圆润主题色彩；现代使用 Material3 色彩体系",
-                        )
+                        SettingsSectionTitle(text = "色彩")
                         ModernThemeColorStyleChoiceGrid(
                             selectedStyle = modernThemeColorStyle,
                             onStyleClick = { applyModernThemeColorStyle(it) },
@@ -2008,30 +2303,21 @@ fun KardLeafSettingsScreen(
                     }
                     if (appThemeStyle == PrefsManager.AppThemeStyle.CLEAN_LIST) {
                         SettingsSectionDivider()
-                        SettingsSectionTitle(
-                            text = "功能项图标",
-                            subtitle = "现代保留彩色功能图标；简约跟随当前强调色",
-                        )
+                        SettingsSectionTitle(text = "功能项图标")
                         CleanListFeatureIconStyleChoiceGrid(
                             selectedStyle = cleanListFeatureIconStyle,
                             onStyleClick = { applyCleanListFeatureIconStyle(it) },
                         )
                     }
                     SettingsSectionDivider()
-                    SettingsSectionTitle(
-                        text = "推荐配色",
-                        subtitle = "一眼看强调色、背景色和卡片层次",
-                    )
+                    SettingsSectionTitle(text = "推荐配色")
                     RecommendedThemePaletteGrid(
                         selectedAccentColor = themeColor,
                         selectedBackgroundColor = themeBackgroundColor,
                         onPaletteClick = { accent, background -> applyRecommendedThemePalette(accent, background) },
                     )
                     SettingsSectionDivider()
-                    SettingsSectionTitle(
-                        text = "强调色",
-                        subtitle = "预设色块或打开颜料盘自由调色",
-                    )
+                    SettingsSectionTitle(text = "强调色")
                     ThemeColorPaletteGrid(
                         colors = PrefsManager.ThemeColor.values().toList(),
                         selectedColor = themeColor,
@@ -2046,10 +2332,7 @@ fun KardLeafSettingsScreen(
                         },
                     )
                     SettingsSectionDivider()
-                    SettingsSectionTitle(
-                        text = "背景色",
-                        subtitle = "影响页面、卡片和弹窗底色",
-                    )
+                    SettingsSectionTitle(text = "背景色")
                     ThemeBackgroundPaletteGrid(
                         colors = PrefsManager.ThemeBackgroundColor.values().toList(),
                         selectedColor = themeBackgroundColor,
@@ -2065,10 +2348,7 @@ fun KardLeafSettingsScreen(
                         },
                     )
                     SettingsSectionDivider()
-                    SettingsSectionTitle(
-                        text = "圆角",
-                        subtitle = "全局圆角影响主题组件；首页圆角可单独覆盖笔记卡片和首页底部工具栏",
-                    )
+                    SettingsSectionTitle(text = "圆角")
                     CornerRadiusPaletteGrid(
                         title = "全局圆角",
                         values = ThemeCornerRadiusOptions,
@@ -2083,13 +2363,102 @@ fun KardLeafSettingsScreen(
                         label = ::homeCornerRadiusLabel,
                         onClick = { applyHomeCornerRadiusDp(it) },
                     )
-                    SettingsSectionDivider()
-                    SettingsActionRow(
-                        icon = Icons.Outlined.Restore,
-                        title = "恢复默认主题",
-                        subtitle = "跟随系统 + 清爽列表 + 蓝色强调色 + 白色背景",
-                        onClick = { resetTheme() },
+                    CornerRadiusPaletteGrid(
+                        title = "任务圆角",
+                        values = ThemeCornerRadiusOptions,
+                        selected = taskCornerRadiusDp,
+                        label = ::taskCornerRadiusLabel,
+                        onClick = { applyTaskCornerRadiusDp(it) },
                     )
+                }
+                "editorMore" -> {
+                    SettingsSectionTitle(settingsText(settingsEnglish, "更多编辑设置", "More editor settings"))
+                    SettingsListGroup {
+                        SettingsActionRow(
+                            Icons.Outlined.AutoAwesome,
+                            settingsText(settingsEnglish, "AI 助手", "AI assistant"),
+                            if (savedAiConfig.provider == KardLeafAiProvider.TRIAL) {
+                                settingsText(settingsEnglish, "试用", "Trial")
+                            } else if (savedAiConfig.isConfigured) {
+                                settingsText(
+                                    settingsEnglish,
+                                    "${savedAiConfig.provider.displayName}：${savedAiConfig.model}",
+                                    "${savedAiConfig.provider.displayName}: ${savedAiConfig.model}",
+                                )
+                            } else {
+                                settingsText(settingsEnglish, "配置 OpenAI 兼容接口、模型和 API Key", "Configure an OpenAI-compatible endpoint, model and API key")
+                            },
+                            { openAiSettings() },
+                        )
+                        SettingsSwitchRow(
+                            icon = Icons.Outlined.FormatListBulleted,
+                            title = settingsText(settingsEnglish, "编辑底部工具栏常驻", "Always show edit toolbar"),
+                            subtitle = if (editorBottomToolbarAlwaysVisible) settingsText(settingsEnglish, "编辑状态下始终显示底部字符栏", "Always visible while editing") else settingsText(settingsEnglish, "仅输入法弹出时显示底部字符栏", "Only with keyboard"),
+                            checked = editorBottomToolbarAlwaysVisible,
+                            onCheckedChange = { enabled ->
+                                editorBottomToolbarAlwaysVisible = enabled
+                                prefsManager.saveEditorBottomToolbarAlwaysVisible(enabled)
+                                onSettingsChanged()
+                            },
+                        )
+                        SettingsSwitchRow(
+                            icon = Icons.Outlined.Visibility,
+                            title = settingsText(settingsEnglish, "CodeMirror 实时预览", "CodeMirror live preview"),
+                            subtitle = if (codeMirrorLivePreviewEnabled) settingsText(settingsEnglish, "已开启：滚动和输入时会显示轻量 Markdown 样式", "On: lightweight Markdown styling while typing") else settingsText(settingsEnglish, "已关闭：优先保证 CodeMirror 编辑流畅度", "Off: prioritizes smooth editing"),
+                            checked = codeMirrorLivePreviewEnabled,
+                            onCheckedChange = { enabled ->
+                                codeMirrorLivePreviewEnabled = enabled
+                                prefsManager.saveCodeMirrorLivePreviewEnabled(enabled)
+                                onSettingsChanged()
+                            },
+                        )
+                        SettingsSwitchRow(
+                            icon = Icons.Outlined.Image,
+                            title = settingsText(settingsEnglish, "编辑状态图片预览", "Image preview while editing"),
+                            subtitle = if (editingImagePreviewEnabled) settingsText(settingsEnglish, "原生内核会在图片语法下方显示预览", "Native editors show previews below image syntax") else settingsText(settingsEnglish, "仅显示 Markdown 图片语法", "Show Markdown image syntax only"),
+                            checked = editingImagePreviewEnabled,
+                            onCheckedChange = { enabled ->
+                                editingImagePreviewEnabled = enabled
+                                prefsManager.saveEditingImagePreviewEnabled(enabled)
+                                onSettingsChanged()
+                            },
+                        )
+                        SettingsActionRow(
+                            Icons.Outlined.Palette,
+                            settingsText(settingsEnglish, "预览主题", "Preview theme"),
+                            previewThemeLabel(previewTheme),
+                            { settingsDialog = "previewTheme" },
+                        )
+                        SettingsActionRow(
+                            Icons.Outlined.TouchApp,
+                            settingsText(settingsEnglish, "双击进入编辑间隔", "Double-tap edit interval"),
+                            settingsText(settingsEnglish, "当前 ${prefsManager.getPreviewDoubleTapIntervalMs()}ms", "Current ${prefsManager.getPreviewDoubleTapIntervalMs()}ms"),
+                            { settingsDialog = "doubleTap" },
+                        )
+                        SettingsSwitchRow(
+                            icon = Icons.Outlined.Info,
+                            title = settingsText(settingsEnglish, "笔记详情侧滑面板", "Note side panel"),
+                            subtitle = if (noteSidePanelsEnabled) settingsText(settingsEnglish, "已开启", "On") else settingsText(settingsEnglish, "已关闭", "Off"),
+                            checked = noteSidePanelsEnabled,
+                            onCheckedChange = { enabled ->
+                                noteSidePanelsEnabled = enabled
+                                prefsManager.saveNoteSidePanelsEnabled(enabled)
+                                onSettingsChanged()
+                            },
+                        )
+                        if (noteSidePanelsEnabled) {
+                            SettingsActionRow(
+                                icon = if (noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) Icons.Outlined.Swipe else Icons.Outlined.ViewHeadline,
+                                title = settingsText(settingsEnglish, "侧滑面板弹出方式", "Side panel trigger"),
+                                subtitle = if (noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) {
+                                    settingsText(settingsEnglish, "手势划出", "Swipe gesture")
+                                } else {
+                                    settingsText(settingsEnglish, "顶部工具栏弹出", "Top toolbar button")
+                                },
+                                onClick = { settingsDialog = "sidePanelOpenMode" },
+                            )
+                        }
+                    }
                 }
                 "image" -> {
                     SettingsSectionTitle("图片保存位置")
@@ -2312,6 +2681,24 @@ fun KardLeafSettingsScreen(
                             KardLeafCustomFeatures.saveToolbarOrder(context, toolbarOrder)
                         },
                     )
+                    SettingsSectionDivider()
+                    SettingsSectionTitle("自定义符号")
+                    OutlinedTextField(
+                        value = customSymbolsText,
+                        onValueChange = { value ->
+                            customSymbolsText = value
+                            KardLeafCustomFeatures.saveCustomSymbols(
+                                context,
+                                KardLeafCustomFeatures.normalizeCustomSymbols(value),
+                            )
+                            onSettingsChanged()
+                        },
+                        label = { Text("每行一个符号") },
+                        minLines = 3,
+                        maxLines = 8,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    SettingsPageText("点击编辑器底部的“自定义符号”按钮插入，最多 24 项，每项最多 32 字")
                 }
                 "editorTopToolbar" -> {
                     val availableItems = remember(noteSidePanelOpenMode, noteSidePanelsEnabled) {
@@ -2326,6 +2713,9 @@ fun KardLeafSettingsScreen(
                     var hiddenItems by remember(settingsPage, editorTopToolbarHiddenItems, noteSidePanelOpenMode, noteSidePanelsEnabled) {
                         mutableStateOf(prefsManager.getEditorTopToolbarHiddenItems().filter { it in availableItems && it != PrefsManager.EditorTopToolbarItemId.MORE }.toSet())
                     }
+                    var renameTarget by remember { mutableStateOf<PrefsManager.EditorTopToolbarItemId?>(null) }
+                    var renameText by remember { mutableStateOf("") }
+                    var topToolbarLabelRevision by remember { mutableStateOf(0) }
 
                     fun saveEditorTopToolbarState(
                         newOrder: List<PrefsManager.EditorTopToolbarItemId> = itemOrder,
@@ -2351,99 +2741,57 @@ fun KardLeafSettingsScreen(
                         onSettingsChanged()
                     }
 
-                    fun saveEditorTopToolbarSections(
-                        topItems: List<PrefsManager.EditorTopToolbarItemId>,
-                        moreDisplayItems: List<PrefsManager.EditorTopToolbarItemId>,
-                        hiddenDisplayItems: List<PrefsManager.EditorTopToolbarItemId>,
-                    ) {
-                        saveEditorTopToolbarState(topItems + moreDisplayItems + hiddenDisplayItems, moreItems, hiddenItems)
+                    if (renameTarget != null) {
+                        AlertDialog(
+                            onDismissRequest = { renameTarget = null },
+                            title = { Text("重命名顶部工具栏功能项") },
+                            text = {
+                                OutlinedTextField(
+                                    value = renameText,
+                                    onValueChange = { renameText = it },
+                                    label = { Text("名称") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    renameTarget?.let { itemId ->
+                                        prefsManager.saveEditorTopToolbarItemLabel(itemId, renameText)
+                                        topToolbarLabelRevision++
+                                        onSettingsChanged()
+                                    }
+                                    renameTarget = null
+                                }) { Text("保存") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { renameTarget = null }) { Text("取消") }
+                            },
+                        )
                     }
-
-                    val topItems = itemOrder.filter { it !in moreItems && it !in hiddenItems }
-                    val moreDisplayItems = itemOrder.filter { it in moreItems && it !in hiddenItems }
-                    val hiddenDisplayItems = itemOrder.filter { it in hiddenItems }
 
                     SettingsPageText("长按拖动调整顺序，按钮可以放在顶部、更多或隐藏")
                     if (noteSidePanelsEnabled && noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) {
                         SettingsPageText("当前为手势划出侧滑面板，大纲和属性备注不会显示在顶部栏设置里")
                     }
-                    SettingsSectionTitle("顶部展示")
-                    if (topItems.isEmpty()) {
-                        SettingsPageText("暂无顶部按钮")
-                    } else {
+                    SettingsSectionTitle("功能项")
+                    androidx.compose.runtime.key(topToolbarLabelRevision) {
                         SettingsEditorTopToolbarDragList(
-                            items = topItems,
+                            items = itemOrder,
                             moreItems = moreItems,
                             hiddenItems = hiddenItems,
-                            onOrderChange = { newTopItems ->
-                                saveEditorTopToolbarSections(newTopItems, moreDisplayItems, hiddenDisplayItems)
+                            prefsManager = prefsManager,
+                            onOrderChange = { saveEditorTopToolbarState(it) },
+                            onPlacementChange = { itemId, placement ->
+                                if (itemId != PrefsManager.EditorTopToolbarItemId.MORE) {
+                                    val newHiddenItems = if (placement == 0) hiddenItems + itemId else hiddenItems - itemId
+                                    val newMoreItems = if (placement == 1) moreItems + itemId else moreItems - itemId
+                                    saveEditorTopToolbarState(itemOrder, newMoreItems, newHiddenItems)
+                                }
                             },
-                            onToggleArea = { itemId ->
-                                val newMoreItems = moreItems + itemId
-                                val newTopItems = itemOrder.filter { it !in newMoreItems && it !in hiddenItems }
-                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems && it !in hiddenItems }
-                                saveEditorTopToolbarState(newTopItems + newMoreDisplayItems + hiddenDisplayItems, newMoreItems, hiddenItems)
-                            },
-                            onToggleHidden = { itemId ->
-                                val newHiddenItems = hiddenItems + itemId
-                                val newMoreItems = moreItems - itemId
-                                val newTopItems = itemOrder.filter { it !in newMoreItems && it !in newHiddenItems }
-                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems && it !in newHiddenItems }
-                                val newHiddenDisplayItems = itemOrder.filter { it in newHiddenItems }
-                                saveEditorTopToolbarState(newTopItems + newMoreDisplayItems + newHiddenDisplayItems, newMoreItems, newHiddenItems)
-                            },
-                        )
-                    }
-
-                    SettingsSectionDivider()
-                    SettingsSectionTitle("更多选项展示")
-                    if (moreDisplayItems.isEmpty()) {
-                        SettingsPageText("暂无更多选项")
-                    } else {
-                        SettingsEditorTopToolbarDragList(
-                            items = moreDisplayItems,
-                            moreItems = moreItems,
-                            hiddenItems = hiddenItems,
-                            onOrderChange = { newMoreDisplayItems ->
-                                saveEditorTopToolbarSections(topItems, newMoreDisplayItems, hiddenDisplayItems)
-                            },
-                            onToggleArea = { itemId ->
-                                val newMoreItems = moreItems - itemId
-                                val newTopItems = itemOrder.filter { it !in newMoreItems && it !in hiddenItems }
-                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems && it !in hiddenItems }
-                                saveEditorTopToolbarState(newTopItems + newMoreDisplayItems + hiddenDisplayItems, newMoreItems, hiddenItems)
-                            },
-                            onToggleHidden = { itemId ->
-                                val newHiddenItems = hiddenItems + itemId
-                                val newMoreItems = moreItems - itemId
-                                val newTopItems = itemOrder.filter { it !in newMoreItems && it !in newHiddenItems }
-                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems && it !in newHiddenItems }
-                                val newHiddenDisplayItems = itemOrder.filter { it in newHiddenItems }
-                                saveEditorTopToolbarState(newTopItems + newMoreDisplayItems + newHiddenDisplayItems, newMoreItems, newHiddenItems)
-                            },
-                        )
-                    }
-
-                    SettingsSectionDivider()
-                    SettingsSectionTitle("隐藏")
-                    if (hiddenDisplayItems.isEmpty()) {
-                        SettingsPageText("暂无隐藏项")
-                    } else {
-                        SettingsEditorTopToolbarDragList(
-                            items = hiddenDisplayItems,
-                            moreItems = moreItems,
-                            hiddenItems = hiddenItems,
-                            onOrderChange = { newHiddenDisplayItems ->
-                                saveEditorTopToolbarSections(topItems, moreDisplayItems, newHiddenDisplayItems)
-                            },
-                            onToggleArea = {},
-                            onToggleHidden = { itemId ->
-                                val newHiddenItems = hiddenItems - itemId
-                                val newMoreItems = moreItems - itemId
-                                val newTopItems = itemOrder.filter { it !in newMoreItems && it !in newHiddenItems }
-                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems && it !in newHiddenItems }
-                                val newHiddenDisplayItems = itemOrder.filter { it in newHiddenItems }
-                                saveEditorTopToolbarState(newTopItems + newMoreDisplayItems + newHiddenDisplayItems, newMoreItems, newHiddenItems)
+                            onRename = { itemId, title ->
+                                renameTarget = itemId
+                                renameText = title
                             },
                         )
                     }
@@ -2476,99 +2824,19 @@ fun KardLeafSettingsScreen(
                         onSettingsChanged()
                     }
 
-                    fun saveSelectionToolbarSections(
-                        topItems: List<PrefsManager.SelectionToolbarItemId>,
-                        moreDisplayItems: List<PrefsManager.SelectionToolbarItemId>,
-                        hiddenDisplayItems: List<PrefsManager.SelectionToolbarItemId>,
-                    ) {
-                        saveSelectionToolbarState(topItems + moreDisplayItems + hiddenDisplayItems, moreItems, hiddenItems)
-                    }
-
-                    val topItems = itemOrder.filter { it !in moreItems && it !in hiddenItems }
-                    val moreDisplayItems = itemOrder.filter { it in moreItems && it !in hiddenItems }
-                    val hiddenDisplayItems = itemOrder.filter { it in hiddenItems }
-
                     SettingsPageText("长按拖动调整顺序，按钮可以放在顶部、更多或隐藏")
-                    SettingsSectionTitle("顶部展示")
-                    if (topItems.isEmpty()) {
-                        SettingsPageText("暂无顶部按钮")
-                    } else {
-                        SettingsSelectionToolbarDragList(
-                            items = topItems,
-                            moreItems = moreItems,
-                            hiddenItems = hiddenItems,
-                            onOrderChange = { newTopItems ->
-                                saveSelectionToolbarSections(newTopItems, moreDisplayItems, hiddenDisplayItems)
-                            },
-                            onToggleArea = { itemId ->
-                                val newMoreItems = moreItems + itemId
-                                val newTopItems = itemOrder.filter { it !in newMoreItems && it !in hiddenItems }
-                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems && it !in hiddenItems }
-                                saveSelectionToolbarState(newTopItems + newMoreDisplayItems + hiddenDisplayItems, newMoreItems, hiddenItems)
-                            },
-                            onToggleHidden = { itemId ->
-                                val newHiddenItems = hiddenItems + itemId
-                                val newMoreItems = moreItems - itemId
-                                val newTopItems = itemOrder.filter { it !in newMoreItems && it !in newHiddenItems }
-                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems && it !in newHiddenItems }
-                                val newHiddenDisplayItems = itemOrder.filter { it in newHiddenItems }
-                                saveSelectionToolbarState(newTopItems + newMoreDisplayItems + newHiddenDisplayItems, newMoreItems, newHiddenItems)
-                            },
-                        )
-                    }
-
-                    SettingsSectionDivider()
-                    SettingsSectionTitle("更多选项展示")
-                    if (moreDisplayItems.isEmpty()) {
-                        SettingsPageText("暂无更多选项")
-                    } else {
-                        SettingsSelectionToolbarDragList(
-                            items = moreDisplayItems,
-                            moreItems = moreItems,
-                            hiddenItems = hiddenItems,
-                            onOrderChange = { newMoreDisplayItems ->
-                                saveSelectionToolbarSections(topItems, newMoreDisplayItems, hiddenDisplayItems)
-                            },
-                            onToggleArea = { itemId ->
-                                val newMoreItems = moreItems - itemId
-                                val newTopItems = itemOrder.filter { it !in newMoreItems && it !in hiddenItems }
-                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems && it !in hiddenItems }
-                                saveSelectionToolbarState(newTopItems + newMoreDisplayItems + hiddenDisplayItems, newMoreItems, hiddenItems)
-                            },
-                            onToggleHidden = { itemId ->
-                                val newHiddenItems = hiddenItems + itemId
-                                val newMoreItems = moreItems - itemId
-                                val newTopItems = itemOrder.filter { it !in newMoreItems && it !in newHiddenItems }
-                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems && it !in newHiddenItems }
-                                val newHiddenDisplayItems = itemOrder.filter { it in newHiddenItems }
-                                saveSelectionToolbarState(newTopItems + newMoreDisplayItems + newHiddenDisplayItems, newMoreItems, newHiddenItems)
-                            },
-                        )
-                    }
-
-                    SettingsSectionDivider()
-                    SettingsSectionTitle("隐藏")
-                    if (hiddenDisplayItems.isEmpty()) {
-                        SettingsPageText("暂无隐藏项")
-                    } else {
-                        SettingsSelectionToolbarDragList(
-                            items = hiddenDisplayItems,
-                            moreItems = moreItems,
-                            hiddenItems = hiddenItems,
-                            onOrderChange = { newHiddenDisplayItems ->
-                                saveSelectionToolbarSections(topItems, moreDisplayItems, newHiddenDisplayItems)
-                            },
-                            onToggleArea = {},
-                            onToggleHidden = { itemId ->
-                                val newHiddenItems = hiddenItems - itemId
-                                val newMoreItems = moreItems - itemId
-                                val newTopItems = itemOrder.filter { it !in newMoreItems && it !in newHiddenItems }
-                                val newMoreDisplayItems = itemOrder.filter { it in newMoreItems && it !in newHiddenItems }
-                                val newHiddenDisplayItems = itemOrder.filter { it in newHiddenItems }
-                                saveSelectionToolbarState(newTopItems + newMoreDisplayItems + newHiddenDisplayItems, newMoreItems, newHiddenItems)
-                            },
-                        )
-                    }
+                    SettingsSectionTitle("功能项")
+                    SettingsSelectionToolbarDragList(
+                        items = itemOrder,
+                        moreItems = moreItems,
+                        hiddenItems = hiddenItems,
+                        onOrderChange = { saveSelectionToolbarState(it) },
+                        onPlacementChange = { itemId, placement ->
+                            val newHiddenItems = if (placement == 0) hiddenItems + itemId else hiddenItems - itemId
+                            val newMoreItems = if (placement == 1) moreItems + itemId else moreItems - itemId
+                            saveSelectionToolbarState(itemOrder, newMoreItems, newHiddenItems)
+                        },
+                    )
                 }
                 "drawerSettings" -> {
                     SettingsSectionTitle("侧边栏样式切换")
@@ -2625,13 +2893,6 @@ fun KardLeafSettingsScreen(
                         onSettingsChanged()
                     }
 
-                    fun saveDrawerSections(
-                        visibleItems: List<PrefsManager.DrawerItemId>,
-                        hiddenDrawerItems: List<PrefsManager.DrawerItemId>,
-                    ) {
-                        saveDrawerState(visibleItems + hiddenDrawerItems, hiddenItems)
-                    }
-
                     fun saveDrawerGroupStartItems(newGroupStartItems: Set<PrefsManager.DrawerItemId>) {
                         drawerGroupStartItems = newGroupStartItems
                         prefsManager.saveDrawerGroupStartItems(newGroupStartItems)
@@ -2667,10 +2928,9 @@ fun KardLeafSettingsScreen(
                         )
                     }
 
-                    val visibleItems = drawerOrder.filter { it !in hiddenItems }
-                    val hiddenDrawerItems = drawerOrder.filter { it in hiddenItems }
-
-                    val availableGroupLineTargets = visibleItems.filter { it !in drawerGroupStartItems }
+                    val availableGroupLineTargets = drawerOrder.filter {
+                        it !in hiddenItems && it !in drawerGroupStartItems
+                    }
                     val defaultGroupLineTarget = availableGroupLineTargets.firstOrNull {
                         it == PrefsManager.DrawerItemId.ALL_NOTES
                     } ?: availableGroupLineTargets.firstOrNull()
@@ -2679,7 +2939,7 @@ fun KardLeafSettingsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(modifier = Modifier.weight(1f)) {
-                            SettingsSectionTitle("显示")
+                            SettingsSectionTitle("功能项")
                         }
                         TextButton(
                             enabled = defaultGroupLineTarget != null,
@@ -2692,60 +2952,27 @@ fun KardLeafSettingsScreen(
                             Text("添加分组线")
                         }
                     }
-                    if (visibleItems.isEmpty()) {
-                        SettingsPageText("暂无显示项")
-                    } else {
-                        SettingsDrawerDragList(
-                            items = visibleItems,
-                            hiddenItems = hiddenItems,
-                            prefsManager = prefsManager,
-                            onOrderChange = { newVisibleItems ->
-                                saveDrawerSections(newVisibleItems, hiddenDrawerItems)
-                            },
-                            onRename = { itemId, title ->
-                                renameTarget = itemId
-                                renameText = title
-                            },
-                            onToggleVisible = { itemId ->
-                                if (itemId != PrefsManager.DrawerItemId.SETTINGS) {
-                                    val newHiddenItems = hiddenItems + itemId
-                                    val newVisibleItems = drawerOrder.filter { it !in newHiddenItems }
-                                    val newHiddenDrawerItems = drawerOrder.filter { it in newHiddenItems }
-                                    saveDrawerState(newVisibleItems + newHiddenDrawerItems, newHiddenItems)
-                                }
-                            },
-                            groupStartItems = drawerGroupStartItems,
-                            onMoveGroupStart = { oldItem, newItem ->
-                                val updated = drawerGroupStartItems - oldItem
-                                saveDrawerGroupStartItems(if (newItem == null) updated else updated + newItem)
-                            },
-                        )
-                    }
-
-                    SettingsSectionDivider()
-                    SettingsSectionTitle("隐藏")
-                    if (hiddenDrawerItems.isEmpty()) {
-                        SettingsPageText("暂无隐藏项")
-                    } else {
-                        SettingsDrawerDragList(
-                            items = hiddenDrawerItems,
-                            hiddenItems = hiddenItems,
-                            prefsManager = prefsManager,
-                            onOrderChange = { newHiddenDrawerItems ->
-                                saveDrawerSections(visibleItems, newHiddenDrawerItems)
-                            },
-                            onRename = { itemId, title ->
-                                renameTarget = itemId
-                                renameText = title
-                            },
-                            onToggleVisible = { itemId ->
-                                val newHiddenItems = hiddenItems - itemId
-                                val newVisibleItems = drawerOrder.filter { it !in newHiddenItems }
-                                val newHiddenDrawerItems = drawerOrder.filter { it in newHiddenItems }
-                                saveDrawerState(newVisibleItems + newHiddenDrawerItems, newHiddenItems)
-                            },
-                        )
-                    }
+                    SettingsDrawerDragList(
+                        items = drawerOrder,
+                        hiddenItems = hiddenItems,
+                        prefsManager = prefsManager,
+                        onOrderChange = { saveDrawerState(it) },
+                        onRename = { itemId, title ->
+                            renameTarget = itemId
+                            renameText = title
+                        },
+                        onToggleVisible = { itemId ->
+                            if (itemId != PrefsManager.DrawerItemId.SETTINGS) {
+                                val newHiddenItems = if (itemId in hiddenItems) hiddenItems - itemId else hiddenItems + itemId
+                                saveDrawerState(drawerOrder, newHiddenItems)
+                            }
+                        },
+                        groupStartItems = drawerGroupStartItems,
+                        onMoveGroupStart = { oldItem, newItem ->
+                            val updated = drawerGroupStartItems - oldItem
+                            saveDrawerGroupStartItems(if (newItem == null) updated else updated + newItem)
+                        },
+                    )
                 }
                 "homeBottomToolbar" -> {
                     fun saveHomeBottomToolbarState(
@@ -2907,6 +3134,8 @@ fun KardLeafSettingsScreen(
                         prefsManager = prefsManager,
                         passwordInputMode = passwordInputMode,
                         onChoosePasswordMode = { settingsDialog = "passwordMode" },
+                        onSetPrivacyPassword = onSetPrivacyPassword,
+                        onRemovePrivacyPassword = onRemovePrivacyPassword,
                     )
                 }
                 "webDav" -> {
@@ -3322,6 +3551,129 @@ fun KardLeafSettingsScreen(
                     }
                     SettingsPageText("手机重启后会重新注册未完成且未来有效的任务提醒。")
                 }
+                "updates" -> {
+                    SettingsSectionTitle(settingsText(settingsEnglish, "更新", "Updates"))
+                    SettingsListGroup {
+                        SettingsSwitchRow(
+                            icon = Icons.Outlined.SystemUpdate,
+                            title = settingsText(settingsEnglish, "自动检查更新", "Automatic update checks"),
+                            subtitle = settingsText(
+                                settingsEnglish,
+                                "每天首次打开应用时，异步检查 GitHub 最新正式版本",
+                                "Check the latest stable GitHub release once per day",
+                            ),
+                            checked = autoUpdateCheckEnabled,
+                            onCheckedChange = { enabled ->
+                                autoUpdateCheckEnabled = enabled
+                                prefsManager.saveAutoUpdateCheckEnabled(enabled)
+                            },
+                        )
+                        SettingsActionRow(
+                            Icons.Outlined.SystemUpdateAlt,
+                            settingsText(settingsEnglish, "检查更新", "Check for updates"),
+                            settingsText(
+                                settingsEnglish,
+                                if (updateCheckInProgress) "正在检查 GitHub Release..." else "立即检查最新正式版本",
+                                if (updateCheckInProgress) "Checking GitHub Release..." else "Check the latest stable release now",
+                            ),
+                            { checkForAppUpdate() },
+                        )
+                    }
+                }
+                "otherMore" -> {
+                    SettingsSectionTitle(settingsText(settingsEnglish, "其他更多", "More settings"))
+                    SettingsListGroup {
+                        if (BuildConfig.KARDLEAF_DEV_VARIANT) {
+                            SettingsActionRow(
+                                Icons.Outlined.Archive,
+                                settingsText(settingsEnglish, "导出用户数据与缓存", "Export user data and cache"),
+                                settingsText(
+                                    settingsEnglish,
+                                    if (isExportingDevStorage) "正在生成 ZIP..." else "导出应用私有目录并附带空间占用报告",
+                                    if (isExportingDevStorage) "Generating ZIP..." else "Export private app directories with a storage report",
+                                ),
+                                { exportDevStorage() },
+                            )
+                        }
+                        SettingsSwitchRow(
+                            icon = Icons.Outlined.BugReport,
+                            title = settingsText(settingsEnglish, "开启日志", "Enable logs"),
+                            subtitle = settingsText(
+                                settingsEnglish,
+                                if (appLoggingEnabled) "已开启，会额外记录详细日志" else "默认只保留警告和错误，减少正式版运行开销",
+                                if (appLoggingEnabled) "Enabled; keeps extra detailed logs" else "Only warnings and errors are kept by default",
+                            ),
+                            checked = appLoggingEnabled,
+                            onCheckedChange = { enabled ->
+                                appLoggingEnabled = enabled
+                                prefsManager.saveAppLoggingEnabled(enabled)
+                                KardLeafLog.setUserLoggingEnabled(enabled)
+                                context.showToast(if (enabled) "已开启日志" else "已关闭日志")
+                            },
+                        )
+                        SettingsActionRow(
+                            Icons.Outlined.BugReport,
+                            settingsText(settingsEnglish, "导出诊断日志", "Export diagnostics"),
+                            settingsText(
+                                settingsEnglish,
+                                when {
+                                    isExportingDiagnosticLog -> "正在生成日志文件..."
+                                    appLoggingEnabled -> "导出基础诊断、应用日志和系统日志"
+                                    else -> "导出基础诊断和应用警告/错误；开启后包含详细日志"
+                                },
+                                when {
+                                    isExportingDiagnosticLog -> "Generating log file..."
+                                    appLoggingEnabled -> "Export diagnostics, app logs and system logs"
+                                    else -> "Exports diagnostics and app warnings/errors; enable for details"
+                                },
+                            ),
+                            { exportDiagnosticLog() },
+                        )
+                    }
+                }
+                "dataMore" -> {
+                    SettingsSectionTitle(settingsText(settingsEnglish, "数据与安全更多", "More data settings"))
+                    SettingsListGroup {
+                        SettingsActionRow(
+                            Icons.Outlined.Backup,
+                            settingsText(settingsEnglish, "数据备份", "Data backup"),
+                            settingsText(settingsEnglish, "导入或导出用户数据 JSON", "Import or export user data JSON"),
+                            { settingsDialog = "backup" },
+                        )
+                        SettingsActionRow(
+                            Icons.Outlined.Schedule,
+                            settingsText(settingsEnglish, "自动备份", "Automatic backup"),
+                            settingsText(settingsEnglish, "定时备份到指定目录", "Scheduled backups to a selected folder"),
+                            { openSettingsPage("autoBackup") },
+                        )
+                        SettingsActionRow(
+                            Icons.Outlined.Notifications,
+                            settingsText(settingsEnglish, "任务与提醒", "Tasks & reminders"),
+                            settingsText(settingsEnglish, "通知权限和精确提醒状态", "Notification and exact reminder status"),
+                            { openSettingsPage("taskReminders") },
+                        )
+                    }
+                    SettingsSectionDivider()
+                    SettingsSectionTitle(settingsText(settingsEnglish, "附件与文件", "Files"))
+                    SettingsListGroup {
+                        SettingsActionRow(Icons.Outlined.Folder, settingsText(settingsEnglish, "图片保存位置", "Image folder"), imageFolder, { openSettingsPage("image") })
+                        SettingsActionRow(Icons.Outlined.Image, settingsText(settingsEnglish, "图片路径格式", "Image path format"), settingsText(settingsEnglish, "根路径或相对路径", "Root or relative paths"), { settingsDialog = "imagePath" })
+                        SettingsActionRow(
+                            Icons.Outlined.VisibilityOff,
+                            settingsText(settingsEnglish, "隐藏的文件夹", "Hidden folders"),
+                            if (hiddenFolders.isEmpty()) {
+                                settingsText(settingsEnglish, "未隐藏文件夹", "No hidden folders")
+                            } else {
+                                hiddenFolders.sorted()
+                                    .joinToString(", ") { hiddenFolderDisplayName(it) }
+                                    .take(32)
+                            },
+                            { openSettingsPage("hiddenFolders") },
+                        )
+                        SettingsActionRow(Icons.Outlined.Description, settingsText(settingsEnglish, "自动文件名", "Automatic file names"), autoFileNameSummary, { settingsDialog = "autoFileName" })
+                        SettingsActionRow(Icons.Outlined.TextFields, settingsText(settingsEnglish, "日期格式", "Date format"), dateFormat, { settingsDialog = "date" })
+                    }
+                }
                 "remarkRecords" -> {
                     NoteRecordSummarySettingsPage(
                         title = "有备注的笔记",
@@ -3331,7 +3683,7 @@ fun KardLeafSettingsScreen(
                         onOpenNote = onOpenRecordNote,
                     )
                 }
-                "historyRecords" -> {
+                "history" -> {
                     NoteRecordSummarySettingsPage(
                         title = "有历史版本的笔记",
                         emptyText = "当前没有历史版本记录",
@@ -3355,7 +3707,8 @@ fun KardLeafSettingsScreen(
                                     ?: "unknown"
                                 SettingsBaseRow(
                                     icon = Icons.Outlined.Description,
-                                    title = file.path,
+                                    showIcon = false,
+                                    title = file.path.substringAfterLast('/'),
                                     subtitle = "",
                                     onClick = {},
                                     trailing = {
@@ -3412,7 +3765,7 @@ fun KardLeafSettingsScreen(
                     SettingsActionRow(
                         icon = Icons.Outlined.Info,
                         title = "版本",
-                        subtitle = versionName.ifBlank { "1.8.0" },
+                        subtitle = versionName.ifBlank { "1.9.0" },
                         onClick = {},
                     )
                     if (BuildConfig.KARDLEAF_DEV_VARIANT || BuildConfig.DEBUG) {
@@ -3577,293 +3930,334 @@ fun KardLeafSettingsScreen(
                     }
                 }
                 else -> {
-                    SettingsSectionTitle(settingsText(settingsEnglish, "常规", "General"))
-                    SettingsListGroup {
-                        SettingsActionRow(Icons.Outlined.Folder, settingsText(settingsEnglish, "笔记库", "Vault"), displayRootPath(prefsManager.getRootUri()), { showVaultPathDialog = true })
-                        SettingsActionRow(Icons.Outlined.Palette, settingsText(settingsEnglish, "主题切换", "Theme"), themeSummary(appThemeStyle, appThemeMode, modernThemeColorStyle, themeColor, themeBackgroundColor), { openSettingsPage("theme") })
-                        SettingsActionRow(Icons.Outlined.Tune, settingsText(settingsEnglish, "应用界面", "Interface"), settingsText(settingsEnglish, "布局、排序、启动分类和图标", "Layout, sorting, startup folder and icons"), { openSettingsPage("interface") })
-                        SettingsSwitchRow(
-                            icon = Icons.Outlined.Language,
-                            title = settingsText(settingsEnglish, "首页顶部显示保存网站", "Show Save Website on home top bar"),
-                            subtitle = if (homeWebClipActionVisible) {
-                                settingsText(settingsEnglish, "已显示在首页顶部工具栏", "Shown on the home top bar")
-                            } else {
-                                settingsText(settingsEnglish, "默认隐藏，可从新建笔记顶部使用", "Hidden by default; available in new notes")
-                            },
-                            checked = homeWebClipActionVisible,
-                            onCheckedChange = { visible ->
-                                homeWebClipActionVisible = visible
-                                prefsManager.saveHomeWebClipActionVisible(visible)
-                                onSettingsChanged()
-                            },
-                        )
-                        SettingsActionRow(
-                            icon = if (homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) Icons.Outlined.ViewHeadline else Icons.Outlined.Add,
-                            title = settingsText(settingsEnglish, "首页底部工具栏", "Home toolbar"),
-                            subtitle = if (homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) {
-                                settingsText(settingsEnglish, "已显示 ${homeBottomToolbarOrder.count { it !in homeBottomToolbarHiddenItems }} 个图标，按钮 ${homeBottomToolbarButtonSizeDp}dp", "${homeBottomToolbarOrder.count { it !in homeBottomToolbarHiddenItems }} icons, ${homeBottomToolbarButtonSizeDp}dp buttons")
-                            } else {
-                                settingsText(settingsEnglish, "当前使用简约新建按钮", "Using simple new button")
-                            },
-                            onClick = {
-                                homeBottomToolbarOrder = prefsManager.getHomeBottomToolbarItemOrder()
-                                homeBottomToolbarHiddenItems = prefsManager.getHomeBottomToolbarHiddenItems()
-                                homeBottomToolbarButtonSizeDp = prefsManager.getHomeBottomToolbarButtonSizeDp()
-                                openSettingsPage("homeBottomToolbar")
-                            },
-                        )
-                        SettingsActionRow(Icons.Outlined.ViewAgenda, settingsText(settingsEnglish, "侧边栏", "Sidebar"), drawerStyleLabel(drawerStyle), { openSettingsPage("drawerSettings") })
-                    }
-                    SettingsSectionDivider()
-                    SettingsSectionTitle(settingsText(settingsEnglish, "编辑器", "Editor"))
-                    SettingsListGroup {
-                        SettingsActionRow(Icons.Outlined.FormatListBulleted, settingsText(settingsEnglish, "字符按钮位置", "Format buttons"), settingsText(settingsEnglish, "调整工具按钮顺序", "Reorder editor tools"), { openSettingsPage("toolbar") })
-                        SettingsActionRow(Icons.Outlined.ViewHeadline, settingsText(settingsEnglish, "笔记顶部栏", "Note top bar"), settingsText(settingsEnglish, "调整顶部、更多和隐藏按钮", "Top, more and hidden buttons"), {
-                            noteSidePanelsEnabled = prefsManager.isNoteSidePanelsEnabled()
-                            noteSidePanelOpenMode = prefsManager.getNoteSidePanelOpenMode()
-                            editorTopToolbarOrder = prefsManager.getEditorTopToolbarItemOrder()
-                            editorTopToolbarMoreItems = prefsManager.getEditorTopToolbarMoreItems()
-                            editorTopToolbarHiddenItems = prefsManager.getEditorTopToolbarHiddenItems()
-                            openSettingsPage("editorTopToolbar")
-                        })
-                        SettingsActionRow(Icons.Outlined.Reorder, settingsText(settingsEnglish, "长按选择栏", "Selection toolbar"), settingsText(settingsEnglish, "调整顶部、更多和隐藏按钮", "Top, more and hidden buttons"), {
-                            selectionToolbarOrder = prefsManager.getSelectionToolbarItemOrder()
-                            selectionToolbarMoreItems = prefsManager.getSelectionToolbarMoreItems()
-                            selectionToolbarHiddenItems = prefsManager.getSelectionToolbarHiddenItems()
-                            openSettingsPage("selectionToolbar")
-                        })
-                        SettingsActionRow(
-                            Icons.Outlined.AutoAwesome,
-                            settingsText(settingsEnglish, "AI 助手", "AI assistant"),
-                            if (savedAiConfig.provider == KardLeafAiProvider.TRIAL) {
-                                settingsText(settingsEnglish, "试用", "Trial")
-                            } else if (savedAiConfig.isConfigured) {
-                                settingsText(
-                                    settingsEnglish,
-                                    "${savedAiConfig.provider.displayName}：${savedAiConfig.model}",
-                                    "${savedAiConfig.provider.displayName}: ${savedAiConfig.model}",
-                                )
-                            } else {
-                                settingsText(settingsEnglish, "配置 OpenAI 兼容接口、模型和 API Key", "Configure an OpenAI-compatible endpoint, model and API key")
-                            },
-                            {
-                                val config = aiPreferences.load()
-                                aiBaseUrl = if (config.provider == KardLeafAiProvider.TRIAL) "" else config.baseUrl
-                                aiModel = if (config.provider == KardLeafAiProvider.TRIAL) "" else config.model
-                                aiApiKey = if (config.provider == KardLeafAiProvider.TRIAL) "" else config.apiKey
-                                aiProvider = config.provider
-                                aiConnectionMessage = null
-                                showAiSettingsDialog = true
-                            },
-                        )
-                        SettingsActionRow(Icons.Outlined.Visibility, settingsText(settingsEnglish, "默认打开模式", "Default open mode"), if (openNoteMode == KardLeafCustomFeatures.OpenNoteMode.PREVIEW) settingsText(settingsEnglish, "查看模式", "Preview") else settingsText(settingsEnglish, "编辑模式", "Edit"), { settingsDialog = "openNote" })
-                        SettingsActionRow(
-                            Icons.Outlined.FontDownload,
-                            settingsText(settingsEnglish, "编辑器字体", "Editor font"),
-                            settingsText(settingsEnglish, "${editorFontSizeSp.roundToInt()}sp · 行高 ${(editorLineHeightMultiplier * 100).roundToInt()}%", "${editorFontSizeSp.roundToInt()}sp · line ${(editorLineHeightMultiplier * 100).roundToInt()}%"),
-                            { settingsDialog = "editorTypography" },
-                        )
-                        SettingsSwitchRow(
-                            icon = Icons.Outlined.FormatListBulleted,
-                            title = settingsText(settingsEnglish, "编辑底部工具栏常驻", "Always show edit toolbar"),
-                            subtitle = if (editorBottomToolbarAlwaysVisible) settingsText(settingsEnglish, "编辑状态下始终显示底部字符栏", "Always visible while editing") else settingsText(settingsEnglish, "仅输入法弹出时显示底部字符栏", "Only with keyboard"),
-                            checked = editorBottomToolbarAlwaysVisible,
-                            onCheckedChange = { enabled ->
-                                editorBottomToolbarAlwaysVisible = enabled
-                                prefsManager.saveEditorBottomToolbarAlwaysVisible(enabled)
-                                onSettingsChanged()
-                            },
-                        )
-                        SettingsActionRow(
-                            KardLeafCustomFeatures.editorKernelIcon(editorKernel),
-                            settingsText(settingsEnglish, "编辑器内核", "Editor engine"),
-                            KardLeafCustomFeatures.editorKernelTitle(editorKernel),
-                            { settingsDialog = "editorKernel" },
-                        )
-                        SettingsSwitchRow(
-                            icon = Icons.Outlined.Visibility,
-                            title = settingsText(settingsEnglish, "CodeMirror 实时预览", "CodeMirror live preview"),
-                            subtitle = if (codeMirrorLivePreviewEnabled) settingsText(settingsEnglish, "已开启：滚动和输入时会显示轻量 Markdown 样式", "On: lightweight Markdown styling while typing") else settingsText(settingsEnglish, "已关闭：优先保证 CodeMirror 编辑流畅度", "Off: prioritizes smooth editing"),
-                            checked = codeMirrorLivePreviewEnabled,
-                            onCheckedChange = { enabled ->
-                                codeMirrorLivePreviewEnabled = enabled
-                                prefsManager.saveCodeMirrorLivePreviewEnabled(enabled)
-                                onSettingsChanged()
-                            },
-                        )
-                        SettingsSwitchRow(
-                            icon = Icons.Outlined.Image,
-                            title = settingsText(settingsEnglish, "编辑状态图片预览", "Image preview while editing"),
-                            subtitle = if (editingImagePreviewEnabled) settingsText(settingsEnglish, "原生内核会在图片语法下方显示预览", "Native editors show previews below image syntax") else settingsText(settingsEnglish, "仅显示 Markdown 图片语法", "Show Markdown image syntax only"),
-                            checked = editingImagePreviewEnabled,
-                            onCheckedChange = { enabled ->
-                                editingImagePreviewEnabled = enabled
-                                prefsManager.saveEditingImagePreviewEnabled(enabled)
-                                onSettingsChanged()
-                            },
-                        )
-                        SettingsActionRow(
-                            Icons.Outlined.Palette,
-                            settingsText(settingsEnglish, "预览主题", "Preview theme"),
-                            previewThemeLabel(previewTheme),
-                            { settingsDialog = "previewTheme" },
-                        )
-                        SettingsActionRow(
-                            Icons.Outlined.TouchApp,
-                            settingsText(settingsEnglish, "双击进入编辑间隔", "Double-tap edit interval"),
-                            settingsText(settingsEnglish, "当前 ${prefsManager.getPreviewDoubleTapIntervalMs()}ms", "Current ${prefsManager.getPreviewDoubleTapIntervalMs()}ms"),
-                            { settingsDialog = "doubleTap" },
-                        )
-                        SettingsSwitchRow(
-                            icon = Icons.Outlined.Info,
-                            title = settingsText(settingsEnglish, "笔记详情侧滑面板", "Note side panel"),
-                            subtitle = if (noteSidePanelsEnabled) settingsText(settingsEnglish, "已开启", "On") else settingsText(settingsEnglish, "已关闭", "Off"),
-                            checked = noteSidePanelsEnabled,
-                            onCheckedChange = { enabled ->
-                                noteSidePanelsEnabled = enabled
-                                prefsManager.saveNoteSidePanelsEnabled(enabled)
-                                onSettingsChanged()
-                            },
-                        )
-                        if (noteSidePanelsEnabled) {
-                            SettingsActionRow(
-                                icon = if (noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) Icons.Outlined.Swipe else Icons.Outlined.ViewHeadline,
-                                title = "侧滑面板弹出方式",
-                                subtitle = if (noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) {
-                                    settingsText(settingsEnglish, "手势划出", "Swipe gesture")
-                                } else {
-                                    settingsText(settingsEnglish, "顶部工具栏弹出", "Top toolbar button")
-                                },
-                                onClick = { settingsDialog = "sidePanelOpenMode" },
-                            )
+                        SettingsSectionTitle(settingsText(settingsEnglish, "常规", "General"))
+                        SettingsListGroup(showSubtitles = false) {
+                            SettingsActionRow(Icons.Outlined.Folder, settingsText(settingsEnglish, "笔记库", "Vault"), "", { openSettingsPage("vault") })
+                            SettingsActionRow(Icons.Outlined.Palette, settingsText(settingsEnglish, "主题设置", "Theme"), "", { openSettingsPage("theme") })
+                            SettingsActionRow(Icons.Outlined.Tune, settingsText(settingsEnglish, "应用界面", "Interface"), settingsText(settingsEnglish, "布局、排序、启动分类和图标", "Layout, sorting, startup folder and icons"), { openSettingsPage("interface") })
+                            SettingsActionRow(Icons.Outlined.ViewAgenda, settingsText(settingsEnglish, "侧边栏", "Sidebar"), drawerStyleLabel(drawerStyle), { openSettingsPage("drawerSettings") })
+                            SettingsActionRow(Icons.Outlined.Home, settingsText(settingsEnglish, "首页", "Home"), "", { openSettingsPage("home") })
                         }
-                    }
-                    SettingsSectionDivider()
-                    SettingsSectionTitle(settingsText(settingsEnglish, "附件与文件", "Files"))
-                    SettingsListGroup {
-                        SettingsActionRow(Icons.Outlined.Folder, settingsText(settingsEnglish, "图片保存位置", "Image folder"), imageFolder, { openSettingsPage("image") })
-                        SettingsActionRow(Icons.Outlined.Image, settingsText(settingsEnglish, "图片路径格式", "Image path format"), settingsText(settingsEnglish, "根路径或相对路径", "Root or relative paths"), { settingsDialog = "imagePath" })
-                        SettingsActionRow(
-                            Icons.Outlined.VisibilityOff,
-                            settingsText(settingsEnglish, "隐藏的文件夹", "Hidden folders"),
-                            if (hiddenFolders.isEmpty()) {
-                                settingsText(settingsEnglish, "未隐藏文件夹", "No hidden folders")
-                            } else {
-                                hiddenFolders.sorted()
-                                    .joinToString(", ") { hiddenFolderDisplayName(it) }
-                                    .take(32)
-                            },
-                            { openSettingsPage("hiddenFolders") },
-                        )
-                        SettingsActionRow(Icons.Outlined.Description, settingsText(settingsEnglish, "自动文件名", "Automatic file names"), autoFileNameSummary, { settingsDialog = "autoFileName" })
-                        SettingsActionRow(Icons.Outlined.TextFields, settingsText(settingsEnglish, "日期格式", "Date format"), dateFormat, { settingsDialog = "date" })
-                    }
-                    SettingsSectionDivider()
-                    SettingsSectionTitle(settingsText(settingsEnglish, "数据与安全", "Data & security"))
-                    SettingsListGroup {
-                        SettingsActionRow(Icons.Outlined.Backup, settingsText(settingsEnglish, "数据备份", "Data backup"), settingsText(settingsEnglish, "导入或导出用户数据 JSON", "Import or export user data JSON"), { settingsDialog = "backup" })
-                        SettingsActionRow(Icons.Outlined.Backup, settingsText(settingsEnglish, "WebDAV 云同步", "WebDAV sync"), settingsText(settingsEnglish, "文件级预览、冲突处理", "File preview and conflict handling"), { openSettingsPage("webDav") })
-                        SettingsActionRow(Icons.Outlined.Schedule, settingsText(settingsEnglish, "自动备份", "Automatic backup"), settingsText(settingsEnglish, "定时备份到指定目录", "Scheduled backups to a selected folder"), { openSettingsPage("autoBackup") })
-                        SettingsActionRow(Icons.Outlined.Notifications, settingsText(settingsEnglish, "任务与提醒", "Tasks & reminders"), settingsText(settingsEnglish, "通知权限和精确提醒状态", "Notification and exact reminder status"), { openSettingsPage("taskReminders") })
-                        SettingsActionRow(Icons.Outlined.Description, settingsText(settingsEnglish, "备注记录", "Remark records"), settingsText(settingsEnglish, "查看所有有备注的笔记", "View all notes with remarks"), { openSettingsPage("remarkRecords") })
-                        SettingsActionRow(Icons.Outlined.History, settingsText(settingsEnglish, "历史版本记录", "Version history"), settingsText(settingsEnglish, "查看所有有历史版本的笔记", "View all notes with history"), { openSettingsPage("historyRecords") })
-                        SettingsActionRow(
-                            Icons.Outlined.History,
-                            settingsText(settingsEnglish, "历史版本数量", "History limit"),
-                            if (savedHistoryLimit == 0) settingsText(settingsEnglish, "已关闭历史版本记录", "Version history is off") else settingsText(settingsEnglish, "保留最新 $savedHistoryLimit 个版本", "Keep the latest $savedHistoryLimit versions"),
-                            { settingsDialog = "historyLimit" },
-                        )
-                        SettingsActionRow(Icons.Outlined.DeleteSweep, settingsText(settingsEnglish, "清理旧历史版本", "Clean old versions"), settingsText(settingsEnglish, "清理旧版本前预览", "Preview before removing old versions"), { openCleanupHistoryDialog() })
-                        SettingsActionRow(Icons.Outlined.Delete, settingsText(settingsEnglish, "回收站", "Trash"), settingsText(settingsEnglish, "目录、排序、自动清理", "Folder, sorting and automatic cleanup"), { openSettingsPage("trash") })
-                        SettingsActionRow(Icons.Outlined.Lock, settingsText(settingsEnglish, "安全", "Security"), settingsText(settingsEnglish, "应用锁、隐私和指纹", "App lock, privacy and biometrics"), { openSettingsPage("security") })
-                    }
-                    SettingsSectionDivider()
-                    SettingsSectionTitle(settingsText(settingsEnglish, "其他", "Other"))
-                    SettingsListGroup {
-                        SettingsActionRow(
-                            Icons.Outlined.Language,
-                            settingsText(settingsEnglish, "语言", "Language"),
-                            if (appLanguage == "en") "English" else "中文",
-                            { settingsDialog = "appLanguage" },
-                        )
-                        SettingsActionRow(Icons.Outlined.Restore, settingsText(settingsEnglish, "恢复默认设置", "Reset settings"), settingsText(settingsEnglish, "恢复所有默认设置", "Restore default settings"), { showResetDialog = true })
-                        if (BuildConfig.KARDLEAF_DEV_VARIANT) {
+                        SettingsSectionDivider()
+                        SettingsSectionTitle(settingsText(settingsEnglish, "编辑器", "Editor"))
+                        SettingsListGroup(showSubtitles = false) {
+                            SettingsActionRow(Icons.Outlined.Visibility, settingsText(settingsEnglish, "默认打开模式", "Default open mode"), "", { settingsDialog = "openNote" })
                             SettingsActionRow(
-                                Icons.Outlined.Archive,
-                                settingsText(settingsEnglish, "导出用户数据与缓存", "Export user data and cache"),
-                                settingsText(
-                                    settingsEnglish,
-                                    if (isExportingDevStorage) "正在生成 ZIP..." else "导出应用私有目录并附带空间占用报告",
-                                    if (isExportingDevStorage) "Generating ZIP..." else "Export private app directories with a storage report",
-                                ),
-                                { exportDevStorage() },
+                                KardLeafCustomFeatures.editorKernelIcon(editorKernel),
+                                settingsText(settingsEnglish, "编辑器内核", "Editor engine"),
+                                "",
+                                { settingsDialog = "editorKernel" },
                             )
+                            SettingsActionRow(Icons.Outlined.ViewHeadline, settingsText(settingsEnglish, "顶部工具栏", "Top toolbar"), "", {
+                                openEditorTopToolbarSettings()
+                            })
+                            SettingsActionRow(
+                                Icons.Outlined.FormatListBulleted,
+                                settingsText(settingsEnglish, "底部工具栏", "Bottom toolbar"),
+                                "",
+                                { openSettingsPage("toolbar") },
+                            )
+                            SettingsActionRow(
+                                Icons.Outlined.FontDownload,
+                                settingsText(settingsEnglish, "字体", "Font"),
+                                "",
+                                { settingsDialog = "editorTypography" },
+                            )
+                            SettingsActionRow(Icons.Outlined.MoreHoriz, settingsText(settingsEnglish, "更多", "More"), "", { openSettingsPage("editorMore") })
                         }
-                        SettingsSwitchRow(
-                            icon = Icons.Outlined.SystemUpdate,
-                            title = settingsText(settingsEnglish, "自动检查更新", "Automatic update checks"),
-                            subtitle = settingsText(
-                                settingsEnglish,
-                                "每天首次打开应用时，异步检查 GitHub 最新正式版本",
-                                "Check the latest stable GitHub release once per day",
-                            ),
-                            checked = autoUpdateCheckEnabled,
-                            onCheckedChange = { enabled ->
-                                autoUpdateCheckEnabled = enabled
-                                prefsManager.saveAutoUpdateCheckEnabled(enabled)
-                            },
-                        )
-                        SettingsActionRow(
-                            Icons.Outlined.SystemUpdateAlt,
-                            settingsText(settingsEnglish, "检查更新", "Check for updates"),
-                            settingsText(
-                                settingsEnglish,
-                                if (updateCheckInProgress) "正在检查 GitHub Release..." else "立即检查最新正式版本",
-                                if (updateCheckInProgress) "Checking GitHub Release..." else "Check the latest stable release now",
-                            ),
-                            { checkForAppUpdate() },
-                        )
-                        SettingsSwitchRow(
-                            icon = Icons.Outlined.BugReport,
-                            title = settingsText(settingsEnglish, "开启日志", "Enable logs"),
-                            subtitle = settingsText(
-                                settingsEnglish,
-                                if (appLoggingEnabled) "已开启，会额外记录详细日志" else "默认只保留警告和错误，减少正式版运行开销",
-                                if (appLoggingEnabled) "Enabled; keeps extra detailed logs" else "Only warnings and errors are kept by default",
-                            ),
-                            checked = appLoggingEnabled,
-                            onCheckedChange = { enabled ->
-                                appLoggingEnabled = enabled
-                                prefsManager.saveAppLoggingEnabled(enabled)
-                                KardLeafLog.setUserLoggingEnabled(enabled)
-                                context.showToast(if (enabled) "已开启日志" else "已关闭日志")
-                            },
-                        )
-                        SettingsActionRow(
-                            Icons.Outlined.BugReport,
-                            settingsText(settingsEnglish, "导出诊断日志", "Export diagnostics"),
-                            settingsText(
-                                settingsEnglish,
-                                when {
-                                    isExportingDiagnosticLog -> "正在生成日志文件..."
-                                    appLoggingEnabled -> "导出基础诊断、应用日志和系统日志"
-                                    else -> "导出基础诊断和应用警告/错误；开启后包含详细日志"
-                                },
-                                when {
-                                    isExportingDiagnosticLog -> "Generating log file..."
-                                    appLoggingEnabled -> "Export diagnostics, app logs and system logs"
-                                    else -> "Exports diagnostics and app warnings/errors; enable for details"
-                                },
-                            ),
-                            { exportDiagnosticLog() },
-                        )
-                        SettingsActionRow(Icons.Outlined.Info, settingsText(settingsEnglish, "关于", "About"), settingsText(settingsEnglish, "版本信息和作者", "Version and author"), { openSettingsPage("about") })
-                    }
+                        SettingsSectionDivider()
+                        SettingsSectionTitle(settingsText(settingsEnglish, "数据与安全", "Data & security"))
+                        SettingsListGroup(showSubtitles = false) {
+                            SettingsActionRow(Icons.Outlined.Backup, settingsText(settingsEnglish, "云同步", "Cloud sync"), "", { openSettingsPage("webDav") })
+                            SettingsActionRow(Icons.Outlined.History, settingsText(settingsEnglish, "历史版本", "Version history"), "", { openSettingsPage("history") })
+                            SettingsActionRow(Icons.Outlined.Description, settingsText(settingsEnglish, "备注", "Remarks"), "", { openSettingsPage("remarkRecords") })
+                            SettingsActionRow(Icons.Outlined.Lock, settingsText(settingsEnglish, "安全", "Security"), "", { openSettingsPage("security") })
+                            SettingsActionRow(Icons.Outlined.Delete, settingsText(settingsEnglish, "回收站", "Trash"), "", { openSettingsPage("trash") })
+                            SettingsActionRow(Icons.Outlined.MoreHoriz, settingsText(settingsEnglish, "更多", "More"), "", { openSettingsPage("dataMore") })
+                        }
+                        SettingsSectionDivider()
+                        SettingsSectionTitle(settingsText(settingsEnglish, "其他", "Other"))
+                        SettingsListGroup(showSubtitles = false) {
+                            SettingsActionRow(
+                                Icons.Outlined.Language,
+                                settingsText(settingsEnglish, "语言", "Language"),
+                                "",
+                                { settingsDialog = "appLanguage" },
+                            )
+                            SettingsActionRow(
+                                Icons.Outlined.SystemUpdate,
+                                settingsText(settingsEnglish, "更新", "Updates"),
+                                "",
+                                { openSettingsPage("updates") },
+                            )
+                            SettingsActionRow(Icons.Outlined.Info, settingsText(settingsEnglish, "关于", "About"), "", { openSettingsPage("about") })
+                            SettingsActionRow(Icons.Outlined.Restore, settingsText(settingsEnglish, "重置", "Reset"), "", { showResetDialog = true })
+                             SettingsActionRow(Icons.Outlined.MoreHoriz, settingsText(settingsEnglish, "更多", "More"), "", { openSettingsPage("otherMore") })
+                         }
+                 }
+                 }
+                 }
+                val pullProgress = settingsPullRefreshState.progress
+                val showInitialPullHint = page == "main" &&
+                    showSettingsPullSearchHint &&
+                    mainScrollState.value == 0 &&
+                    settingsPullRefreshState.verticalOffset == 0f
+                if (page != "search" && (showInitialPullHint || settingsPullRefreshState.verticalOffset > 0f)) {
+                    SettingsPullSearchIndicator(
+                        progress = if (showInitialPullHint) 1f else pullProgress,
+                        verticalOffset = if (showInitialPullHint) 0f else settingsPullRefreshState.verticalOffset,
+                        settingsEnglish = settingsEnglish,
+                        showInitialHint = showInitialPullHint,
+                        onSearchClick = ::openSettingsSearch,
+                    )
                 }
+                }
+             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSearchPage(
+    items: List<SettingsSearchItem>,
+    query: String,
+    settingsEnglish: Boolean,
+    onResultClick: (SettingsSearchItem) -> Unit,
+) {
+    val normalizedQuery = query.trim()
+    val matches = if (normalizedQuery.isBlank()) {
+        emptyList()
+    } else {
+        items.filter { item ->
+            "${item.title} ${item.section} ${item.searchText}".contains(normalizedQuery, ignoreCase = true)
+        }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (normalizedQuery.isNotBlank()) {
+            SettingsSectionTitle(settingsText(settingsEnglish, "搜索结果", "Search results"))
+            if (matches.isEmpty()) {
+                SettingsPageText(settingsText(settingsEnglish, "没有找到匹配的设置", "No matching settings"))
+            } else {
+                SettingsListGroup {
+                    matches.forEach { item ->
+                        SettingsActionRow(
+                            icon = item.icon,
+                            title = item.title,
+                            subtitle = item.section,
+                            onClick = { onResultClick(item) },
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsPullSearchIndicator(
+    progress: Float,
+    verticalOffset: Float,
+    settingsEnglish: Boolean,
+    showInitialHint: Boolean,
+    onSearchClick: () -> Unit,
+) {
+    val indicatorOffset = with(LocalDensity.current) { verticalOffset.toDp() }
+    val boundedProgress = progress.coerceIn(0f, 1.5f)
+    val alpha = (boundedProgress * 1.5f).coerceIn(0.12f, 1f)
+    val scale = 0.78f + boundedProgress.coerceIn(0f, 1f) * 0.22f
+    val buttonColor = Color.White
+    val iconColor = Color.Black
+    val arrowOffset = remember { Animatable(0f) }
+    LaunchedEffect(showInitialHint) {
+        if (showInitialHint) {
+            repeat(3) {
+                arrowOffset.animateTo(8f, tween(500))
+                arrowOffset.animateTo(0f, tween(500))
+            }
+        } else {
+            arrowOffset.snapTo(0f)
+        }
+    }
+    Box(modifier = Modifier.fillMaxSize()) {
+        val indicatorModifier = Modifier
+            .align(Alignment.TopCenter)
+            .offset(y = indicatorOffset)
+            .graphicsLayer {
+                this.alpha = alpha
+                scaleX = scale
+                scaleY = scale
+            }
+        if (showInitialHint) {
+            Surface(
+                modifier = indicatorModifier,
+                shape = RoundedCornerShape(24.dp),
+                color = buttonColor,
+                shadowElevation = 8.dp,
+                border = BorderStroke(1.dp, Color.Black.copy(alpha = 0.28f)),
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 8.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.KeyboardArrowDown,
+                        contentDescription = settingsText(settingsEnglish, "向下拉以搜索", "Pull down to search"),
+                        tint = iconColor,
+                        modifier = Modifier
+                            .offset(y = arrowOffset.value.dp)
+                            .size(28.dp),
+                    )
+                    IconButton(
+                        onClick = onSearchClick,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Search,
+                            contentDescription = settingsText(settingsEnglish, "打开设置搜索", "Open settings search"),
+                            tint = iconColor,
+                        )
+                    }
+                    Text(
+                        text = settingsText(settingsEnglish, "搜索", "Search"),
+                        color = iconColor,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
+                }
+            }
+        } else {
+            Surface(
+                modifier = indicatorModifier.size(48.dp),
+                shape = CircleShape,
+                color = buttonColor,
+                shadowElevation = 8.dp,
+                border = BorderStroke(1.dp, Color.Black.copy(alpha = 0.28f)),
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Outlined.Search,
+                        contentDescription = settingsText(settingsEnglish, "下拉搜索", "Pull to search"),
+                        tint = iconColor,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VaultSettingsPage(
+    vaults: List<VaultInfo>,
+    currentVault: VaultInfo?,
+    onAddVault: () -> Unit,
+    onSwitchVault: (VaultInfo) -> Unit,
+    onDeleteVault: (VaultInfo) -> Unit,
+    onRenameVault: (VaultInfo, String) -> Unit,
+) {
+    var vaultActionTarget by remember { mutableStateOf<VaultInfo?>(null) }
+    var vaultToDelete by remember { mutableStateOf<VaultInfo?>(null) }
+    var vaultToRename by remember { mutableStateOf<VaultInfo?>(null) }
+
+    SettingsSectionTitle("笔记库", "切换、重命名或删除已登记的笔记库")
+    if (vaults.isEmpty()) {
+        SettingsPageText("暂无已登记的笔记库")
+    } else {
+        SettingsListGroup {
+            vaults.forEach { vault ->
+                val isCurrent = vault.uri == currentVault?.uri
+                SettingsBaseRow(
+                    icon = Icons.Outlined.Folder,
+                    title = vault.displayName,
+                    subtitle = if (isCurrent) "当前使用" else "点击切换",
+                    selected = isCurrent,
+                    onClick = { if (!isCurrent) onSwitchVault(vault) },
+                    trailing = {
+                        Box {
+                            IconButton(onClick = { vaultActionTarget = vault }) {
+                                Icon(Icons.Outlined.MoreVert, contentDescription = "仓库更多选项")
+                            }
+                            KardLeafDropdownMenu(
+                                expanded = vaultActionTarget == vault,
+                                onDismissRequest = { if (vaultActionTarget == vault) vaultActionTarget = null },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("重命名") },
+                                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                                    onClick = {
+                                        vaultActionTarget = null
+                                        vaultToRename = vault
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("删除") },
+                                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                                    onClick = {
+                                        vaultActionTarget = null
+                                        vaultToDelete = vault
+                                    },
+                                )
+                            }
+                        }
+                    },
+                )
+            }
+        }
+    }
+    SettingsActionRow(
+        icon = Icons.Outlined.Add,
+        title = "添加仓库",
+        subtitle = "选择一个文件夹作为新的笔记库",
+        onClick = onAddVault,
+    )
+
+    vaultToDelete?.let { vault ->
+        AlertDialog(
+            onDismissRequest = { vaultToDelete = null },
+            title = { Text("删除仓库") },
+            text = { Text("将从列表中删除“${vault.displayName}”及其 Room 缓存，不会删除目录中的 Markdown 文件。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteVault(vault)
+                        vaultToDelete = null
+                    },
+                ) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { vaultToDelete = null }) { Text("取消") } },
+        )
+    }
+
+    vaultToRename?.let { vault ->
+        var name by remember(vault.uri) { mutableStateOf(vault.displayName) }
+        val normalizedName = name.trim().trim('/')
+        AlertDialog(
+            onDismissRequest = { vaultToRename = null },
+            title = { Text("重命名仓库") },
+            text = {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    label = { Text("仓库名称") },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = normalizedName.isNotBlank() && !normalizedName.contains('/'),
+                    onClick = {
+                        if (normalizedName != vault.displayName) onRenameVault(vault, normalizedName)
+                        vaultToRename = null
+                    },
+                ) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { vaultToRename = null }) { Text("取消") } },
+        )
     }
 }
 
@@ -3880,13 +4274,18 @@ private fun SecuritySettingsPage(
     prefsManager: PrefsManager,
     passwordInputMode: PrefsManager.PasswordInputMode,
     onChoosePasswordMode: () -> Unit,
+    onSetPrivacyPassword: suspend (String?, String) -> Result<Unit>,
+    onRemovePrivacyPassword: suspend (String) -> Result<Unit>,
 ) {
+    val scope = rememberCoroutineScope()
     var hasAppPassword by remember { mutableStateOf(prefsManager.getAppPasswordHash() != null) }
     var hasPrivacyPassword by remember { mutableStateOf(prefsManager.getPrivacyPasswordHash() != null) }
     var appBiometricEnabled by remember { mutableStateOf(prefsManager.isAppBiometricUnlockEnabled()) }
     var privacyBiometricEnabled by remember { mutableStateOf(prefsManager.isPrivacyBiometricUnlockEnabled()) }
     var editTarget by remember { mutableStateOf<SecurityPasswordTarget?>(null) }
     var clearTarget by remember { mutableStateOf<SecurityPasswordTarget?>(null) }
+    var privacyPasswordBusy by remember { mutableStateOf(false) }
+    var privacyPasswordError by remember { mutableStateOf<String?>(null) }
 
     editTarget?.let { target ->
         val hasPassword = when (target) {
@@ -3897,21 +4296,36 @@ private fun SecuritySettingsPage(
             target = target,
             hasPassword = hasPassword,
             passwordInputMode = passwordInputMode,
-            onDismiss = { editTarget = null },
-            onSave = { password ->
+            busy = target == SecurityPasswordTarget.PRIVACY && privacyPasswordBusy,
+            externalError = privacyPasswordError.takeIf { target == SecurityPasswordTarget.PRIVACY },
+            onDismiss = {
+                privacyPasswordError = null
+                editTarget = null
+            },
+            onSave = { currentPassword, password ->
                 when (target) {
                     SecurityPasswordTarget.APP -> {
                         prefsManager.saveAppPasswordHash(hashPassword(password))
                         hasAppPassword = true
+                        editTarget = null
                     }
                     SecurityPasswordTarget.PRIVACY -> {
-                        prefsManager.savePrivacyPasswordHash(hashPassword(password))
-                        hasPrivacyPassword = true
+                        privacyPasswordBusy = true
+                        privacyPasswordError = null
+                        scope.launch {
+                            onSetPrivacyPassword(currentPassword, password)
+                                .onSuccess {
+                                    hasPrivacyPassword = true
+                                    editTarget = null
+                                }
+                                .onFailure { privacyPasswordError = it.message ?: "隐私密码保存失败" }
+                            privacyPasswordBusy = false
+                        }
                     }
                 }
-                editTarget = null
             },
             onRemoveRequest = {
+                privacyPasswordError = null
                 editTarget = null
                 clearTarget = target
             },
@@ -3926,21 +4340,35 @@ private fun SecuritySettingsPage(
                 SecurityPasswordTarget.APP -> prefsManager.getAppPasswordHash()
                 SecurityPasswordTarget.PRIVACY -> prefsManager.getPrivacyPasswordHash()
             },
-            onDismiss = { clearTarget = null },
-            onConfirmed = {
+            busy = target == SecurityPasswordTarget.PRIVACY && privacyPasswordBusy,
+            externalError = privacyPasswordError.takeIf { target == SecurityPasswordTarget.PRIVACY },
+            onDismiss = {
+                privacyPasswordError = null
+                clearTarget = null
+            },
+            onConfirmed = { password ->
                 when (target) {
                     SecurityPasswordTarget.APP -> {
                         prefsManager.saveAppPasswordHash(null)
                         hasAppPassword = false
                         appBiometricEnabled = false
+                        clearTarget = null
                     }
                     SecurityPasswordTarget.PRIVACY -> {
-                        prefsManager.savePrivacyPasswordHash(null)
-                        hasPrivacyPassword = false
-                        privacyBiometricEnabled = false
+                        privacyPasswordBusy = true
+                        privacyPasswordError = null
+                        scope.launch {
+                            onRemovePrivacyPassword(password)
+                                .onSuccess {
+                                    hasPrivacyPassword = false
+                                    privacyBiometricEnabled = false
+                                    clearTarget = null
+                                }
+                                .onFailure { privacyPasswordError = it.message ?: "隐私密码移除失败" }
+                            privacyPasswordBusy = false
+                        }
                     }
                 }
-                clearTarget = null
             },
         )
     }
@@ -4024,10 +4452,13 @@ private fun SecurityPasswordEditDialog(
     target: SecurityPasswordTarget,
     hasPassword: Boolean,
     passwordInputMode: PrefsManager.PasswordInputMode,
+    busy: Boolean = false,
+    externalError: String? = null,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit,
+    onSave: (String?, String) -> Unit,
     onRemoveRequest: () -> Unit,
 ) {
+    var currentPassword by remember(target) { mutableStateOf("") }
     var password by remember(target) { mutableStateOf("") }
     var confirmation by remember(target) { mutableStateOf("") }
     var error by remember(target) { mutableStateOf<String?>(null) }
@@ -4047,6 +4478,26 @@ private fun SecurityPasswordEditDialog(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (target == SecurityPasswordTarget.PRIVACY && hasPassword) {
+                    OutlinedTextField(
+                        value = currentPassword,
+                        onValueChange = {
+                            currentPassword = normalize(it)
+                            error = null
+                        },
+                        label = { Text("当前${target.passwordName}") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = keyboardOptions,
+                        isError = error != null || externalError != null,
+                        supportingText = if (error != null || externalError != null) {
+                            { Text(error ?: externalError.orEmpty()) }
+                        } else {
+                            null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 OutlinedTextField(
                     value = password,
                     onValueChange = {
@@ -4069,9 +4520,9 @@ private fun SecurityPasswordEditDialog(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = keyboardOptions,
-                    isError = error != null,
-                    supportingText = if (error != null) {
-                        { Text(error.orEmpty()) }
+                    isError = error != null || externalError != null,
+                    supportingText = if (error != null || externalError != null) {
+                        { Text(error ?: externalError.orEmpty()) }
                     } else {
                         null
                     },
@@ -4081,14 +4532,18 @@ private fun SecurityPasswordEditDialog(
         },
         confirmButton = {
             TextButton(
+                enabled = !busy,
                 onClick = {
                     error = when {
+                        target == SecurityPasswordTarget.PRIVACY && hasPassword && currentPassword.isBlank() -> "请输入当前隐私密码"
                         password.isBlank() || confirmation.isBlank() -> "请完整输入两次密码"
                         simpleMode && password.length != 4 -> "数字密码必须是 4 位"
                         password != confirmation -> "两次输入的密码不一致"
                         else -> null
                     }
-                    if (error == null) onSave(password)
+                    if (error == null) {
+                        onSave(currentPassword.takeIf { target == SecurityPasswordTarget.PRIVACY && hasPassword }, password)
+                    }
                 },
             ) { Text("保存") }
         },
@@ -4110,8 +4565,10 @@ private fun SecurityPasswordClearDialog(
     target: SecurityPasswordTarget,
     passwordInputMode: PrefsManager.PasswordInputMode,
     savedPasswordHash: String?,
+    busy: Boolean = false,
+    externalError: String? = null,
     onDismiss: () -> Unit,
-    onConfirmed: () -> Unit,
+    onConfirmed: (String) -> Unit,
 ) {
     var password by remember(target) { mutableStateOf("") }
     var error by remember(target) { mutableStateOf<String?>(null) }
@@ -4139,9 +4596,9 @@ private fun SecurityPasswordClearDialog(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = keyboardOptions,
-                    isError = error != null,
-                    supportingText = if (error != null) {
-                        { Text(error.orEmpty()) }
+                    isError = error != null || externalError != null,
+                    supportingText = if (error != null || externalError != null) {
+                        { Text(error ?: externalError.orEmpty()) }
                     } else {
                         null
                     },
@@ -4151,13 +4608,14 @@ private fun SecurityPasswordClearDialog(
         },
         confirmButton = {
             TextButton(
+                enabled = !busy,
                 onClick = {
                     error = when {
                         password.isBlank() -> "请输入当前密码"
-                        hashPassword(password) != savedPasswordHash -> "密码错误"
+                        target == SecurityPasswordTarget.APP && hashPassword(password) != savedPasswordHash -> "密码错误"
                         else -> null
                     }
-                    if (error == null) onConfirmed()
+                    if (error == null) onConfirmed(password)
                 },
             ) { Text("确认移除", color = MaterialTheme.colorScheme.error) }
         },

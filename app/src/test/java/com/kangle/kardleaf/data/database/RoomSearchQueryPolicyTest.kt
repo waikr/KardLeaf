@@ -11,14 +11,27 @@ class RoomSearchQueryPolicyTest {
     fun noteSearchUsesFullContentLike() {
         val source = readSource("src/main/java/com/kangle/kardleaf/data/database/NoteDao.kt")
 
-        assertTrue(source.contains("OR content LIKE '%' || :query || '%'"))
+        assertTrue(source.contains("OR content LIKE '%' || :likeQuery || '%'"))
+        assertTrue(source.contains("""ESCAPE '\'"""))
+    }
+
+    @Test
+    fun titleOnlySearchUsesAContentShell() {
+        val daoSource = readSource("src/main/java/com/kangle/kardleaf/data/database/NoteDao.kt")
+        val repositorySource = readSource("src/main/java/com/kangle/kardleaf/data/repository/RoomNoteRepository.kt")
+
+        assertTrue(daoSource.contains("fun getAllSearchableNoteShells(): Flow<List<NoteEntity>>"))
+        assertTrue(daoSource.contains("'' AS content"))
+        assertTrue(repositorySource.contains("options.matchTitle && !options.matchContent"))
+        assertTrue(repositorySource.contains("noteDao.getAllSearchableNoteShells()"))
     }
 
     @Test
     fun historySearchMatchesFullContentAndReturnsPreview() {
         val source = readSource("src/main/java/com/kangle/kardleaf/data/database/NoteHistoryDao.kt")
 
-        assertTrue(source.contains("OR content LIKE '%' || :query || '%'"))
+        assertTrue(source.contains("OR content LIKE '%' || :likeQuery || '%'"))
+        assertTrue(source.contains("""ESCAPE '\'"""))
         assertTrue(source.contains("substr(content, 1, 200) AS content"))
     }
 

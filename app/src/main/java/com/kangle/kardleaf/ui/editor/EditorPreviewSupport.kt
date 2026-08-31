@@ -89,16 +89,11 @@ internal fun codeMirrorCrLfCount(content: String): Int {
 internal fun codeMirrorNormalizedLength(content: String): Int =
     content.length - codeMirrorCrLfCount(content)
 
-internal fun EditorViewportAnchor.toCodeMirrorAnchor(content: String): EditorViewportAnchor {
-    val normalizedLength = codeMirrorNormalizedLength(content)
-    val rawOffset = when (edge) {
-        EditorViewportEdge.START -> 0
-        EditorViewportEdge.CENTER -> offset.coerceIn(0, content.length)
-        EditorViewportEdge.END -> content.length
-    }
+internal fun codeMirrorOffset(content: String, rawOffset: Int): Int {
+    val safeRawOffset = rawOffset.coerceIn(0, content.length)
     var normalizedOffset = 0
     var index = 0
-    while (index < rawOffset) {
+    while (index < safeRawOffset) {
         if (content[index] == '\r' && content.getOrNull(index + 1) == '\n') {
             index += 2
         } else {
@@ -106,7 +101,17 @@ internal fun EditorViewportAnchor.toCodeMirrorAnchor(content: String): EditorVie
         }
         normalizedOffset++
     }
-    return copy(offset = normalizedOffset.coerceIn(0, normalizedLength))
+    return normalizedOffset
+}
+
+internal fun EditorViewportAnchor.toCodeMirrorAnchor(content: String): EditorViewportAnchor {
+    val normalizedLength = codeMirrorNormalizedLength(content)
+    val rawOffset = when (edge) {
+        EditorViewportEdge.START -> 0
+        EditorViewportEdge.CENTER -> offset.coerceIn(0, content.length)
+        EditorViewportEdge.END -> content.length
+    }
+    return copy(offset = codeMirrorOffset(content, rawOffset).coerceIn(0, normalizedLength))
 }
 
 internal fun parseEditorViewportAnchor(raw: String?): EditorViewportAnchor? =

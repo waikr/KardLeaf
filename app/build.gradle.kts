@@ -1,4 +1,5 @@
 import java.util.Properties
+import com.android.build.api.variant.ApplicationVariantBuilder
 
 plugins {
     id("com.android.application")
@@ -88,8 +89,8 @@ android {
         applicationId = "com.kardleaf"
         minSdk = 23
         targetSdk = 34
-        versionCode = 180
-        versionName = "1.8.0"
+        versionCode = 190
+        versionName = "1.9.0"
         manifestPlaceholders["appLabel"] = "KardLeaf"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "KARDLEAF_TRIAL_GATEWAY_URL", buildConfigString("https://ai.waikrfaio.xyz"))
@@ -148,6 +149,7 @@ android {
         }
         release {
             isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("release")
         }
@@ -178,6 +180,13 @@ android {
     }
     lint {
         disable.add("MissingTranslation")
+    }
+}
+
+androidComponents {
+    beforeVariants(selector().withName("stableRelease")) { variant: ApplicationVariantBuilder ->
+        variant.isMinifyEnabled = true
+        variant.shrinkResources = true
     }
 }
 
@@ -215,6 +224,7 @@ dependencies {
     implementation("sh.calvin.reorderable:reorderable:3.1.0")
     implementation("io.noties.markwon:core:4.6.2")
     implementation("io.noties.markwon:editor:4.6.2")
+    implementation("io.noties.markwon:html:4.6.2")
     implementation("io.noties.markwon:image:4.6.2")
     implementation("io.noties.markwon:ext-strikethrough:4.6.2")
     implementation("io.noties.markwon:ext-tables:4.6.2")

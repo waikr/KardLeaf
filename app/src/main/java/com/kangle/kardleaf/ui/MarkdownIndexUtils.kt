@@ -77,6 +77,192 @@ fun extractMarkdownHeadings(content: String): List<MarkdownHeading> {
     return headings
 }
 
+internal fun visibleMarkdownHeadings(
+    headings: List<MarkdownHeading>,
+    collapsedStartOffsets: Set<Int>,
+): List<MarkdownHeading> {
+    if (headings.isEmpty() || collapsedStartOffsets.isEmpty()) return headings
+    val collapsedLevels = mutableListOf<Int>()
+    val visible = mutableListOf<MarkdownHeading>()
+    headings.forEach { heading ->
+        while (collapsedLevels.lastOrNull()?.let { heading.level <= it } == true) {
+            collapsedLevels.removeAt(collapsedLevels.lastIndex)
+        }
+        if (collapsedLevels.isNotEmpty()) return@forEach
+        visible += heading
+        if (heading.startOffset in collapsedStartOffsets) collapsedLevels += heading.level
+    }
+    return visible
+}
+
+enum class MarkdownHeadingMoveDirection {
+    UP,
+    DOWN,
+}
+
+data class MarkdownHeadingMoveResult(
+    val content: String,
+    val newStartOffset: Int,
+)
+
+fun moveMarkdownHeadingSection(
+    content: String,
+    heading: MarkdownHeading,
+    direction: MarkdownHeadingMoveDirection,
+): MarkdownHeadingMoveResult? {
+    val headings = extractMarkdownHeadings(content)
+    val currentIndex = headings.indexOfFirst { it.startOffset == heading.startOffset }
+    if (currentIndex < 0) return null
+
+    val current = headings[currentIndex]
+    val siblingIndex = when (direction) {
+        MarkdownHeadingMoveDirection.UP ->
+            (currentIndex - 1 downTo 0).firstOrNull { headings[it].level == current.level }
+        MarkdownHeadingMoveDirection.DOWN ->
+            (currentIndex + 1 until headings.size).firstOrNull { headings[it].level == current.level }
+    } ?: return null
+
+    fun lineStart(offset: Int): Int = content.lastIndexOf('\n', (offset - 1).coerceAtLeast(0)) + 1
+
+    fun sectionEnd(index: Int): Int {
+        val level = headings[index].level
+        val nextBoundary = (index + 1 until headings.size).firstOrNull { headings[it].level <= level }
+        return nextBoundary?.let { lineStart(headings[it].startOffset) } ?: content.length
+    }
+
+    fun trailingLineBreakLength(value: String): Int {
+        var index = value.length
+        while (index > 0) {
+            index = when {
+                index >= 2 && value.substring(index - 2, index) == "\r\n" -> index - 2
+                value[index - 1] == '\n' || value[index - 1] == '\r' -> index - 1
+                else -> break
+            }
+        }
+        return value.length - index
+    }
+
+    val currentLineStart = lineStart(current.startOffset)
+    val currentOffsetInLine = current.startOffset - currentLineStart
+    return when (direction) {
+        MarkdownHeadingMoveDirection.UP -> {
+            val siblingLineStart = lineStart(headings[siblingIndex].startOffset)
+            val currentSectionEnd = sectionEnd(currentIndex)
+            val siblingSection = content.substring(siblingLineStart, currentLineStart)
+            val currentSection = content.substring(currentLineStart, currentSectionEnd)
+            val separatorLength = if (trailingLineBreakLength(currentSection) == 0) {
+                trailingLineBreakLength(siblingSection)
+            } else {
+                0
+            }
+            val separator = siblingSection.takeLast(separatorLength)
+            val siblingBody = siblingSection.dropLast(separatorLength)
+            MarkdownHeadingMoveResult(
+                content = content.substring(0, siblingLineStart) +
+                    currentSection + separator + siblingBody +
+                    content.substring(currentSectionEnd),
+                newStartOffset = siblingLineStart + currentOffsetInLine,
+            )
+        }
+
+        MarkdownHeadingMoveDirection.DOWN -> {
+            val siblingLineStart = lineStart(headings[siblingIndex].startOffset)
+            val siblingSectionEnd = sectionEnd(siblingIndex)
+            val currentSection = content.substring(currentLineStart, siblingLineStart)
+            val siblingSection = content.substring(siblingLineStart, siblingSectionEnd)
+            val separatorLength = if (trailingLineBreakLength(siblingSection) == 0) {
+                trailingLineBreakLength(currentSection)
+            } else {
+                0
+            }
+            val separator = currentSection.takeLast(separatorLength)
+            val currentBody = currentSection.dropLast(separatorLength)
+            MarkdownHeadingMoveResult(
+                content = content.substring(0, currentLineStart) +
+                    siblingSection + separator + currentBody +
+                    content.substring(siblingSectionEnd),
+                newStartOffset = currentLineStart + siblingSection.length + separator.length + currentOffsetInLine,
+            )
+        }
+    }
+}
+
+fun moveMarkdownHeadingSectionToPosition(
+    content: String,
+    heading: MarkdownHeading,
+    target: MarkdownHeading,
+    placeAfterTarget: Boolean,
+): MarkdownHeadingMoveResult? {
+    val headings = extractMarkdownHeadings(content)
+    val headingIndex = headings.indexOfFirst { it.startOffset == heading.startOffset }
+    val targetIndex = headings.indexOfFirst { it.startOffset == target.startOffset }
+    if (headingIndex < 0 || targetIndex < 0 || headingIndex == targetIndex) return null
+
+    fun lineStart(offset: Int): Int = content.lastIndexOf('\n', (offset - 1).coerceAtLeast(0)) + 1
+
+    fun sectionEnd(index: Int): Int {
+        val level = headings[index].level
+        val nextBoundary = (index + 1 until headings.size).firstOrNull { headings[it].level <= level }
+        return nextBoundary?.let { lineStart(headings[it].startOffset) } ?: content.length
+    }
+
+    val headingLineStart = lineStart(headings[headingIndex].startOffset)
+    val headingSectionEnd = sectionEnd(headingIndex)
+    val targetInsertion = if (placeAfterTarget) sectionEnd(targetIndex) else lineStart(headings[targetIndex].startOffset)
+    if (headings[headingIndex].level != headings[targetIndex].level ||
+        targetInsertion in headingLineStart..headingSectionEnd
+    ) {
+        return null
+    }
+
+    val movingSection = content.substring(headingLineStart, headingSectionEnd)
+    val contentWithoutHeading = content.substring(0, headingLineStart) + content.substring(headingSectionEnd)
+    val insertion = (targetInsertion - if (headingLineStart < targetInsertion) movingSection.length else 0)
+        .coerceIn(0, contentWithoutHeading.length)
+    val left = contentWithoutHeading.substring(0, insertion)
+    val right = contentWithoutHeading.substring(insertion)
+    val hasFinalLineBreak = content.endsWith("\n") || content.endsWith("\r")
+    val sectionToInsert = if (right.isEmpty() && !hasFinalLineBreak) {
+        movingSection.trimEnd('\r', '\n')
+    } else {
+        movingSection
+    }
+    val needsSeparatorBefore = left.isNotEmpty() &&
+        sectionToInsert.isNotEmpty() &&
+        left.last() !in "\r\n" &&
+        sectionToInsert.first() !in "\r\n"
+    val needsSeparatorAfter = sectionToInsert.isNotEmpty() &&
+        right.isNotEmpty() &&
+        sectionToInsert.last() !in "\r\n" &&
+        right.first() !in "\r\n"
+    val separatorBefore = if (needsSeparatorBefore) "\n" else ""
+    val separatorAfter = if (needsSeparatorAfter) "\n" else ""
+    val movedSectionStart = left.length + separatorBefore.length
+    val result = left + separatorBefore + sectionToInsert + separatorAfter + right
+    if (result == content) return null
+    return MarkdownHeadingMoveResult(
+        content = result,
+        newStartOffset = movedSectionStart + (headings[headingIndex].startOffset - headingLineStart),
+    )
+}
+
+fun renameMarkdownHeading(
+    content: String,
+    heading: MarkdownHeading,
+    newText: String,
+): String? {
+    val replacement = newText.trim()
+    if (replacement.isBlank() || replacement.any { it == '\n' || it == '\r' }) return null
+    val current = extractMarkdownHeadings(content).firstOrNull { it.startOffset == heading.startOffset } ?: return null
+    val lineStart = content.lastIndexOf('\n', (current.startOffset - 1).coerceAtLeast(0)) + 1
+    val lineEnd = content.indexOfAny(charArrayOf('\n', '\r'), lineStart).let { if (it < 0) content.length else it }
+    val line = content.substring(lineStart, lineEnd)
+    val match = Regex("""^(\s*#{1,6}\s+)(.*?)(\s+#+\s*)?$""").matchEntire(line) ?: return null
+    val suffix = match.groupValues[3]
+    val renamedLine = match.groupValues[1] + replacement + suffix
+    return content.substring(0, lineStart) + renamedLine + content.substring(lineEnd)
+}
+
 fun extractObsidianLinks(content: String): List<String> =
     parseObsidianLinks(content)
         .map { it.target }

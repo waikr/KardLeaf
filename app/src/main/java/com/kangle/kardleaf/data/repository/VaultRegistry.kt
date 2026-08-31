@@ -1,6 +1,7 @@
 package com.kangle.kardleaf.data.repository
 
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import com.google.gson.reflect.TypeToken
 import java.security.MessageDigest
 
@@ -9,8 +10,11 @@ private const val VAULT_DATABASE_PREFIX = "${DEFAULT_VAULT_DATABASE_NAME}_"
 private val vaultDatabaseNamePattern = Regex("${VAULT_DATABASE_PREFIX}[0-9a-f]{16}")
 
 data class VaultInfo(
+    @field:SerializedName(value = "uri", alternate = ["a"])
     val uri: String,
+    @field:SerializedName(value = "displayName", alternate = ["b"])
     val displayName: String,
+    @field:SerializedName(value = "databaseName", alternate = ["c"])
     val databaseName: String,
 )
 

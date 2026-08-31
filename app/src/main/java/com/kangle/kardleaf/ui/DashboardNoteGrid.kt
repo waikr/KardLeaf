@@ -571,6 +571,7 @@ internal fun buildGesturePreviewItemsForFolderNotes(
     val sorted =
         when (sortOrder) {
             PrefsManager.SortOrder.DATE_MODIFIED -> notes.sortedBy { it.lastModified }
+            PrefsManager.SortOrder.DATE_CREATED -> notes.sortedBy { it.createdAt }
             PrefsManager.SortOrder.TITLE -> notes.sortedBy { it.title.lowercase() }
             PrefsManager.SortOrder.CUSTOM -> sortByCustomOrder(notes, customOrder)
         }.let {

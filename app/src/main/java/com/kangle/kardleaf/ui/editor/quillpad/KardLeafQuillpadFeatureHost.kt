@@ -214,6 +214,27 @@ private fun QuillpadRemarksScreen(
                 frontMatterProperties = properties,
                 textStats = stats,
                 remarks = remarks,
+                onTimeChange = { key, timestamp ->
+                    val createdAtMs = if (key.equals("created", ignoreCase = true)) {
+                        timestamp
+                    } else {
+                        properties.firstOrNull { it.key.equals("created", ignoreCase = true) }
+                            ?.values?.firstOrNull()?.let(NoteFormatUtils::parseYamlDateTime) ?: timestamp
+                    }
+                    val updatedAtMs = if (key.equals("updated", ignoreCase = true)) {
+                        timestamp
+                    } else {
+                        properties.firstOrNull { it.key.equals("updated", ignoreCase = true) }
+                            ?.values?.firstOrNull()?.let(NoteFormatUtils::parseYamlDateTime) ?: timestamp
+                    }
+                    scope.launch {
+                        if (runCatching { bridge.updateNoteTimestamps(snapshot, createdAtMs, updatedAtMs) }.getOrDefault(false)) {
+                            properties = bridge.frontMatterProperties(snapshot)
+                        } else {
+                            Toast.makeText(context, "时间修改失败", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
                 draft = draft,
                 onDraftChange = { draft = it },
                 onAdd = {

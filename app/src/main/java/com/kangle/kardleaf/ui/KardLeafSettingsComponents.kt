@@ -1,6 +1,5 @@
 package com.kangle.kardleaf.ui
 
-import android.net.Uri
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -74,6 +73,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -130,15 +130,19 @@ internal fun settingsPageTitle(page: String): String {
             "openNote" -> "Default editor mode"
             "sidePanelOpenMode" -> "Side panel trigger"
             "backup" -> "Data backup"
+            "vault" -> "Vaults"
             "drawerStyle" -> "Sidebar"
             "interface" -> "Interface"
+            "home" -> "Home"
+            "editorMore" -> "More editor settings"
+            "dataMore" -> "More data settings"
             "homeBottomToolbar" -> "Home toolbar"
             "drawerSettings" -> "Sidebar"
             "drawer" -> "Sidebar spacing"
             "historyLimit" -> "History limit"
             "trash" -> "Trash"
-            "toolbar" -> "Format buttons"
-            "editorTopToolbar" -> "Note top bar"
+            "toolbar" -> "Bottom toolbar"
+            "editorTopToolbar" -> "Top toolbar"
             "selectionToolbar" -> "Selection toolbar"
             "editorTypography" -> "Editor font"
             "appLanguage" -> "Language"
@@ -155,18 +159,21 @@ internal fun settingsPageTitle(page: String): String {
             "taskReminders" -> "Tasks & reminders"
             "taskFolder" -> "Task list location"
             "remarkRecords" -> "Remark records"
-            "historyRecords" -> "Version history"
+            "history" -> "Version history"
+            "updates" -> "Updates"
+            "otherMore" -> "More settings"
             "about" -> "About"
             "changedFiles" -> "Changed files"
+            "search" -> "Search settings"
             else -> "Settings"
         }
     }
-    if (page == "editorTypography") return "编辑器字体"
+    if (page == "editorTypography") return "字体"
     if (page == "appLanguage") return "语言"
     return when (page) {
         "layout" -> "布局模式"
         "sort" -> "排序方式"
-        "theme" -> "主题切换"
+        "theme" -> "主题设置"
         "image" -> "图片保存位置"
         "hiddenFolders" -> "隐藏的文件夹"
         "density" -> "卡片密度"
@@ -176,13 +183,17 @@ internal fun settingsPageTitle(page: String): String {
         "openNote" -> "默认编辑器模式"
         "sidePanelOpenMode" -> "侧滑面板弹出方式"
         "backup" -> "数据备份"
+        "vault" -> "笔记库"
         "drawerStyle" -> "侧边栏"
         "drawerSettings" -> "侧边栏"
+        "home" -> "首页"
+        "editorMore" -> "编辑器更多"
+        "dataMore" -> "数据与安全更多"
         "drawer" -> "侧边栏距离"
         "historyLimit" -> "历史版本数量"
         "trash" -> "回收站"
-        "toolbar" -> "字符按钮位置"
-        "editorTopToolbar" -> "笔记顶部栏"
+        "toolbar" -> "底部工具栏"
+        "editorTopToolbar" -> "顶部工具栏"
         "selectionToolbar" -> "长按选择栏"
         "homeBottomToolbar" -> "首页底部工具栏"
         "drawerEdit" -> "侧边栏调整"
@@ -199,9 +210,12 @@ internal fun settingsPageTitle(page: String): String {
         "taskReminders" -> "任务与提醒"
         "taskFolder" -> "任务清单位置"
         "remarkRecords" -> "备注记录"
-        "historyRecords" -> "历史版本记录"
+        "history" -> "历史版本"
+        "updates" -> "更新"
+        "otherMore" -> "其他更多"
         "about" -> "关于"
         "changedFiles" -> "修改文件"
+        "search" -> "搜索设置"
         else -> "设置"
     }
 }
@@ -230,7 +244,6 @@ internal fun previewThemeLabel(theme: PrefsManager.PreviewTheme): String =
             PrefsManager.PreviewTheme.SOLARIZED -> "Solarized 护眼"
         }
     }
-
 internal fun previewThemeSubtitle(theme: PrefsManager.PreviewTheme): String =
     if (Locale.getDefault().language == "en") {
         when (theme) {
@@ -298,6 +311,7 @@ internal fun sortSummary(
         val orderText =
             when (order) {
                 PrefsManager.SortOrder.DATE_MODIFIED -> "Modified"
+                PrefsManager.SortOrder.DATE_CREATED -> "Created"
                 PrefsManager.SortOrder.TITLE -> "Title"
                 PrefsManager.SortOrder.CUSTOM -> "Custom"
             }
@@ -307,6 +321,7 @@ internal fun sortSummary(
     val orderText =
         when (order) {
             PrefsManager.SortOrder.DATE_MODIFIED -> "修改日期"
+            PrefsManager.SortOrder.DATE_CREATED -> "创建日期"
             PrefsManager.SortOrder.TITLE -> "标题"
             PrefsManager.SortOrder.CUSTOM -> "自定义"
         }
@@ -321,6 +336,8 @@ internal fun toolbarItemIcon(item: KardLeafCustomFeatures.ToolbarItem): ImageVec
         KardLeafCustomFeatures.ToolbarItem.REDO -> Icons.Outlined.Redo
         KardLeafCustomFeatures.ToolbarItem.IMAGE -> Icons.Outlined.Image
         KardLeafCustomFeatures.ToolbarItem.DRAWING -> Icons.Outlined.Palette
+        KardLeafCustomFeatures.ToolbarItem.DATETIME -> Icons.Outlined.Alarm
+        KardLeafCustomFeatures.ToolbarItem.SYMBOLS -> Icons.Outlined.TextFields
         KardLeafCustomFeatures.ToolbarItem.HEADING -> Icons.Outlined.Title
         KardLeafCustomFeatures.ToolbarItem.HEADING2 -> Icons.Outlined.TextIncrease
         KardLeafCustomFeatures.ToolbarItem.HEADING3 -> Icons.Outlined.TextDecrease
@@ -490,6 +507,7 @@ internal fun editorTopToolbarItemLabel(item: PrefsManager.EditorTopToolbarItemId
         PrefsManager.EditorTopToolbarItemId.REMARKS -> localizedText("属性备注", "Properties & remarks")
         PrefsManager.EditorTopToolbarItemId.SEARCH -> localizedText("搜索", "Search")
         PrefsManager.EditorTopToolbarItemId.EDIT -> localizedText("编辑", "Edit")
+        PrefsManager.EditorTopToolbarItemId.KERNEL -> localizedText("内核选择", "Editor kernel")
         PrefsManager.EditorTopToolbarItemId.HISTORY -> localizedText("历史版本", "Version history")
         PrefsManager.EditorTopToolbarItemId.PRIVACY -> localizedText("保护", "Protect")
         PrefsManager.EditorTopToolbarItemId.ARCHIVE -> localizedText("归档", "Archive")
@@ -505,6 +523,7 @@ internal fun editorTopToolbarItemIcon(item: PrefsManager.EditorTopToolbarItemId)
         PrefsManager.EditorTopToolbarItemId.REMARKS -> Icons.Outlined.StickyNote2
         PrefsManager.EditorTopToolbarItemId.SEARCH -> Icons.Outlined.Search
         PrefsManager.EditorTopToolbarItemId.EDIT -> Icons.Outlined.Edit
+        PrefsManager.EditorTopToolbarItemId.KERNEL -> Icons.Outlined.Code
         PrefsManager.EditorTopToolbarItemId.HISTORY -> Icons.Outlined.History
         PrefsManager.EditorTopToolbarItemId.PRIVACY -> Icons.Outlined.Shield
         PrefsManager.EditorTopToolbarItemId.ARCHIVE -> Icons.Outlined.Inventory2
@@ -517,9 +536,10 @@ internal fun SettingsEditorTopToolbarDragList(
     items: List<PrefsManager.EditorTopToolbarItemId>,
     moreItems: Set<PrefsManager.EditorTopToolbarItemId>,
     hiddenItems: Set<PrefsManager.EditorTopToolbarItemId>,
+    prefsManager: PrefsManager,
     onOrderChange: (List<PrefsManager.EditorTopToolbarItemId>) -> Unit,
-    onToggleArea: (PrefsManager.EditorTopToolbarItemId) -> Unit,
-    onToggleHidden: (PrefsManager.EditorTopToolbarItemId) -> Unit,
+    onPlacementChange: (PrefsManager.EditorTopToolbarItemId, Int) -> Unit,
+    onRename: (PrefsManager.EditorTopToolbarItemId, String) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -534,21 +554,22 @@ internal fun SettingsEditorTopToolbarDragList(
                 )
             }
         },
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
     ) { _, itemId, isDragging ->
         key(itemId) {
             ReorderableItem {
                 SettingsEditorTopToolbarEditRow(
                     icon = editorTopToolbarItemIcon(itemId),
-                    title = editorTopToolbarItemLabel(itemId),
+                    title = prefsManager.getEditorTopToolbarItemLabel(itemId, editorTopToolbarItemLabel(itemId)),
                     isMore = itemId in moreItems,
                     isHidden = itemId in hiddenItems,
-                    canToggleArea = itemId != PrefsManager.EditorTopToolbarItemId.MORE && itemId !in hiddenItems,
-                    canToggleHidden = itemId != PrefsManager.EditorTopToolbarItemId.MORE,
+                    canTogglePlacement = itemId != PrefsManager.EditorTopToolbarItemId.MORE,
                     isDragging = isDragging,
                     isDropTarget = false,
-                    onToggleArea = { onToggleArea(itemId) },
-                    onToggleHidden = { onToggleHidden(itemId) },
+                    onPlacementChange = { onPlacementChange(itemId, it) },
+                    onTitleClick = {
+                        onRename(itemId, prefsManager.getEditorTopToolbarItemLabel(itemId, editorTopToolbarItemLabel(itemId)))
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .longPressDraggableHandle(
@@ -568,12 +589,11 @@ internal fun SettingsEditorTopToolbarEditRow(
     title: String,
     isMore: Boolean,
     isHidden: Boolean,
-    canToggleArea: Boolean,
-    canToggleHidden: Boolean,
+    canTogglePlacement: Boolean,
     isDragging: Boolean,
     isDropTarget: Boolean,
-    onToggleArea: () -> Unit,
-    onToggleHidden: () -> Unit,
+    onPlacementChange: (Int) -> Unit,
+    onTitleClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val active = isDragging || isDropTarget
@@ -592,25 +612,22 @@ internal fun SettingsEditorTopToolbarEditRow(
         subtitle = "",
         selected = active,
         onClick = {},
+        onTitleClick = onTitleClick,
         modifier = modifier,
         contentHorizontalPadding = 14.dp,
         trailing = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (canToggleHidden) {
-                    TextButton(onClick = onToggleHidden) { Text(if (isHidden) "显示" else "隐藏") }
-                }
-                if (!isHidden) {
-                    if (canToggleArea) {
-                        TextButton(onClick = onToggleArea) { Text(if (isMore) "顶部" else "更多") }
-                    } else {
-                        Text(
-                            text = "固定",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
+            Slider(
+                value = when {
+                    isHidden -> 0f
+                    isMore -> 1f
+                    else -> 2f
+                },
+                onValueChange = { onPlacementChange(it.roundToInt()) },
+                valueRange = 0f..2f,
+                steps = 1,
+                enabled = canTogglePlacement,
+                modifier = Modifier.width(120.dp),
+            )
         },
     )
 }
@@ -619,6 +636,7 @@ internal fun selectionToolbarItemLabel(item: PrefsManager.SelectionToolbarItemId
     when (item) {
         PrefsManager.SelectionToolbarItemId.MOVE -> localizedText("移动", "Move")
         PrefsManager.SelectionToolbarItemId.COPY -> localizedText("复制", "Copy")
+        PrefsManager.SelectionToolbarItemId.MERGE -> localizedText("合并", "Merge")
         PrefsManager.SelectionToolbarItemId.PIN -> localizedText("置顶", "Pin")
         PrefsManager.SelectionToolbarItemId.FAVORITE -> localizedText("收藏", "Favorite")
         PrefsManager.SelectionToolbarItemId.TAG -> localizedText("标签", "Tag")
@@ -633,6 +651,7 @@ internal fun selectionToolbarItemIcon(item: PrefsManager.SelectionToolbarItemId)
     when (item) {
         PrefsManager.SelectionToolbarItemId.MOVE -> Icons.AutoMirrored.Outlined.DriveFileMove
         PrefsManager.SelectionToolbarItemId.COPY -> Icons.Outlined.ContentCopy
+        PrefsManager.SelectionToolbarItemId.MERGE -> Icons.Outlined.MergeType
         PrefsManager.SelectionToolbarItemId.PIN -> Icons.Outlined.PushPin
         PrefsManager.SelectionToolbarItemId.FAVORITE -> Icons.Outlined.BookmarkBorder
         PrefsManager.SelectionToolbarItemId.TAG -> Icons.Outlined.Label
@@ -649,8 +668,7 @@ internal fun SettingsSelectionToolbarDragList(
     moreItems: Set<PrefsManager.SelectionToolbarItemId>,
     hiddenItems: Set<PrefsManager.SelectionToolbarItemId>,
     onOrderChange: (List<PrefsManager.SelectionToolbarItemId>) -> Unit,
-    onToggleArea: (PrefsManager.SelectionToolbarItemId) -> Unit,
-    onToggleHidden: (PrefsManager.SelectionToolbarItemId) -> Unit,
+    onPlacementChange: (PrefsManager.SelectionToolbarItemId, Int) -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -665,7 +683,7 @@ internal fun SettingsSelectionToolbarDragList(
                 )
             }
         },
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
     ) { _, itemId, isDragging ->
         key(itemId) {
             ReorderableItem {
@@ -676,8 +694,7 @@ internal fun SettingsSelectionToolbarDragList(
                     isHidden = itemId in hiddenItems,
                     isDragging = isDragging,
                     isDropTarget = false,
-                    onToggleArea = { onToggleArea(itemId) },
-                    onToggleHidden = { onToggleHidden(itemId) },
+                    onPlacementChange = { onPlacementChange(itemId, it) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .longPressDraggableHandle(
@@ -699,8 +716,7 @@ internal fun SettingsSelectionToolbarEditRow(
     isHidden: Boolean,
     isDragging: Boolean,
     isDropTarget: Boolean,
-    onToggleArea: () -> Unit,
-    onToggleHidden: () -> Unit,
+    onPlacementChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val active = isDragging || isDropTarget
@@ -722,12 +738,17 @@ internal fun SettingsSelectionToolbarEditRow(
         modifier = modifier,
         contentHorizontalPadding = 14.dp,
         trailing = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onToggleHidden) { Text(if (isHidden) "显示" else "隐藏") }
-                if (!isHidden) {
-                    TextButton(onClick = onToggleArea) { Text(if (isMore) "顶部" else "更多") }
-                }
-            }
+            Slider(
+                value = when {
+                    isHidden -> 0f
+                    isMore -> 1f
+                    else -> 2f
+                },
+                onValueChange = { onPlacementChange(it.roundToInt()) },
+                valueRange = 0f..2f,
+                steps = 1,
+                modifier = Modifier.width(120.dp),
+            )
         },
     )
 }
@@ -743,8 +764,8 @@ internal fun SettingsDrawerDragList(
     groupStartItems: Set<PrefsManager.DrawerItemId> = emptySet(),
     onMoveGroupStart: (PrefsManager.DrawerItemId, PrefsManager.DrawerItemId?) -> Unit = { _, _ -> },
 ) {
-    val rowHeight = 64.dp
-    val rowSpacing = 6.dp
+    val rowHeight = 62.dp
+    val rowSpacing = 5.dp
     val rowStepPx = with(LocalDensity.current) { (rowHeight + rowSpacing).toPx() }
     val haptic = LocalHapticFeedback.current
     var draggingGroupStart by remember { mutableStateOf<PrefsManager.DrawerItemId?>(null) }
@@ -885,15 +906,15 @@ internal fun SettingsDrawerEditRow(
         subtitle = "",
         selected = active,
         onClick = {},
+        onTitleClick = onRename,
         modifier = modifier,
         contentHorizontalPadding = 14.dp,
         trailing = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onRename) { Text("改名") }
-                if (canToggleVisible) {
-                    TextButton(onClick = onToggleVisible) { Text(if (isHidden) "显示" else "隐藏") }
-                }
-            }
+            Switch(
+                checked = !isHidden,
+                onCheckedChange = if (canToggleVisible) ({ onToggleVisible() }) else null,
+                enabled = canToggleVisible,
+            )
         },
     )
 }
@@ -970,7 +991,7 @@ internal fun SettingsHomeBottomToolbarDragList(
                 )
             }
         },
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
     ) { _, itemId, isDragging ->
         key(itemId) {
             ReorderableItem {
@@ -1056,33 +1077,10 @@ internal fun drawerItemIcon(itemId: PrefsManager.DrawerItemId): ImageVector =
         PrefsManager.DrawerItemId.FILES -> Icons.Outlined.FolderOpen
         PrefsManager.DrawerItemId.DATES -> Icons.Outlined.EventNote
         PrefsManager.DrawerItemId.IMAGES -> Icons.Outlined.PhotoLibrary
-        PrefsManager.DrawerItemId.RELATIONSHIP_GRAPH -> Icons.Outlined.AccountTree
+        PrefsManager.DrawerItemId.RELATIONSHIP_GRAPH -> Icons.Outlined.Hub
         PrefsManager.DrawerItemId.ARCHIVE -> Icons.Outlined.Inventory2
         PrefsManager.DrawerItemId.TRASH -> Icons.Outlined.DeleteOutline
         PrefsManager.DrawerItemId.PRIVACY -> Icons.Outlined.Shield
         PrefsManager.DrawerItemId.ONBOARDING -> Icons.AutoMirrored.Outlined.MenuBook
         PrefsManager.DrawerItemId.SETTINGS -> Icons.Outlined.Settings
     }
-
-internal fun displayRootPath(uriString: String?): String {
-    if (uriString.isNullOrBlank()) return "未选择笔记库"
-    val treePath = runCatching {
-        Uri.decode(Uri.parse(uriString).lastPathSegment.orEmpty())
-    }.getOrNull().orEmpty()
-
-    if (treePath.contains(":")) {
-        val volume = treePath.substringBefore(":")
-        val relativePath = treePath.substringAfter(":").trim('/')
-        val rootPath = if (volume.equals("primary", ignoreCase = true)) {
-            "/storage/emulated/0"
-        } else {
-            "/storage/$volume"
-        }
-        return listOf(rootPath, relativePath)
-            .filter { it.isNotBlank() }
-            .joinToString("/")
-            .replace("//", "/")
-    }
-
-    return uriString
-}

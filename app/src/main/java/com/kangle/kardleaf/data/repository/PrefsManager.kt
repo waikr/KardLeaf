@@ -76,11 +76,15 @@ class PrefsManager(context: Context) {
         private const val KEY_CLEAN_LIST_FEATURE_ICON_STYLE = "clean_list_feature_icon_style"
         private const val KEY_GLOBAL_CORNER_RADIUS_DP = "global_corner_radius_dp"
         private const val KEY_HOME_CORNER_RADIUS_DP = "home_corner_radius_dp"
+        private const val KEY_TASK_CORNER_RADIUS_DP = "task_corner_radius_dp"
         private const val KEY_LAST_FILTER_TYPE = "last_filter_type"
         private const val KEY_LAST_FILTER_LABEL = "last_filter_label"
         private const val KEY_RESTORE_LAST_FILTER = "restore_last_filter"
         private const val KEY_DEFAULT_START_LABEL = "default_start_label"
         private const val KEY_HAS_SEEN_ONBOARDING = "has_seen_onboarding"
+        private const val KEY_HAS_SEEN_WIDGET_SHORTCUT_PERMISSION_HINT = "has_seen_widget_shortcut_permission_hint"
+        private const val KEY_HAS_SEEN_SETTINGS_PULL_SEARCH_HINT = "has_seen_settings_pull_search_hint"
+        private const val KEY_HAS_SEEN_WEBDAV_WARNING = "has_seen_webdav_warning"
         private const val KEY_DRAWER_ITEM_ORDER = "drawer_item_order"
         private const val KEY_DRAWER_HIDDEN_ITEMS = "drawer_hidden_items"
         private const val KEY_DRAWER_CATEGORY_ACTIONS_MIGRATED = "drawer_category_actions_migrated"
@@ -88,9 +92,12 @@ class PrefsManager(context: Context) {
         private const val KEY_DRAWER_STYLE = "drawer_style"
         private const val KEY_DRAWER_GROUP_START_ITEMS = "drawer_group_start_items"
         private const val KEY_DRAWER_AVATAR_URI = "drawer_avatar_uri"
+        private const val KEY_DRAWER_NAME = "drawer_name"
+        private const val KEY_DRAWER_HEATMAP_EDIT_TIME = "drawer_heatmap_edit_time"
         private const val KEY_SELECTION_TOOLBAR_ITEM_ORDER = "selection_toolbar_item_order"
         private const val KEY_SELECTION_TOOLBAR_MORE_ITEMS = "selection_toolbar_more_items"
         private const val KEY_SELECTION_TOOLBAR_HIDDEN_ITEMS = "selection_toolbar_hidden_items"
+        private const val KEY_SELECTION_TOOLBAR_MERGE_DEFAULT_MIGRATED = "selection_toolbar_merge_default_migrated"
         private const val KEY_IMAGE_PATH_MODE = "image_path_mode"
         private const val KEY_RELATIVE_IMAGE_LOCATION = "relative_image_location"
         private const val KEY_AUTO_BACKUP_INTERVAL_DAYS = "auto_backup_interval_days"
@@ -101,6 +108,7 @@ class PrefsManager(context: Context) {
         private const val KEY_NOTE_SIDE_PANEL_OPEN_MODE = "note_side_panel_open_mode"
         private const val KEY_PREVIEW_DOUBLE_TAP_INTERVAL_MS = "preview_double_tap_interval_ms"
         private const val KEY_PREVIEW_THEME = "preview_theme"
+        private const val KEY_MIND_MAP_THEME = "mind_map_theme"
         private const val KEY_TRASH_AUTO_CLEAN_DAYS = "trash_auto_clean_days"
         private const val KEY_PASSWORD_INPUT_MODE = "password_input_mode"
         private const val KEY_SHOW_YAML_TAGS_ON_LOOSE_CARDS = "show_yaml_tags_on_loose_cards"
@@ -166,6 +174,7 @@ class PrefsManager(context: Context) {
         const val DEFAULT_HOME_ACTION_STYLE = "BOTTOM_TOOLBAR"
         const val DEFAULT_HOME_WEB_CLIP_ACTION_VISIBLE = false
         const val DEFAULT_HOME_BOTTOM_TOOLBAR_BUTTON_SIZE_DP = 46
+        const val DEFAULT_TASK_CORNER_RADIUS_DP = 16
         const val THEME_CORNER_RADIUS_FOLLOW = -1
         const val MIN_THEME_CORNER_RADIUS_DP = 0
         const val MAX_THEME_CORNER_RADIUS_DP = 40
@@ -190,6 +199,7 @@ class PrefsManager(context: Context) {
 
     enum class SortOrder {
         DATE_MODIFIED,
+        DATE_CREATED,
         TITLE,
         CUSTOM,
     }
@@ -273,6 +283,16 @@ class PrefsManager(context: Context) {
         SOLARIZED,
     }
 
+    enum class MindMapTheme(val key: String) {
+        PLAIN("plain"),
+        XMIND("xmind"),
+        ;
+
+        companion object {
+            fun fromKey(key: String?): MindMapTheme = entries.firstOrNull { it.key == key } ?: PLAIN
+        }
+    }
+
     fun savePreviewTheme(theme: PreviewTheme) {
         prefs.edit().putString(KEY_PREVIEW_THEME, theme.name).apply()
     }
@@ -282,6 +302,13 @@ class PrefsManager(context: Context) {
         return runCatching { PreviewTheme.valueOf(name ?: DEFAULT_PREVIEW_THEME) }
             .getOrDefault(PreviewTheme.FOLLOW_APP)
     }
+
+    fun saveMindMapTheme(theme: MindMapTheme) {
+        prefs.edit().putString(KEY_MIND_MAP_THEME, theme.key).apply()
+    }
+
+    fun getMindMapTheme(): MindMapTheme =
+        MindMapTheme.fromKey(prefs.getString(KEY_MIND_MAP_THEME, MindMapTheme.PLAIN.key))
 
     fun saveEditorKernel(kernel: EditorKernel) = editorPreferences.saveKernel(kernel)
 
@@ -936,6 +963,13 @@ class PrefsManager(context: Context) {
     fun getHomeCornerRadiusDp(): Int =
         normalizeCornerRadiusDp(prefs.getInt(KEY_HOME_CORNER_RADIUS_DP, THEME_CORNER_RADIUS_FOLLOW))
 
+    fun saveTaskCornerRadiusDp(radiusDp: Int) {
+        prefs.edit().putInt(KEY_TASK_CORNER_RADIUS_DP, normalizeCornerRadiusDp(radiusDp)).apply()
+    }
+
+    fun getTaskCornerRadiusDp(): Int =
+        normalizeCornerRadiusDp(prefs.getInt(KEY_TASK_CORNER_RADIUS_DP, DEFAULT_TASK_CORNER_RADIUS_DP))
+
     private fun normalizeCornerRadiusDp(radiusDp: Int): Int =
         if (radiusDp == THEME_CORNER_RADIUS_FOLLOW) {
             THEME_CORNER_RADIUS_FOLLOW
@@ -996,6 +1030,27 @@ class PrefsManager(context: Context) {
         prefs.edit().putBoolean(KEY_HAS_SEEN_ONBOARDING, seen).apply()
     }
 
+    fun hasSeenWidgetShortcutPermissionHint(): Boolean =
+        prefs.getBoolean(KEY_HAS_SEEN_WIDGET_SHORTCUT_PERMISSION_HINT, false)
+
+    fun markWidgetShortcutPermissionHintSeen() {
+        prefs.edit().putBoolean(KEY_HAS_SEEN_WIDGET_SHORTCUT_PERMISSION_HINT, true).apply()
+    }
+
+    fun hasSeenSettingsPullSearchHint(): Boolean =
+        prefs.getBoolean(KEY_HAS_SEEN_SETTINGS_PULL_SEARCH_HINT, false)
+
+    fun markSettingsPullSearchHintSeen() {
+        prefs.edit().putBoolean(KEY_HAS_SEEN_SETTINGS_PULL_SEARCH_HINT, true).apply()
+    }
+
+    fun hasSeenWebDavWarning(): Boolean =
+        prefs.getBoolean(KEY_HAS_SEEN_WEBDAV_WARNING, false)
+
+    fun markWebDavWarningSeen() {
+        prefs.edit().putBoolean(KEY_HAS_SEEN_WEBDAV_WARNING, true).apply()
+    }
+
     // region 侧边栏功能项编辑
     enum class DrawerItemId {
         ALL_NOTES, RECENT, TASKS, NEW_DRAWING, FAVORITES, DRAFTS, TAGS, RANDOM, FILES, DATES, IMAGES, RELATIONSHIP_GRAPH, ARCHIVE, TRASH, PRIVACY, ONBOARDING, SETTINGS;
@@ -1042,6 +1097,24 @@ class PrefsManager(context: Context) {
     }
 
     fun getDrawerAvatarUri(): String? = prefs.getString(KEY_DRAWER_AVATAR_URI, null)
+
+    fun saveDrawerName(name: String) {
+        prefs.edit().apply {
+            if (name.isBlank()) {
+                remove(KEY_DRAWER_NAME)
+            } else {
+                putString(KEY_DRAWER_NAME, name.trim())
+            }
+        }.apply()
+    }
+
+    fun getDrawerName(): String? = prefs.getString(KEY_DRAWER_NAME, null)?.trim()?.takeIf { it.isNotBlank() }
+
+    fun isDrawerHeatmapUsingEditTime(): Boolean = prefs.getBoolean(KEY_DRAWER_HEATMAP_EDIT_TIME, false)
+
+    fun saveDrawerHeatmapUsingEditTime(usingEditTime: Boolean) {
+        prefs.edit().putBoolean(KEY_DRAWER_HEATMAP_EDIT_TIME, usingEditTime).apply()
+    }
 
     fun getDrawerGroupStartItems(): Set<DrawerItemId> {
         val raw = prefs.getStringSet(KEY_DRAWER_GROUP_START_ITEMS, null)
@@ -1296,13 +1369,13 @@ class PrefsManager(context: Context) {
 
     // region 长按选择栏功能项编辑
     enum class SelectionToolbarItemId {
-        MOVE, COPY, PIN, FAVORITE, TAG, ARCHIVE, PROPERTIES, SHARE, PRIVACY, DELETE;
+        MOVE, COPY, MERGE, PIN, FAVORITE, TAG, ARCHIVE, PROPERTIES, SHARE, PRIVACY, DELETE;
 
         companion object {
             val DEFAULT_ORDER: List<SelectionToolbarItemId> =
-                listOf(MOVE, COPY, PIN, FAVORITE, TAG, ARCHIVE, PROPERTIES, SHARE, PRIVACY, DELETE)
+                listOf(MOVE, COPY, MERGE, PIN, FAVORITE, TAG, ARCHIVE, PROPERTIES, SHARE, PRIVACY, DELETE)
             val DEFAULT_MORE_ITEMS: Set<SelectionToolbarItemId> =
-                setOf(ARCHIVE, PROPERTIES, SHARE, PRIVACY, DELETE)
+                setOf(MERGE, ARCHIVE, PROPERTIES, SHARE, PRIVACY, DELETE)
             val DEFAULT_HIDDEN_ITEMS: Set<SelectionToolbarItemId> = emptySet()
         }
     }
@@ -1321,13 +1394,31 @@ class PrefsManager(context: Context) {
         prefs.edit().putString(KEY_SELECTION_TOOLBAR_ITEM_ORDER, normalized.joinToString(",") { it.name }).apply()
     }
 
-    fun getSelectionToolbarMoreItems(): Set<SelectionToolbarItemId> =
-        prefs.getStringSet(KEY_SELECTION_TOOLBAR_MORE_ITEMS, null)
-            ?.mapNotNull { runCatching { SelectionToolbarItemId.valueOf(it) }.getOrNull() }
-            ?.toSet() ?: SelectionToolbarItemId.DEFAULT_MORE_ITEMS
+    fun getSelectionToolbarMoreItems(): Set<SelectionToolbarItemId> {
+        val stored = prefs.getStringSet(KEY_SELECTION_TOOLBAR_MORE_ITEMS, null) ?: return SelectionToolbarItemId.DEFAULT_MORE_ITEMS
+        val items = stored
+            .mapNotNull { runCatching { SelectionToolbarItemId.valueOf(it) }.getOrNull() }
+            .toSet()
+        if (prefs.getBoolean(KEY_SELECTION_TOOLBAR_MERGE_DEFAULT_MIGRATED, false)) return items
+
+        val hiddenItems = getSelectionToolbarHiddenItems()
+        val migrated = if (SelectionToolbarItemId.MERGE !in items && SelectionToolbarItemId.MERGE !in hiddenItems) {
+            items + SelectionToolbarItemId.MERGE
+        } else {
+            items
+        }
+        prefs.edit()
+            .putStringSet(KEY_SELECTION_TOOLBAR_MORE_ITEMS, migrated.map { it.name }.toSet())
+            .putBoolean(KEY_SELECTION_TOOLBAR_MERGE_DEFAULT_MIGRATED, true)
+            .apply()
+        return migrated
+    }
 
     fun saveSelectionToolbarMoreItems(items: Set<SelectionToolbarItemId>) {
-        prefs.edit().putStringSet(KEY_SELECTION_TOOLBAR_MORE_ITEMS, items.map { it.name }.toSet()).apply()
+        prefs.edit()
+            .putStringSet(KEY_SELECTION_TOOLBAR_MORE_ITEMS, items.map { it.name }.toSet())
+            .putBoolean(KEY_SELECTION_TOOLBAR_MERGE_DEFAULT_MIGRATED, true)
+            .apply()
     }
 
     fun getSelectionToolbarHiddenItems(): Set<SelectionToolbarItemId> =
@@ -1342,12 +1433,12 @@ class PrefsManager(context: Context) {
 
     // region 笔记详情顶部栏功能项编辑
     enum class EditorTopToolbarItemId {
-        MINDMAP, LABEL, OUTLINE, REMARKS, SEARCH, EDIT, HISTORY, PRIVACY, ARCHIVE, DELETE, MORE;
+        MINDMAP, LABEL, OUTLINE, REMARKS, SEARCH, EDIT, KERNEL, HISTORY, PRIVACY, ARCHIVE, DELETE, MORE;
 
         companion object {
             val DEFAULT_ORDER: List<EditorTopToolbarItemId> =
-                listOf(SEARCH, EDIT, OUTLINE, REMARKS, HISTORY, MINDMAP, PRIVACY, ARCHIVE, DELETE, MORE, LABEL)
-            val DEFAULT_MORE_ITEMS: Set<EditorTopToolbarItemId> = setOf(HISTORY, MINDMAP, PRIVACY, ARCHIVE, DELETE)
+                listOf(SEARCH, EDIT, KERNEL, OUTLINE, REMARKS, HISTORY, MINDMAP, PRIVACY, ARCHIVE, DELETE, MORE, LABEL)
+            val DEFAULT_MORE_ITEMS: Set<EditorTopToolbarItemId> = setOf(KERNEL, HISTORY, MINDMAP, PRIVACY, ARCHIVE, DELETE)
             val DEFAULT_HIDDEN_ITEMS: Set<EditorTopToolbarItemId> = setOf(LABEL)
         }
     }
@@ -1363,6 +1454,14 @@ class PrefsManager(context: Context) {
     fun getEditorTopToolbarHiddenItems(): Set<EditorTopToolbarItemId> = editorPreferences.getTopToolbarHiddenItems()
 
     fun saveEditorTopToolbarHiddenItems(items: Set<EditorTopToolbarItemId>) = editorPreferences.saveTopToolbarHiddenItems(items)
+
+    fun getEditorTopToolbarItemLabel(item: EditorTopToolbarItemId, fallback: String): String =
+        editorPreferences.getTopToolbarItemLabel(item, fallback)
+
+    fun saveEditorTopToolbarItemLabel(item: EditorTopToolbarItemId, label: String) =
+        editorPreferences.saveTopToolbarItemLabel(item, label)
+
+    fun clearEditorTopToolbarItemLabels() = editorPreferences.clearTopToolbarItemLabels()
     // endregion
 
     // region 应用密码 / 隐私密码

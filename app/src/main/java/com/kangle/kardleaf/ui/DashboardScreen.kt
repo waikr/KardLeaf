@@ -47,6 +47,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Description
@@ -119,6 +120,7 @@ import com.kangle.kardleaf.ui.editor.host.PreviewWebView
 import com.kangle.kardleaf.ui.editor.host.PreviewWebViewController
 import com.kangle.kardleaf.data.utils.NoteTextStats
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
@@ -139,9 +141,6 @@ private inline fun logDashboardCustomSortFlash(message: () -> String) {
         KardLeafLog.d(CUSTOM_SORT_FLASH_TAG, message())
     }
 }
-@Suppress("UNUSED_PARAMETER")
-private suspend fun pausedDashboardThumbnailLoader(note: Note): Bitmap? = null
-
 @Composable
 private fun KardLeafUndoSnackbar(snackbarData: SnackbarData) {
     val hasAction = snackbarData.visuals.actionLabel != null
@@ -233,6 +232,13 @@ fun DashboardScreen(
     val showDateFilenameTitleOnCards by viewModel.showDateFilenameTitleOnCards.collectAsState()
     val customHiddenFilenamePatterns by viewModel.customHiddenFilenamePatterns.collectAsState()
     val yamlTags by viewModel.yamlTags.collectAsState()
+    val noteCountByYamlTag = remember(allNotes) {
+        allNotes
+            .filterNot { it.isArchived || it.isTrashed }
+            .flatMap { note -> note.tags.distinct().map { tag -> tag to note.file.path } }
+            .groupBy({ it.first }, { it.second })
+            .mapValues { (_, paths) -> paths.distinct().size }
+    }
     val selectionToolbarItemOrder by viewModel.selectionToolbarItemOrder.collectAsState()
     val selectionToolbarMoreItems by viewModel.selectionToolbarMoreItems.collectAsState()
     val selectionToolbarHiddenItems by viewModel.selectionToolbarHiddenItems.collectAsState()
@@ -259,16 +265,20 @@ fun DashboardScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val isImportingLibrary by viewModel.isImportingLibrary.collectAsState()
     val isVaultSwitchRefreshing by viewModel.isVaultSwitchRefreshing.collectAsState()
+    val isEditorOpen by viewModel.isEditorOpen.collectAsState()
+    val dashboardScrollIntent by viewModel.dashboardScrollIntent.collectAsState()
+    val dashboardUserScrollVersion by viewModel.dashboardUserScrollVersion.collectAsState()
     val shouldShowInitialNoteLoading = isLoading && allNotes.isEmpty() && !isImportingLibrary
-    val scrollToTopEvents by viewModel.homeScrollToTopEvents.collectAsState()
     val context = LocalContext.current
     val unnamedNoteDateFormat = KardLeafCustomFeatures.getUnnamedNoteDateFormat(context)
     val showHomeWebClipAction = remember(context) { PrefsManager(context).isHomeWebClipActionVisible() }
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val listStates = remember { mutableMapOf<MainViewModel.NoteFilter, LazyStaggeredGridState>() }
-    val listState = remember(currentFilter) {
-        listStates.getOrPut(currentFilter) { LazyStaggeredGridState() }
+    val searchListStates = remember { mutableMapOf<MainViewModel.NoteFilter, LazyStaggeredGridState>() }
+    val listState = remember(currentFilter, isSearchActive) {
+        val states = if (isSearchActive) searchListStates else listStates
+        states.getOrPut(currentFilter) { LazyStaggeredGridState() }
     }
     val dashboardStartMs = remember { SystemClock.elapsedRealtime() }
     var dashboardFilterSwitchStartMs by remember { mutableStateOf(dashboardStartMs) }
@@ -280,13 +290,6 @@ fun DashboardScreen(
     val notePeekThumbnail: (Note) -> Bitmap? = remember(viewModel) {
         viewModel::peekNoteThumbnailBitmap
     }
-    val pausedThumbnailLoader: suspend (Note) -> Bitmap? = remember {
-        ::pausedDashboardThumbnailLoader
-    }
-
-    fun thumbnailLoader(enabled: Boolean): suspend (Note) -> Bitmap? =
-        if (enabled && !pauseBackgroundWork) activeThumbnailLoader else pausedThumbnailLoader
-
     fun showThemedSnackbar(message: String) {
         coroutineScope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
@@ -378,10 +381,14 @@ fun DashboardScreen(
     var showEmptyTrashDialog by remember { mutableStateOf(false) }
     var labelToDelete by remember { mutableStateOf<String?>(null) }
     var showSearch by remember { mutableStateOf(false) }
+    var showSearchCategoryStrip by remember { mutableStateOf(false) }
     var showPullRefreshCircle by remember { mutableStateOf(false) }
     var showManualRefreshProgress by remember { mutableStateOf(false) }
     var manualRefreshLoadingSeen by remember { mutableStateOf(false) }
     var showFolderNavigationPanel by remember { mutableStateOf(false) }
+    var folderNavigationShowTags by remember { mutableStateOf(false) }
+    var folderNavigationEditMode by remember { mutableStateOf(false) }
+    var folderNavigationFocusedParentPath by remember { mutableStateOf("") }
     val folderNavigationChevronRotation by animateFloatAsState(
         targetValue = if (showFolderNavigationPanel) 180f else 0f,
         label = "DashboardFolderChevron",
@@ -401,11 +408,16 @@ fun DashboardScreen(
     LaunchedEffect(openSearchRequest) {
         if (openSearchRequest > 0L) {
             showSearch = true
+            showSearchCategoryStrip = false
+            showFolderNavigationPanel = false
         }
     }
 
     fun openFolderNavigationPanel() {
         folderNavigationPanelCloseJob?.cancel()
+        folderNavigationShowTags = currentFilter is MainViewModel.NoteFilter.YamlTag
+        folderNavigationEditMode = false
+        folderNavigationFocusedParentPath = ""
         showFolderNavigationPanel = true
         folderNavigationPanelProgress = 0f
         coroutineScope.launch {
@@ -421,6 +433,13 @@ fun DashboardScreen(
             delay(KardLeafMotion.ContainerDurationMillis.toLong())
             showFolderNavigationPanel = false
         }
+    }
+
+    fun closeSearch() {
+        showSearch = false
+        showSearchCategoryStrip = false
+        focusManager.clearFocus()
+        viewModel.clearSearch()
     }
 
     fun showSampleCleanupUndoSnackbar(message: String) {
@@ -704,8 +723,10 @@ fun DashboardScreen(
         propertyNote = note
         propertyTextStats = null
         coroutineScope.launch {
+            val fullNote = viewModel.getNoteForProperties(noteId)
             val stats = viewModel.getNoteTextStatsForProperties(noteId)
             if (propertyNote?.id == noteId) {
+                fullNote?.let { propertyNote = it }
                 propertyTextStats = stats
             }
         }
@@ -715,6 +736,21 @@ fun DashboardScreen(
         NotePropertiesDialog(
             note = note,
             textStats = propertyTextStats,
+            noteCountByTag = noteCountByYamlTag,
+            onTimeChange = { field, timestamp ->
+                val current = propertyNote
+                if (current != null) {
+                    val createdAtMs = if (field == NoteTimeField.CREATED) timestamp else current.createdAt.time
+                    val updatedAtMs = if (field == NoteTimeField.UPDATED) timestamp else current.updatedAt.time
+                    viewModel.updateNoteTimestamps(note.id, createdAtMs, updatedAtMs) { updated ->
+                        if (updated != null && propertyNote?.id == note.id) {
+                            propertyNote = updated
+                        } else if (updated == null) {
+                            showThemedSnackbar("时间修改失败")
+                        }
+                    }
+                }
+            },
             onDismiss = {
                 propertyNote = null
                 propertyTextStats = null
@@ -722,16 +758,61 @@ fun DashboardScreen(
         )
     }
 
-    LaunchedEffect(sortOrder, sortDirection) {
-        listState.scrollToItem(0)
+    LaunchedEffect(listState) {
+        var wasScrolling = false
+        snapshotFlow { (!listState.canScrollBackward) to listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collect { (atTop, isScrolling) ->
+                viewModel.updateDashboardViewport(
+                    atTop = atTop,
+                    userScrollStarted = isScrolling && !wasScrolling,
+                )
+                wasScrolling = isScrolling
+            }
     }
 
-    LaunchedEffect(scrollToTopEvents) {
-        if (scrollToTopEvents > 0) {
-            delay(250L)
-            repeat(3) {
-                listState.scrollToItem(0, 0)
-                delay(120L)
+    val dashboardTargetIndex =
+        dashboardScrollIntent?.targetPath?.let { targetPath ->
+            uiItems.indexOfFirst { item ->
+                (item as? DashboardUiItem.NoteItem)?.note?.file?.path == targetPath
+            }.takeIf { it >= 0 }
+        }
+    LaunchedEffect(
+        dashboardScrollIntent,
+        dashboardTargetIndex,
+        currentFilter,
+        isSearchActive,
+        isEditorOpen,
+        dashboardUserScrollVersion,
+        listState,
+        listState.isScrollInProgress,
+        uiItems,
+    ) {
+        val intent = dashboardScrollIntent ?: return@LaunchedEffect
+        when (
+            decideDashboardScrollIntent(
+                intent = intent,
+                currentFilter = currentFilter,
+                searchActive = isSearchActive,
+                editorOpen = isEditorOpen,
+                userScrollVersion = dashboardUserScrollVersion,
+                targetIndex = dashboardTargetIndex,
+                scrollInProgress = listState.isScrollInProgress,
+            )
+        ) {
+            DashboardScrollDecision.WAIT -> Unit
+            DashboardScrollDecision.DROP -> viewModel.consumeDashboardScrollIntent(intent.id)
+            DashboardScrollDecision.APPLY -> {
+                withFrameNanos { }
+                when (intent.action) {
+                    DashboardScrollAction.TOP -> listState.requestDashboardScrollToItem(0)
+                    DashboardScrollAction.REVEAL_PATH -> {
+                        val index = dashboardTargetIndex ?: return@LaunchedEffect
+                        val alreadyVisible = listState.layoutInfo.visibleItemsInfo.any { it.index == index }
+                        if (!alreadyVisible) listState.requestDashboardScrollToItem(index)
+                    }
+                }
+                viewModel.consumeDashboardScrollIntent(intent.id)
             }
         }
     }
@@ -789,8 +870,7 @@ fun DashboardScreen(
             imageShareWarningPending.isNotEmpty() -> imageShareWarningPending = emptyList()
             shareNotesPending.isNotEmpty() -> shareNotesPending = emptyList()
             showSearch -> {
-                showSearch = false
-                viewModel.clearSearch()
+                closeSearch()
             }
             isInSelectionMode -> viewModel.clearSelection()
             viewModel.navigateUpFolder() -> Unit
@@ -911,8 +991,14 @@ fun DashboardScreen(
                     selectedNotesForTags = selectedNotesList,
                     availableYamlTags = yamlTags,
                     onApplyTags = { tags ->
-                        viewModel.addTagsToSelectedNotes(tags) {
-                            showThemedSnackbar("已更新标签")
+                        viewModel.addTagsToSelectedNotes(tags) { successCount, failedCount ->
+                            when {
+                                successCount > 0 && failedCount > 0 -> {
+                                    showThemedSnackbar("已更新${successCount}个，${failedCount}个失败")
+                                }
+                                successCount > 0 -> showThemedSnackbar("已更新标签")
+                                else -> showThemedSnackbar("标签更新失败")
+                            }
                         }
                     },
                     onShowProperties = ::showProperties,
@@ -932,6 +1018,17 @@ fun DashboardScreen(
                     onMoveToPrivacy = {
                         viewModel.moveSelectedNotesToPrivacy { count ->
                             showThemedSnackbar(if (count > 0) "已移动到隐私库" else "移动到隐私库失败")
+                        }
+                    },
+                    onMerge = { options ->
+                        viewModel.mergeSelectedNotes(selectedNotesList, options) { result ->
+                            when {
+                                result.targetPath == null -> showThemedSnackbar("合并失败")
+                                result.failedSourceCount > 0 -> {
+                                    showThemedSnackbar("已合并，但有 ${result.failedSourceCount} 个源文件处理失败")
+                                }
+                                else -> showThemedSnackbar("已合并 ${result.sourceCount + 1} 篇笔记")
+                            }
                         }
                     },
                 )
@@ -1024,22 +1121,53 @@ fun DashboardScreen(
                                     )
                                 }
                             }
-                            IconButton(onClick = {
-                                if (showSearch) {
-                                    showSearch = false
-                                    focusManager.clearFocus()
-                                    viewModel.clearSearch()
-                                } else {
-                                    showSearch = true
+                            if (showFolderNavigationPanel) {
+                                if (!folderNavigationShowTags && folderNavigationFocusedParentPath.isNotBlank()) {
+                                    IconButton(
+                                        onClick = {
+                                            folderNavigationFocusedParentPath =
+                                                navigationParentFolderPath(folderNavigationFocusedParentPath)
+                                        },
+                                    ) {
+                                        Icon(
+                                            Icons.Outlined.ArrowBack,
+                                            contentDescription = "返回上一级分类",
+                                        )
+                                    }
                                 }
-                            }) {
-                                Icon(
-                                    Icons.Outlined.Search,
-                                    contentDescription = "搜索",
-                                    tint = if (showSearch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                FolderNavigationToolbarActions(
+                                    editMode = folderNavigationEditMode,
+                                    showTags = folderNavigationShowTags,
+                                    onEditToggle = {
+                                        val enteringEditMode = !folderNavigationEditMode
+                                        folderNavigationEditMode = enteringEditMode
+                                        if (enteringEditMode) {
+                                            showThemedSnackbar("已进入编辑模式")
+                                        }
+                                    },
+                                    onSwitch = {
+                                        folderNavigationShowTags = !folderNavigationShowTags
+                                        folderNavigationEditMode = false
+                                        folderNavigationFocusedParentPath = ""
+                                    },
                                 )
+                            } else {
+                                IconButton(onClick = {
+                                    if (showSearch) {
+                                        closeSearch()
+                                    } else {
+                                        showSearch = true
+                                        showSearchCategoryStrip = false
+                                    }
+                                }) {
+                                    Icon(
+                                        Icons.Outlined.Search,
+                                        contentDescription = "搜索",
+                                        tint = if (showSearch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                SortButton(viewModel = viewModel)
                             }
-                            SortButton(viewModel = viewModel)
                             if (currentFilter is MainViewModel.NoteFilter.Trash) {
                                 var showMoreMenu by remember { mutableStateOf(false) }
                                 var lastMoreMenuDismissAt by remember { mutableStateOf(0L) }
@@ -1102,7 +1230,20 @@ fun DashboardScreen(
                             ),
                     )
                     AnimatedVisibility(visible = showSearch) {
-                        SearchFilterToolbar(viewModel)
+                        SearchFilterToolbar(
+                            viewModel = viewModel,
+                            showCategoryStrip = showSearchCategoryStrip,
+                            onCategoryStripToggle = {
+                                if (showSearchCategoryStrip || searchOptions.folder != null) {
+                                    if (searchOptions.folder != null) {
+                                        viewModel.setSearchFolder(null)
+                                    }
+                                    showSearchCategoryStrip = false
+                                } else {
+                                    showSearchCategoryStrip = true
+                                }
+                            },
+                        )
                     }
                 }
             }
@@ -1276,6 +1417,7 @@ fun DashboardScreen(
             val useFolderPager =
                 (currentFilter is MainViewModel.NoteFilter.All ||
                     currentFilter is MainViewModel.NoteFilter.Label) &&
+                    !showSearch &&
                     !isSearchActive &&
                     folderPagerPages.isNotEmpty()
             val customSortDragRefreshBlocked =
@@ -1342,16 +1484,21 @@ fun DashboardScreen(
                     null
                 }
             }
-            if (!isPermissionNeeded &&
-                currentFilter !is MainViewModel.NoteFilter.Trash &&
-                currentFilter !is MainViewModel.NoteFilter.Archive &&
-                currentFilter !is MainViewModel.NoteFilter.Recent &&
-                currentFilter !is MainViewModel.NoteFilter.Favorites &&
-                currentFilter !is MainViewModel.NoteFilter.QuickNotes &&
-                currentFilter !is MainViewModel.NoteFilter.Random &&
-                currentFilter !is MainViewModel.NoteFilter.YamlTag &&
-                labels.isNotEmpty()
-            ) {
+            val shouldShowCategoryStrip =
+                !isPermissionNeeded &&
+                    labels.isNotEmpty() &&
+                    if (showSearch) {
+                        showSearchCategoryStrip
+                    } else {
+                        currentFilter !is MainViewModel.NoteFilter.Trash &&
+                            currentFilter !is MainViewModel.NoteFilter.Archive &&
+                            currentFilter !is MainViewModel.NoteFilter.Recent &&
+                            currentFilter !is MainViewModel.NoteFilter.Favorites &&
+                            currentFilter !is MainViewModel.NoteFilter.QuickNotes &&
+                            currentFilter !is MainViewModel.NoteFilter.Random &&
+                            currentFilter !is MainViewModel.NoteFilter.YamlTag
+                    }
+            if (shouldShowCategoryStrip) {
                 Box(
                     modifier =
                         Modifier
@@ -1386,7 +1533,8 @@ fun DashboardScreen(
                                     }
                                 }
                             }
-                            .pointerInput(labels, currentFilter, edgeDrawerWidthPx) {
+                            .pointerInput(labels, currentFilter, edgeDrawerWidthPx, showSearch) {
+                                if (showSearch) return@pointerInput
                                 val startDistancePx = 8.dp.toPx()
                                 val triggerDistancePx = 56.dp.toPx()
                                 awaitEachGesture {
@@ -1423,23 +1571,37 @@ fun DashboardScreen(
                                 }
                             },
                 ) {
+                    val categoryStripFilter = if (showSearch) {
+                        searchOptions.folder?.let { MainViewModel.NoteFilter.Label(it) }
+                            ?: MainViewModel.NoteFilter.All
+                    } else {
+                        currentFilter
+                    }
                     FolderPathStrip(
-                        currentFilter = currentFilter,
+                        currentFilter = categoryStripFilter,
                         labels = labels,
-                        previewPath = previewFolderPath,
-                        pagerCurrentPage = folderPagerState.currentPage,
-                        pagerSettledPage = folderPagerState.settledPage,
-                        pagerScrolling = folderPagerState.isScrollInProgress,
+                        previewPath = if (showSearch) "" else previewFolderPath,
+                        pagerCurrentPage = if (showSearch) -1 else folderPagerState.currentPage,
+                        pagerSettledPage = if (showSearch) -1 else folderPagerState.settledPage,
+                        pagerScrolling = !showSearch && folderPagerState.isScrollInProgress,
                         folderOrderVersion = folderManagerOrderVersion,
                         savedOrderFor = viewModel::getFolderDisplayOrder,
                         onOpenFolder = { folder ->
-                            val filter = MainViewModel.NoteFilter.Label(folder)
-                            if (currentFilter != filter) {
-                                viewModel.setFilter(filter)
+                            if (showSearch) {
+                                viewModel.setSearchFolder(folder)
+                            } else {
+                                val filter = MainViewModel.NoteFilter.Label(folder)
+                                if (currentFilter != filter) {
+                                    viewModel.setFilter(filter)
+                                }
                             }
                         },
                         onShowAllInFolder = { folder ->
-                            viewModel.showAllInFolder(folder)
+                            if (showSearch) {
+                                viewModel.setSearchFolder(folder)
+                            } else {
+                                viewModel.showAllInFolder(folder)
+                            }
                         },
                     )
                 }
@@ -1474,7 +1636,10 @@ fun DashboardScreen(
                             } else {
                                 showManualRefreshProgress = true
                                 manualRefreshLoadingSeen = false
-                                viewModel.refreshNotes()
+                                viewModel.refreshNotes(
+                                    reason = NoteRefreshReason.USER_PULL_REFRESH,
+                                    forceTop = true,
+                                )
                             }
                         }
                     }
@@ -1853,30 +2018,6 @@ fun DashboardScreen(
                                             page == folderPagerState.currentPage &&
                                             page == folderPagerState.settledPage &&
                                             !folderPagerState.isScrollInProgress
-                                    val rootThumbnailAllowed =
-                                        page == folderPagerState.currentPage &&
-                                            !listState.isScrollInProgress &&
-                                            !customSortDragModeEnabled
-                                    LaunchedEffect(
-                                        page,
-                                        rootThumbnailAllowed,
-                                        folderPagerState.currentPage,
-                                        folderPagerState.settledPage,
-                                        folderPagerState.isScrollInProgress,
-                                        listState.isScrollInProgress,
-                                        customSortDragModeEnabled,
-                                        pauseBackgroundWork,
-                                        uiItems,
-                                    ) {
-                                        KardLeafLog.d(
-                                            PAGER_PROBE_TAG,
-                                            "thumbGate root page=$page pathHash=${dashboardPathDebugHash("")} allowed=$rootThumbnailAllowed " +
-                                                "active=${rootThumbnailAllowed && !pauseBackgroundWork} current=${folderPagerState.currentPage} " +
-                                                "settled=${folderPagerState.settledPage} pagerScrolling=${folderPagerState.isScrollInProgress} " +
-                                                "listScrolling=${listState.isScrollInProgress} drag=$customSortDragModeEnabled pauseBackground=$pauseBackgroundWork " +
-                                                "items=${uiItems.size} ${dashboardThumbnailProbeSummary(uiItems)}",
-                                        )
-                                    }
                                     val activeRootNotesCount = remember(allNotes) {
                                         allNotes.count { !it.isTrashed && !it.isArchived }
                                     }
@@ -1915,9 +2056,9 @@ fun DashboardScreen(
                                         unnamedNoteDateFormat = unnamedNoteDateFormat,
                                         searchQuery = searchQuery,
                                         listState = listState,
-                                        loadImageThumbnail = thumbnailLoader(rootThumbnailAllowed),
+                                        loadImageThumbnail = activeThumbnailLoader,
                                         peekImageThumbnail = notePeekThumbnail,
-                                        thumbnailTraceSource = "root page=$page hash=${dashboardPathDebugHash("")} allowed=$rootThumbnailAllowed active=${rootThumbnailAllowed && !pauseBackgroundWork} current=${folderPagerState.currentPage} settled=${folderPagerState.settledPage} pagerScrolling=${folderPagerState.isScrollInProgress}",
+                                        thumbnailTraceSource = "root page=$page hash=${dashboardPathDebugHash("")}",
                                         enableCustomSortDrag = rootCustomSortDragAvailable,
                                         customSortDragHandleEnabled = rootCustomSortDragHandleEnabled,
                                         showCustomSortDragHandleIcon = customSortDragModeEnabled && rootCustomSortDragHandleEnabled,
@@ -1988,10 +2129,6 @@ fun DashboardScreen(
                                             !folderPagerState.isScrollInProgress &&
                                             page == folderPagerState.currentPage &&
                                             page == folderPagerState.settledPage
-                                    val pageThumbnailAllowed =
-                                        page == folderPagerState.currentPage &&
-                                            !pageListState.isScrollInProgress &&
-                                            !customSortDragModeEnabled
                                     LaunchedEffect(
                                         pagePath,
                                         page,
@@ -2008,32 +2145,9 @@ fun DashboardScreen(
                                         logDashboardCustomSortFlash {
                                             "Dashboard pageRender page=$page path=$pagePath isCurrent=$isCurrentPage recursive=$isRecursive sort=$pageSortOrder/$pageSortDirection " +
                                                 "dragAvailable=$pageCustomSortDragAvailable dragHandle=$pageCustomSortDragHandleEnabled currentPage=${folderPagerState.currentPage} settled=${folderPagerState.settledPage} scrolling=${folderPagerState.isScrollInProgress} " +
-                                                "thumbAllowed=$pageThumbnailAllowed pathHash=${dashboardPathDebugHash(pagePath)} items=${dashboardScreenUiItemsFlashSummary(pageItems)} ${dashboardThumbnailProbeSummary(pageItems)}"
+                                                "thumbnailLoading=continuous pathHash=${dashboardPathDebugHash(pagePath)} items=${dashboardScreenUiItemsFlashSummary(pageItems)} ${dashboardThumbnailProbeSummary(pageItems)}"
                                         }
                                     }
-                                    LaunchedEffect(
-                                        pagePath,
-                                        page,
-                                        isCurrentPage,
-                                        pageThumbnailAllowed,
-                                        folderPagerState.currentPage,
-                                        folderPagerState.settledPage,
-                                        folderPagerState.isScrollInProgress,
-                                        pageListState.isScrollInProgress,
-                                        customSortDragModeEnabled,
-                                        pauseBackgroundWork,
-                                        pageItems,
-                                    ) {
-                                        KardLeafLog.d(
-                                            PAGER_PROBE_TAG,
-                                            "thumbGate folder page=$page path=$pagePath pathHash=${dashboardPathDebugHash(pagePath)} isCurrentPath=$isCurrentPage " +
-                                                "allowed=$pageThumbnailAllowed active=${pageThumbnailAllowed && !pauseBackgroundWork} current=${folderPagerState.currentPage} " +
-                                                "settled=${folderPagerState.settledPage} pagerScrolling=${folderPagerState.isScrollInProgress} " +
-                                                "listScrolling=${pageListState.isScrollInProgress} drag=$customSortDragModeEnabled pauseBackground=$pauseBackgroundWork " +
-                                                "items=${pageItems.size} ${dashboardThumbnailProbeSummary(pageItems)}",
-                                        )
-                                    }
-
                                     NoteGrid(
                                         uiItems = pageItems,
                                         selectedNotes = selectedNotes,
@@ -2058,9 +2172,9 @@ fun DashboardScreen(
                                         unnamedNoteDateFormat = unnamedNoteDateFormat,
                                         searchQuery = searchQuery,
                                         listState = pageListState,
-                                        loadImageThumbnail = thumbnailLoader(pageThumbnailAllowed),
+                                        loadImageThumbnail = activeThumbnailLoader,
                                         peekImageThumbnail = notePeekThumbnail,
-                                        thumbnailTraceSource = "folder page=$page hash=${dashboardPathDebugHash(pagePath)} allowed=$pageThumbnailAllowed active=${pageThumbnailAllowed && !pauseBackgroundWork} current=${folderPagerState.currentPage} settled=${folderPagerState.settledPage} pagerScrolling=${folderPagerState.isScrollInProgress}",
+                                        thumbnailTraceSource = "folder page=$page hash=${dashboardPathDebugHash(pagePath)}",
                                         enableCustomSortDrag = pageCustomSortDragAvailable,
                                         customSortDragHandleEnabled = pageCustomSortDragHandleEnabled,
                                         showCustomSortDragHandleIcon = customSortDragModeEnabled && pageCustomSortDragHandleEnabled,
@@ -2154,9 +2268,9 @@ fun DashboardScreen(
                                 unnamedNoteDateFormat = unnamedNoteDateFormat,
                                 searchQuery = searchQuery,
                                 listState = listState,
-                                loadImageThumbnail = thumbnailLoader(!listState.isScrollInProgress && !customSortDragModeEnabled),
+                                loadImageThumbnail = activeThumbnailLoader,
                                 peekImageThumbnail = notePeekThumbnail,
-                                thumbnailTraceSource = "single hash=${dashboardPathDebugHash(currentFolderPath)} allowed=${!listState.isScrollInProgress && !customSortDragModeEnabled} active=${!listState.isScrollInProgress && !customSortDragModeEnabled && !pauseBackgroundWork}",
+                                thumbnailTraceSource = "single hash=${dashboardPathDebugHash(currentFolderPath)}",
                                 enableCustomSortDrag = currentFolderCustomSortDragEnabled,
                                 customSortDragHandleEnabled = currentFolderCustomSortDragEnabled,
                                 showCustomSortDragHandleIcon = customSortDragModeEnabled && currentFolderCustomSortDragEnabled,
@@ -2245,6 +2359,13 @@ fun DashboardScreen(
                 labels = labels,
                 notes = allNotes,
                 currentFilter = currentFilter,
+                showTags = folderNavigationShowTags,
+                editMode = folderNavigationEditMode,
+                onEditModeChange = { folderNavigationEditMode = it },
+                focusedParentPath = folderNavigationFocusedParentPath,
+                onFocusedParentPathChange = { folderNavigationFocusedParentPath = it },
+                yamlTags = yamlTags,
+                noteCountByYamlTag = noteCountByYamlTag,
                 dragProgress = folderNavigationPanelProgress,
                 folderOrderVersion = folderManagerOrderVersion,
                 getFolderDisplayOrder = viewModel::getFolderDisplayOrder,
@@ -2539,9 +2660,13 @@ private fun RandomNoteReviewView(
 
                     LaunchedEffect(note.id, note.content) {
                         previewContent = note.content
-                        previewContent = runCatching {
+                        previewContent = try {
                             viewModel.preparePreviewMarkdown(note.content, note.folder)
-                        }.getOrDefault(note.content)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (_: Exception) {
+                            note.content
+                        }
                     }
 
                     Box(modifier = Modifier.fillMaxSize()) {

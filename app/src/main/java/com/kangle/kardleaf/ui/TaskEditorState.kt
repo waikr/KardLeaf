@@ -10,6 +10,12 @@ import androidx.compose.runtime.setValue
 import com.kangle.kardleaf.data.database.TaskEntity
 import com.kangle.kardleaf.data.task.TaskRepeat
 
+internal enum class TaskEditorSaveState {
+    Idle,
+    Saving,
+    Failed,
+}
+
 internal class TaskEditorState(
     textState: MutableState<String>,
     doneState: MutableState<Boolean>,
@@ -24,12 +30,11 @@ internal class TaskEditorState(
     repeatRuleState: MutableState<String>,
     notesState: MutableState<String>,
     errorState: MutableState<String?>,
+    noticeState: MutableState<String?>,
     showGroupMenuState: MutableState<Boolean>,
-    parentTaskSelectionChangedState: MutableState<Boolean>,
     showInlineChildInputState: MutableState<Boolean>,
     childTaskTextsState: MutableState<List<String>>,
     focusedChildIndexState: MutableState<Int?>,
-    showParentMenuState: MutableState<Boolean>,
     showPriorityMenuState: MutableState<Boolean>,
     showDatePickerState: MutableState<Boolean>,
 ) {
@@ -46,12 +51,11 @@ internal class TaskEditorState(
     var repeatRule by repeatRuleState
     var notes by notesState
     var error by errorState
+    var notice by noticeState
     var showGroupMenu by showGroupMenuState
-    var parentTaskSelectionChanged by parentTaskSelectionChangedState
     var showInlineChildInput by showInlineChildInputState
     var childTaskTexts by childTaskTextsState
     var focusedChildIndex by focusedChildIndexState
-    var showParentMenu by showParentMenuState
     var showPriorityMenu by showPriorityMenuState
     var showDatePicker by showDatePickerState
 }
@@ -81,13 +85,12 @@ internal fun rememberTaskEditorState(
     task: TaskEntity?,
     initialGroupId: Long?,
     initialParentTaskId: Long?,
-    parentTaskIds: Map<Long, Long>,
 ): TaskEditorState {
     val text = rememberSaveable(task?.id) { mutableStateOf(task?.taskText.orEmpty()) }
     val done = rememberSaveable(task?.id) { mutableStateOf(task?.done ?: false) }
     val groupId = rememberSaveable(task?.id, initialGroupId) { mutableStateOf(task?.groupId ?: initialGroupId) }
     val parentTaskId = rememberSaveable(task?.id, initialParentTaskId) {
-        mutableStateOf(initialParentTaskId ?: task?.parentTaskId ?: task?.id?.let(parentTaskIds::get))
+        mutableStateOf(initialParentTaskId ?: task?.parentTaskId)
     }
     val priority = rememberSaveable(task?.id) { mutableStateOf(task?.priority ?: 0) }
     val dueAt = rememberSaveable(task?.id) { mutableStateOf(task?.dueAt) }
@@ -100,12 +103,11 @@ internal fun rememberTaskEditorState(
     val repeatRule = rememberSaveable(task?.id) { mutableStateOf(task?.repeatRule ?: TaskRepeat.NONE.value) }
     val notes = rememberSaveable(task?.id) { mutableStateOf(task?.notes.orEmpty()) }
     val error = rememberSaveable(task?.id) { mutableStateOf<String?>(null) }
+    val notice = rememberSaveable(task?.id) { mutableStateOf<String?>(null) }
     val showGroupMenu = rememberSaveable(task?.id) { mutableStateOf(false) }
-    val parentTaskSelectionChanged = rememberSaveable(task?.id, initialParentTaskId) { mutableStateOf(false) }
     val showInlineChildInput = rememberSaveable(task?.id) { mutableStateOf(false) }
     val childTaskTexts = rememberSaveable(task?.id) { mutableStateOf(emptyList<String>()) }
     val focusedChildIndex = rememberSaveable(task?.id) { mutableStateOf<Int?>(null) }
-    val showParentMenu = rememberSaveable(task?.id) { mutableStateOf(false) }
     val showPriorityMenu = rememberSaveable(task?.id) { mutableStateOf(false) }
     val showDatePicker = rememberSaveable(task?.id) { mutableStateOf(false) }
 
@@ -124,12 +126,11 @@ internal fun rememberTaskEditorState(
             repeatRuleState = repeatRule,
             notesState = notes,
             errorState = error,
+            noticeState = notice,
             showGroupMenuState = showGroupMenu,
-            parentTaskSelectionChangedState = parentTaskSelectionChanged,
             showInlineChildInputState = showInlineChildInput,
             childTaskTextsState = childTaskTexts,
             focusedChildIndexState = focusedChildIndex,
-            showParentMenuState = showParentMenu,
             showPriorityMenuState = showPriorityMenu,
             showDatePickerState = showDatePicker,
         )

@@ -1,6 +1,7 @@
 package com.kangle.kardleaf.ui.viewmodel
 
 import com.kangle.kardleaf.data.repository.RoomNoteRepository
+import com.kangle.kardleaf.data.repository.note.NotePrivacyStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -12,19 +13,39 @@ internal class PrivacyViewModel(
 ) {
     val notes = repository.getAllPrivacyNotes().stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun save(id: Long, title: String, content: String, onDone: () -> Unit) {
-        scope.launch {
-            repository.savePrivacyNote(id, title, content)
-            onDone()
-        }
+    fun hasVault(onResult: (Boolean) -> Unit) {
+        scope.launch { onResult(runCatching { repository.hasPrivacyVault() }.getOrDefault(true)) }
     }
 
-    fun saveAndReturnId(id: Long, title: String, content: String, onSaved: (Long) -> Unit) {
-        scope.launch { onSaved(repository.savePrivacyNote(id, title, content)) }
+    fun initialize(password: String, onResult: (Result<Unit>) -> Unit) {
+        scope.launch { onResult(runCatching { repository.initializePrivacyVault(password) }) }
     }
 
-    fun delete(id: Long) {
-        scope.launch { repository.deletePrivacyNote(id) }
+    fun unlock(password: String, onResult: (Result<Unit>) -> Unit) {
+        scope.launch { onResult(runCatching { repository.unlockPrivacyVault(password) }) }
+    }
+
+    fun prepareBiometricUnlock(onResult: (Result<NotePrivacyStore.BiometricUnlockRequest?>) -> Unit) {
+        scope.launch { onResult(runCatching { repository.preparePrivacyBiometricUnlock() }) }
+    }
+
+    fun unlockWithBiometric(
+        request: NotePrivacyStore.BiometricUnlockRequest,
+        onResult: (Result<Unit>) -> Unit,
+    ) {
+        scope.launch { onResult(runCatching { repository.unlockPrivacyVaultWithBiometric(request) }) }
+    }
+
+    fun lock() {
+        scope.launch { repository.lockPrivacyVault() }
+    }
+
+    fun save(id: Long, title: String, content: String, onDone: (Result<Long>) -> Unit) {
+        scope.launch { onDone(runCatching { repository.savePrivacyNote(id, title, content) }) }
+    }
+
+    fun delete(id: Long, onDone: (Result<Unit>) -> Unit = {}) {
+        scope.launch { onDone(runCatching { repository.deletePrivacyNote(id) }) }
     }
 
     fun export(onSuccess: (String) -> Unit, onError: (String) -> Unit) {

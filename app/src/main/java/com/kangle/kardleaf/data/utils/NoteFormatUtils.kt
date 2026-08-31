@@ -14,16 +14,28 @@ object NoteFormatUtils {
     const val TAGS_KEY = "tags"
     const val SOURCE_TYPE_KEY = "source_type"
     const val SOURCE_URL_KEY = "source_url"
+    const val SOURCE_TYPE_WEB = "web"
+    const val SOURCE_TYPE_WEB_ONLINE = "web_online"
     const val NOTE_TYPE_KEY = "note_type"
     const val NOTE_TYPE_MINDMAP = "mindmap"
     private val REMOVED_LEGACY_FRONT_MATTER_KEYS = setOf("color", "reminder")
 
     internal val obsidianImageReferenceRegex = Regex("""!\[\[([^|\]]+)(?:\|[^\]]*)?]]""")
-    internal val markdownImageReferenceRegex = Regex("""!\[[^]]*]\(([^)]+)\)""")
+    internal val markdownImageReferenceRegex = Regex("""!\[[^]]*]\(([^)\n]*(?:\)(?!\s*!\[)[^)\n]*)*)\)""")
     internal val localMarkdownImageReferenceRegex =
-        Regex("""!\[[^]]*]\((?!https?://|data:|file:)([^)]+)\)""", RegexOption.IGNORE_CASE)
+        Regex("""!\[[^]]*]\((?!https?://|data:|file:)([^)\n]*(?:\)(?!\s*!\[)[^)\n]*)*)\)""", RegexOption.IGNORE_CASE)
     internal val localMarkdownImageReferenceWithAltRegex =
-        Regex("""!\[([^]]*)]\((?!https?://|data:|file:)([^)]+)\)""", RegexOption.IGNORE_CASE)
+        Regex("""!\[([^]]*)]\((?!https?://|data:|file:)([^)\n]*(?:\)(?!\s*!\[)[^)\n]*)*)\)""", RegexOption.IGNORE_CASE)
+
+    data class MarkdownImageReference(
+        val reference: String,
+        val alt: String,
+        val start: Int,
+        val endExclusive: Int,
+        val referenceStart: Int,
+        val referenceEndExclusive: Int,
+        val obsidian: Boolean,
+    )
     private val headingPrefixRegex = Regex("""^#{1,6}\s+""")
     private val taskPrefixRegex = Regex("""^\s*[-*+]\s+\[[ xX]]\s+""")
     private val bulletPrefixRegex = Regex("""^\s*[-*+]\s+""")
@@ -64,24 +76,133 @@ object NoteFormatUtils {
 
     fun rewriteRelativeImageRefsForMove(markdown: String, fromFolder: String, toFolder: String): String {
         if (fromFolder == toFolder) return markdown
-        val withObsidian = obsidianImageReferenceRegex.replace(markdown) { match ->
-            val ref = match.groupValues[1].trim()
-            if (!isLocalRelativeImageReference(ref)) {
-                match.value
-            } else {
-                val realPath = normalizePath(joinPath(fromFolder, ref))
+        return replaceImageReferences(markdown) { image ->
+            val ref = image.reference
+            if (!isLocalRelativeImageReference(ref)) return@replaceImageReferences null
+            val realPath = normalizePath(joinPath(fromFolder, ref))
+            if (image.obsidian) {
                 "![[${relativePath(toFolder, realPath)}]]"
+            } else {
+                "![${image.alt}](${relativePath(toFolder, realPath)})"
             }
         }
-        return localMarkdownImageReferenceWithAltRegex.replace(withObsidian) { match ->
-            val alt = match.groupValues[1]
-            val ref = match.groupValues[2].trim().trim('"', '\'')
-            if (!isLocalRelativeImageReference(ref)) {
-                match.value
-            } else {
-                val realPath = normalizePath(joinPath(fromFolder, ref))
-                "![${alt}](${relativePath(toFolder, realPath)})"
+    }
+
+    fun findMarkdownImageReferences(markdown: String): List<MarkdownImageReference> {
+        if (markdown.isBlank()) return emptyList()
+        val result = mutableListOf<MarkdownImageReference>()
+        var cursor = 0
+        while (cursor < markdown.length - 2) {
+            val start = markdown.indexOf("![", cursor)
+            if (start < 0) break
+            if (start + 2 < markdown.length && markdown[start + 2] == '[') {
+                val close = markdown.indexOf("]]", start + 3)
+                if (close >= 0) {
+                    val raw = markdown.substring(start + 3, close)
+                    val rawReference = raw.substringBefore('|')
+                    val ref = rawReference.trim()
+                    if (ref.isNotBlank()) {
+                        val leading = rawReference.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0)
+                        val trimmedEnd = rawReference.indexOfLast { !it.isWhitespace() }.let { if (it < 0) leading else it + 1 }
+                        result += MarkdownImageReference(
+                            reference = ref,
+                            alt = "",
+                            start = start,
+                            endExclusive = close + 2,
+                            referenceStart = start + 3 + leading,
+                            referenceEndExclusive = start + 3 + trimmedEnd,
+                            obsidian = true,
+                        )
+                    }
+                    cursor = close + 2
+                    continue
+                }
             }
+            val altEnd = markdown.indexOf(']', start + 2)
+            if (altEnd < 0 || altEnd + 1 >= markdown.length) break
+            val alt = markdown.substring(start + 2, altEnd)
+            if (markdown[altEnd + 1] == '(') {
+                var position = altEnd + 2
+                while (position < markdown.length && markdown[position].isWhitespace() && markdown[position] != '\n') position++
+                val angleWrapped = position < markdown.length && markdown[position] == '<'
+                val refStart = if (angleWrapped) position + 1 else position
+                var depth = 0
+                var refEnd = refStart
+                var destinationEnd = -1
+                var closePosition = -1
+                if (angleWrapped) {
+                    val angleEnd = markdown.indexOf('>', refStart)
+                    if (angleEnd >= 0) {
+                        refEnd = angleEnd
+                        closePosition = markdown.indexOf(')', angleEnd + 1)
+                    }
+                } else {
+                    while (refEnd < markdown.length && markdown[refEnd] != '\n') {
+                        if (depth == 0 && markdown[refEnd].isWhitespace()) {
+                            var titleProbe = refEnd
+                            while (titleProbe < markdown.length && markdown[titleProbe].isWhitespace() && markdown[titleProbe] != '\n') titleProbe++
+                            if (titleProbe < markdown.length && (markdown[titleProbe] == '"' || markdown[titleProbe] == '\'')) {
+                                val quote = markdown[titleProbe]
+                                val titleEnd = markdown.indexOf(quote, titleProbe + 1)
+                                if (titleEnd >= 0) {
+                                    var afterTitle = titleEnd + 1
+                                    while (afterTitle < markdown.length && markdown[afterTitle].isWhitespace() && markdown[afterTitle] != '\n') afterTitle++
+                                    if (afterTitle < markdown.length && markdown[afterTitle] == ')') {
+                                        destinationEnd = refEnd
+                                        closePosition = afterTitle
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                        when (markdown[refEnd]) {
+                            '\\' -> refEnd += 2
+                            '(' -> { depth++; refEnd++ }
+                            ')' -> if (depth == 0) { closePosition = refEnd; break } else { depth--; refEnd++ }
+                            else -> refEnd++
+                        }
+                    }
+                }
+                val effectiveRefEnd = destinationEnd.takeIf { it >= 0 } ?: refEnd
+                if (closePosition >= 0 && effectiveRefEnd > refStart) {
+                    val raw = markdown.substring(refStart, effectiveRefEnd)
+                    val ref = raw.trim().trim('"', '\'')
+                    if (ref.isNotBlank()) {
+                        val leading = raw.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0)
+                        val trailing = raw.indexOfLast { !it.isWhitespace() }.let { if (it < 0) 0 else raw.length - it - 1 }
+                        result += MarkdownImageReference(
+                            reference = ref,
+                            alt = alt,
+                            start = start,
+                            endExclusive = closePosition + 1,
+                            referenceStart = refStart + leading,
+                            referenceEndExclusive = effectiveRefEnd - trailing,
+                            obsidian = false,
+                        )
+                        cursor = closePosition + 1
+                        continue
+                    }
+                }
+            }
+            cursor = start + 2
+        }
+        return result
+    }
+
+    private fun replaceImageReferences(
+        markdown: String,
+        replacement: (MarkdownImageReference) -> String?,
+    ): String {
+        val matches = findMarkdownImageReferences(markdown)
+        if (matches.isEmpty()) return markdown
+        return buildString(markdown.length) {
+            var cursor = 0
+            matches.forEach { image ->
+                append(markdown, cursor, image.start)
+                append(replacement(image) ?: markdown.substring(image.start, image.endExclusive))
+                cursor = image.endExclusive
+            }
+            append(markdown, cursor, markdown.length)
         }
     }
 
@@ -225,6 +346,59 @@ object NoteFormatUtils {
             ?.trim()
             ?.lowercase(Locale.ROOT)
             ?.takeIf { it.isNotBlank() }
+
+    fun extractSourceType(frontMatter: FrontMatterData): String? =
+        frontMatter.properties
+            .firstOrNull { it.key.equals(SOURCE_TYPE_KEY, ignoreCase = true) }
+            ?.values
+            ?.firstOrNull()
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?.takeIf { it.isNotBlank() }
+
+    fun extractSourceUrl(frontMatter: FrontMatterData): String? =
+        frontMatter.properties
+            .firstOrNull { it.key.equals(SOURCE_URL_KEY, ignoreCase = true) }
+            ?.values
+            ?.firstOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+    fun extractCreatedAt(frontMatter: FrontMatterData): Long? =
+        extractTimestamp(frontMatter, "created")
+
+    fun extractUpdatedAt(frontMatter: FrontMatterData): Long? =
+        extractTimestamp(frontMatter, "updated")
+
+    fun parseYamlDateTime(value: String): Long? {
+        val cleaned = value.trim().trim('"', '\'').trim()
+        if (cleaned.isBlank()) return null
+        val normalized = cleaned
+            .replace(Regex("([+-]\\d{2}):(\\d{2})$"), "$1$2")
+            .replace(Regex("Z$"), "+0000")
+        val patterns = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+            "yyyy-MM-dd'T'HH:mm:ssZ",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd HH:mm",
+            "yyyy-MM-dd",
+        )
+        return patterns.firstNotNullOfOrNull { pattern ->
+            runCatching {
+                SimpleDateFormat(pattern, Locale.US).apply { isLenient = false }.parse(normalized)?.time
+            }.getOrNull()
+        }
+    }
+
+    private fun extractTimestamp(
+        frontMatter: FrontMatterData,
+        key: String,
+    ): Long? =
+        frontMatter.properties
+            .firstOrNull { it.key.equals(key, ignoreCase = true) }
+            ?.values
+            ?.firstOrNull()
+            ?.let(::parseYamlDateTime)
 
     /** Menu-time check that stops at the first remote Markdown image. */
     fun hasRemoteMarkdownImage(content: CharSequence): Boolean {
@@ -372,9 +546,17 @@ object NoteFormatUtils {
         note: Note,
         existingRawContent: String? = null,
         replaceTags: Boolean = false,
+        createdAtOverride: Date? = null,
+        updatedAtOverride: Date? = null,
     ): String {
         return buildString {
-            val frontMatterLines = buildKardLeafFrontMatter(note, existingRawContent, replaceTags)
+            val frontMatterLines = buildKardLeafFrontMatter(
+                note = note,
+                existingRawContent = existingRawContent,
+                replaceTags = replaceTags,
+                createdAtOverride = createdAtOverride,
+                updatedAtOverride = updatedAtOverride,
+            )
             if (frontMatterLines.isNotEmpty()) {
                 append("---\n")
                 frontMatterLines.forEach { line ->
@@ -391,21 +573,26 @@ object NoteFormatUtils {
         note: Note,
         existingRawContent: String?,
         replaceTags: Boolean,
+        createdAtOverride: Date?,
+        updatedAtOverride: Date?,
     ): List<String> {
         val frontMatterLines = existingRawContent?.let(::preserveUnknownFrontMatter).orEmpty().toMutableList()
         val existingId = findTopLevelValue(frontMatterLines, KARDLEAF_ID_KEY)
-        val nowText = formatYamlDateTime(Date())
+        val updatedText = formatYamlDateTime(updatedAtOverride ?: Date())
 
         if (existingId.isNullOrBlank()) {
             frontMatterLines.add(0, "$KARDLEAF_ID_KEY: ${generateKardLeafId()}")
         }
-        if (findTopLevelValue(frontMatterLines, "created").isNullOrBlank()) {
-            val createdText = formatYamlDateTime(note.createdAt)
+        val existingCreated = findTopLevelValue(frontMatterLines, "created")
+        if (createdAtOverride != null && !existingCreated.isNullOrBlank()) {
+            upsertTopLevelValue(frontMatterLines, "created", formatYamlDateTime(createdAtOverride))
+        } else if (existingCreated.isNullOrBlank()) {
+            val createdText = formatYamlDateTime(createdAtOverride ?: note.createdAt)
             val insertIndex = (frontMatterLines.indexOfFirst { topLevelKeyOf(it)?.equals(KARDLEAF_ID_KEY, ignoreCase = true) == true } + 1)
                 .coerceIn(0, frontMatterLines.size)
             frontMatterLines.add(insertIndex, "created: $createdText")
         }
-        upsertTopLevelValue(frontMatterLines, "updated", nowText)
+        upsertTopLevelValue(frontMatterLines, "updated", updatedText)
         val tagsForFile =
             if (replaceTags || note.tags.isNotEmpty()) {
                 normalizeTags(note.tags)
@@ -514,7 +701,7 @@ object NoteFormatUtils {
     private fun generateKardLeafId(): String =
         "kl_${System.currentTimeMillis().toString(16)}_${UUID.randomUUID().toString().replace("-", "").take(8)}"
 
-    private fun formatYamlDateTime(date: Date): String {
+    internal fun formatYamlDateTime(date: Date): String {
         val raw = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).format(date)
         return raw.replace(Regex("([+-]\\d{2})(\\d{2})$"), "$1:$2")
     }

@@ -54,6 +54,7 @@ declare global {
 }
 
 const VERSION = 'kardleaf-swarmnote-core-2026-06-27';
+const SEARCH_ACTIVE_CLASS = 'kl-search-active';
 const root = document.getElementById('editorRoot');
 const statusEl = document.getElementById('status');
 const imageDataUris = new Map<string, string>();
@@ -85,51 +86,17 @@ let scrollSession: {
 } | null = null;
 let scrollSettleTimer = 0;
 let scrollMetricFrame = 0;
-let cursorEnsureTimer = 0;
-let viewportEnsureTimer = 0;
-let lastViewportKeyboardInsetPx = -1;
-let lastAndroidKeyboardInsetPx = 0;
-let viewportKeyboardSyncInstalled = false;
-let contentApplied = false;
-let contentApplying = false;
-let contentAppliedAt = 0;
-let pendingTap:
-  | {
-      x: number;
-      y: number;
-      startAt: number;
-      maxMove: number;
-      selectionSetAtStart: number;
-    }
-  | null = null;
-let pendingTapBeforeContentApplied:
-  | {
-      x: number;
-      y: number;
-      at: number;
-      selectionSetAtStart: number;
-      reason: string;
-    }
-  | null = null;
-let lastSelectionSetAt = 0;
 let selectionRevision = 0;
-const nativeSelectionDrag = {
-  pointerDown: false,
-  active: false,
-  cursorOnly: false,
-  x: 0,
-  y: 0,
-  revisionAtDown: 0,
-  downAnchor: 0,
-  downHead: 0,
-  fixedAnchor: 0,
-  frame: 0,
-  lastFrameAt: 0,
-  frameCount: 0,
-  totalScroll: 0,
-  startFrom: 0,
-  startTo: 0,
-};
+let pointerSelectionTrace: {
+  startedAt: number;
+  endedAt: number;
+  x: number;
+  y: number;
+  position: number | null;
+  maxMove: number;
+  target: string;
+  revisionAtStart: number;
+} | null = null;
 let titleHeader: HTMLDivElement | null = null;
 let titleInput: HTMLInputElement | null = null;
 let currentTitle = '';
@@ -155,6 +122,68 @@ function log(tag: string, message: string) {
   } catch {
     // Console may be unavailable in older WebView startup failure paths.
   }
+}
+
+function domNodeTrace(node: Node | null) {
+  if (!node) return 'none';
+  if (node.nodeType === Node.TEXT_NODE) return `text(${node.parentElement?.tagName.toLowerCase() ?? 'none'})`;
+  if (!(node instanceof Element)) return node.nodeName.toLowerCase();
+  const row = node.closest<HTMLElement>('tr[data-row-idx]')?.dataset.rowIdx;
+  const cell = node.closest<HTMLElement>('th[contenteditable],td[contenteditable]');
+  return `${node.tagName.toLowerCase()}.${Array.from(node.classList).join('.') || '-'}${
+    cell ? ` cell=${cell.tagName.toLowerCase()}:${row ?? 'header'}:${cell.dataset.colIdx ?? '?'}` : ''
+  }`;
+}
+
+function domSelectionTrace() {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return 'dom=none';
+  const caret = selection.getRangeAt(0).cloneRange();
+  caret.collapse(false);
+  const rect = caret.getBoundingClientRect();
+  return `dom=${domNodeTrace(selection.anchorNode)}:${selection.anchorOffset}->${
+    domNodeTrace(selection.focusNode)
+  }:${selection.focusOffset} caret=${rect.left.toFixed(1)},${rect.top.toFixed(1)},${rect.bottom.toFixed(1)}`;
+}
+
+function scrollTrace(stage: string) {
+  const view = editor?.view;
+  if (!view) return;
+  const scroller = view.scrollDOM;
+  const active = document.activeElement;
+  const activeRect = active instanceof Element ? active.getBoundingClientRect() : null;
+  const head = view.state.selection.main.head;
+  const cmRect = view.coordsAtPos(head);
+  log(
+    'KardLeafCM6Scroll',
+    `${stage} top=${scroller.scrollTop.toFixed(1)} height=${scroller.clientHeight} ` +
+      `active=${domNodeTrace(active)} activeRect=${activeRect ? `${activeRect.top.toFixed(1)}:${activeRect.bottom.toFixed(1)}` : 'none'} ` +
+      `cmHead=${head} cmRect=${cmRect ? `${cmRect.top.toFixed(1)}:${cmRect.bottom.toFixed(1)}` : 'none'} ${domSelectionTrace()}`,
+  );
+}
+
+function revealActiveEditorCaret() {
+  const control = editor;
+  if (!control) return 'missing';
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active !== control.view.contentDOM && active.isContentEditable) {
+    active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return 'contenteditable';
+  }
+  if (!control.view.hasFocus) return 'ignored';
+  control.view.dispatch({ scrollIntoView: true });
+  return 'codemirror';
+}
+
+function prepareImeReveal(imeInsetPx: unknown) {
+  const insetPx = Math.max(0, Number(imeInsetPx) || 0);
+  if (insetPx <= 0) return 'hidden';
+  const result = revealActiveEditorCaret();
+  log(
+    'KardLeafCM6Scroll',
+    `ime viewport insetPx=${insetPx} result=${result} head=${editor?.view.state.selection.main.head ?? -1}`,
+  );
+  return result;
 }
 
 function reportError(message: string, error?: unknown) {
@@ -379,6 +408,10 @@ function notifySelection() {
   callBridge('onSelectionChanged', [selection.from, selection.to]);
 }
 
+function setSearchActiveClass(active: boolean) {
+  editor?.view.dom.classList.toggle(SEARCH_ACTIVE_CLASS, active);
+}
+
 function setTouchSelecting(view: EditorView, selecting: boolean) {
   if (view.state.field(mouseSelectingField, false) === selecting) return;
   view.dispatch({
@@ -387,159 +420,30 @@ function setTouchSelecting(view: EditorView, selecting: boolean) {
   });
 }
 
-function nativeSelectionVisibleBottom(rect: DOMRect) {
-  const keyboardInset = Math.max(
-    0,
-    lastAndroidKeyboardInsetPx,
-    lastViewportKeyboardInsetPx,
-    computeViewportKeyboardInsetPx(),
-  );
-  return Math.max(rect.top + 1, rect.bottom - keyboardInset);
+function syncNativeSelectionState(view: EditorView) {
+  const selection = window.getSelection();
+  const selecting = !!selection &&
+    !selection.isCollapsed &&
+    view.contentDOM.contains(selection.anchorNode) &&
+    view.contentDOM.contains(selection.focusNode);
+  setTouchSelecting(view, selecting);
 }
 
-function nativeSelectionEdgeVelocity(view: EditorView, y: number) {
-  const rect = view.scrollDOM.getBoundingClientRect();
-  const visibleBottom = nativeSelectionVisibleBottom(rect);
-  const edgeSize = Math.min(72, Math.max(1, visibleBottom - rect.top) * 0.18);
-  if (y < rect.top + edgeSize) {
-    const depth = Math.max(0, Math.min(1, (rect.top + edgeSize - y) / edgeSize));
-    return -(3 + depth * depth * 21);
-  }
-  if (y > visibleBottom - edgeSize) {
-    const depth = Math.max(0, Math.min(1, (y - (visibleBottom - edgeSize)) / edgeSize));
-    return 3 + depth * depth * 21;
-  }
-  return 0;
-}
-
-function stopNativeSelectionAutoScroll(reason: string) {
-  if (nativeSelectionDrag.frame) {
-    cancelAnimationFrame(nativeSelectionDrag.frame);
-    nativeSelectionDrag.frame = 0;
-  }
-  if (nativeSelectionDrag.frameCount > 0) {
-    const view = editor?.view;
-    const selection = view?.state.selection.main;
-    log(
-      'KardLeafAutoScrollTrace',
-      `stop reason=${reason} frames=${nativeSelectionDrag.frameCount} ` +
-        `scrollDelta=${nativeSelectionDrag.totalScroll.toFixed(2)} ` +
-        `selection=${nativeSelectionDrag.startFrom}-${nativeSelectionDrag.startTo}->${selection?.from ?? -1}-${selection?.to ?? -1}`,
-    );
-  }
-  nativeSelectionDrag.lastFrameAt = 0;
-  nativeSelectionDrag.frameCount = 0;
-  nativeSelectionDrag.totalScroll = 0;
-}
-
-function runNativeSelectionAutoScroll(timestamp: number) {
-  nativeSelectionDrag.frame = 0;
-  const view = editor?.view;
-  if (!view || !nativeSelectionDrag.pointerDown || !nativeSelectionDrag.active) return;
-
-  const velocity = nativeSelectionEdgeVelocity(view, nativeSelectionDrag.y);
-  if (velocity === 0) return;
-
-  const frameMs = nativeSelectionDrag.lastFrameAt > 0
-    ? Math.max(1, Math.min(32, timestamp - nativeSelectionDrag.lastFrameAt))
-    : 16.67;
-  nativeSelectionDrag.lastFrameAt = timestamp;
-  const scroller = view.scrollDOM;
-  const before = scroller.scrollTop;
-  const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-  scroller.scrollTop = Math.max(0, Math.min(maxScrollTop, before + velocity * frameMs / 16.67));
-  const scrollDelta = scroller.scrollTop - before;
-
-  if (scrollDelta !== 0) {
-    const rect = scroller.getBoundingClientRect();
-    const x = Math.max(rect.left + 4, Math.min(rect.right - 4, nativeSelectionDrag.x));
-    const y = velocity < 0 ? rect.top + 4 : nativeSelectionVisibleBottom(rect) - 4;
-    const pos = view.posAtCoords({ x, y });
-    if (typeof pos === 'number') {
-      const safePos = Math.max(0, Math.min(view.state.doc.length, pos));
-      const selection = nativeSelectionDrag.cursorOnly
-        ? EditorSelection.cursor(safePos)
-        : EditorSelection.range(nativeSelectionDrag.fixedAnchor, safePos);
-      view.dispatch({
-        selection,
-        annotations: Transaction.addToHistory.of(false),
-      });
+function editorPositionAtPoint(view: EditorView, x: number, y: number) {
+  const range = document.caretRangeFromPoint(x, y);
+  const rangeElement = range?.startContainer.nodeType === Node.TEXT_NODE
+    ? range.startContainer.parentElement
+    : range?.startContainer instanceof Element
+      ? range.startContainer
+      : null;
+  if (range && rangeElement?.closest('.cm-line') && view.contentDOM.contains(range.startContainer)) {
+    try {
+      return view.posAtDOM(range.startContainer, range.startOffset);
+    } catch {
+      // Fall back to CodeMirror's geometry mapping for non-document widgets.
     }
-    nativeSelectionDrag.frameCount += 1;
-    nativeSelectionDrag.totalScroll += scrollDelta;
   }
-
-  nativeSelectionDrag.frame = requestAnimationFrame(runNativeSelectionAutoScroll);
-}
-
-function scheduleNativeSelectionAutoScroll() {
-  const view = editor?.view;
-  if (!view || nativeSelectionEdgeVelocity(view, nativeSelectionDrag.y) === 0) {
-    stopNativeSelectionAutoScroll('left-edge');
-    return;
-  }
-  if (!nativeSelectionDrag.frame) {
-    nativeSelectionDrag.frame = requestAnimationFrame(runNativeSelectionAutoScroll);
-  }
-}
-
-function handleNativeSelectionPointer(action: unknown, rawX: unknown, rawY: unknown) {
-  const view = editor?.view;
-  if (!view) return 'missing';
-  const pointerAction = String(action || '').toLowerCase();
-  const x = Number(rawX);
-  const y = Number(rawY);
-
-  if (pointerAction === 'down') {
-    stopNativeSelectionAutoScroll('new-pointer');
-    const selection = view.state.selection.main;
-    nativeSelectionDrag.pointerDown = true;
-    nativeSelectionDrag.active = false;
-    nativeSelectionDrag.x = Number.isFinite(x) ? x : 0;
-    nativeSelectionDrag.y = Number.isFinite(y) ? y : 0;
-    nativeSelectionDrag.revisionAtDown = selectionRevision;
-    nativeSelectionDrag.downAnchor = selection.anchor;
-    nativeSelectionDrag.downHead = selection.head;
-    nativeSelectionDrag.startFrom = selection.from;
-    nativeSelectionDrag.startTo = selection.to;
-    setTouchSelecting(view, true);
-    return 'tracking';
-  }
-
-  if (pointerAction === 'move' && nativeSelectionDrag.pointerDown) {
-    nativeSelectionDrag.x = Number.isFinite(x) ? x : nativeSelectionDrag.x;
-    nativeSelectionDrag.y = Number.isFinite(y) ? y : nativeSelectionDrag.y;
-    const selection = view.state.selection.main;
-    const selectionChanged = selectionRevision !== nativeSelectionDrag.revisionAtDown;
-    const edgeDrag = !selection.empty && nativeSelectionEdgeVelocity(view, nativeSelectionDrag.y) !== 0;
-    if (!nativeSelectionDrag.active && (selectionChanged || edgeDrag)) {
-      const anchorDelta = Math.abs(selection.anchor - nativeSelectionDrag.downAnchor);
-      const headDelta = Math.abs(selection.head - nativeSelectionDrag.downHead);
-      nativeSelectionDrag.active = true;
-      nativeSelectionDrag.cursorOnly = selection.empty;
-      nativeSelectionDrag.fixedAnchor = anchorDelta > headDelta ? selection.head : selection.anchor;
-      nativeSelectionDrag.startFrom = selection.from;
-      nativeSelectionDrag.startTo = selection.to;
-      log(
-        'KardLeafAutoScrollTrace',
-        `start cursorOnly=${nativeSelectionDrag.cursorOnly} fixed=${nativeSelectionDrag.fixedAnchor} ` +
-          `selection=${selection.from}-${selection.to} reason=${selectionChanged ? 'selection-change' : 'edge'} ` +
-          `x=${nativeSelectionDrag.x.toFixed(1)} y=${nativeSelectionDrag.y.toFixed(1)}`,
-      );
-    }
-    if (nativeSelectionDrag.active) scheduleNativeSelectionAutoScroll();
-    return nativeSelectionDrag.active ? 'active' : 'tracking';
-  }
-
-  if (pointerAction === 'up' || pointerAction === 'cancel') {
-    nativeSelectionDrag.pointerDown = false;
-    nativeSelectionDrag.active = false;
-    stopNativeSelectionAutoScroll(pointerAction);
-    setTouchSelecting(view, false);
-    return 'stopped';
-  }
-
-  return nativeSelectionDrag.active ? 'active' : 'tracking';
+  return view.posAtCoords({ x, y }, false);
 }
 
 function emitScrollMetrics(
@@ -586,6 +490,7 @@ function handleScroll() {
       maxFrameMs: 0,
     };
     emitScrollMetrics('start');
+    scrollTrace('start');
   } else {
     const delta = timestamp - scrollSession.lastFrame;
     scrollSession.lastFrame = timestamp;
@@ -610,6 +515,7 @@ function handleScroll() {
       avg,
       scrollSession.slowFrames <= Math.max(2, scrollSession.frames * 0.2),
     );
+    scrollTrace('settled');
     scrollSession = null;
   }, 180);
 }
@@ -786,230 +692,20 @@ function createKardLeafWikiImagePlugin(): EditorPlugin {
 }
 
 
-function computeViewportKeyboardInsetPx() {
-  const viewport = window.visualViewport;
-  const layoutHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0);
-  if (!viewport || layoutHeight <= 0) return 0;
-
-  const visibleBottom = viewport.height + viewport.offsetTop;
-  const rawInset = Math.max(0, Math.round(layoutHeight - visibleBottom));
-  // Safety cap: if Android/WebView already resized the page, or a device reports
-  // a full root-window IME height, using the raw value can push short notes to a
-  // large blank area. Keep only a reasonable visual-viewport overlap.
-  const cap = Math.round(layoutHeight * 0.62);
-  return Math.min(rawInset, cap);
-}
-
-function computeScrollBottomMarginPx(keyboardInsetPx: number) {
-  const layoutHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0);
-  // Match Swarm's RN WebView behavior more closely: always keep enough bottom
-  // space so the last lines can scroll above the keyboard, even on Android
-  // WebView builds where visualViewport does not report the IME overlap.
-  const baseMargin = layoutHeight > 0 ? Math.round(layoutHeight * 0.5) : 240;
-  return Math.max(96, baseMargin, Math.max(0, keyboardInsetPx) + 32);
-}
-
-function editorHasFocus() {
-  const view = editor?.view;
-  if (!view) return false;
-  return view.hasFocus || Boolean(document.activeElement && root?.contains(document.activeElement));
-}
-
-function applyViewportKeyboardInset(reason: string) {
-  const inset = Math.max(computeViewportKeyboardInsetPx(), lastAndroidKeyboardInsetPx);
-  if (inset === lastViewportKeyboardInsetPx) return inset;
-  lastViewportKeyboardInsetPx = inset;
-  const margin = computeScrollBottomMarginPx(inset);
-  document.documentElement.style.setProperty('--kardleaf-ime-safe-bottom', `${inset}px`);
-  editor?.setScrollBottomMargin(margin);
-  log('KardLeafCM6Input', `viewport keyboard inset=${inset} margin=${margin} reason=${reason}`);
-  return inset;
-}
-
-function manuallyNudgeCursorIntoView(reason: string) {
-  const view = editor?.view;
-  if (!view) return;
-
-  const scroller = view.scrollDOM;
-  const selection = view.state.selection.main;
-  const cursorRect =
-    view.coordsAtPos(selection.head, 1) ||
-    view.coordsAtPos(selection.head);
-  const scrollerRect = scroller.getBoundingClientRect();
-  if (!cursorRect || !scrollerRect) return;
-
-  const viewport = window.visualViewport;
-  const viewportBottom = viewport
-    ? viewport.offsetTop + viewport.height
-    : window.innerHeight;
-  const keyboardInset = Math.max(0, lastViewportKeyboardInsetPx || 0);
-  const safeBottom = Math.min(scrollerRect.bottom, viewportBottom) - keyboardInset - 32;
-  const topMargin = 24;
-  const safeTop = scrollerRect.top + topMargin;
-
-  if (cursorRect.bottom > safeBottom) {
-    scroller.scrollTop += Math.ceil(cursorRect.bottom - safeBottom);
-    emitScrollMetrics(`cursor-nudge:${reason}`);
-  } else if (cursorRect.top < safeTop) {
-    scroller.scrollTop -= Math.ceil(safeTop - cursorRect.top);
-    emitScrollMetrics(`cursor-nudge:${reason}`);
-  }
-}
-
-function ensureEditorCursorVisible(reason?: unknown) {
-  const view = editor?.view;
-  if (!view) return 'missing';
-  const inset = applyViewportKeyboardInset(String(reason || 'ensure'));
-  const selection = view.state.selection.main;
-  view.dispatch({
-    effects: EditorView.scrollIntoView(selection.head, {
-      y: 'nearest',
-      yMargin: inset > 0 ? 144 : 96,
-    }),
-  });
-  window.requestAnimationFrame(() => manuallyNudgeCursorIntoView(String(reason || 'cursor')));
-  log('KardLeafCM6Input', `ensure cursor visible reason=${String(reason || 'unknown')} inset=${inset}`);
-  return 'ok';
-}
-
-function scheduleEnsureCursorVisible(reason: string, delayMs = 90) {
-  if (!editorHasFocus()) return;
-  if (cursorEnsureTimer) window.clearTimeout(cursorEnsureTimer);
-  cursorEnsureTimer = window.setTimeout(() => {
-    cursorEnsureTimer = 0;
-    if (editorHasFocus()) ensureEditorCursorVisible(reason);
-  }, delayMs);
-}
-
-function scheduleDelayedCursorEnsures(reason: string) {
-  scheduleEnsureCursorVisible(reason, 120);
-  window.setTimeout(() => scheduleEnsureCursorVisible(`${reason}-delayed`, 320), 320);
-}
-
-function installViewportKeyboardSync() {
-  if (viewportKeyboardSyncInstalled) return;
-  viewportKeyboardSyncInstalled = true;
-  const sync = (reason: string) => {
-    applyViewportKeyboardInset(reason);
-    if (!editorHasFocus()) return;
-    if (reason === 'focusin') {
-      scheduleDelayedCursorEnsures('focusin');
-      return;
-    }
-    if (reason.startsWith('visualViewport.')) {
-      if (viewportEnsureTimer) window.clearTimeout(viewportEnsureTimer);
-      viewportEnsureTimer = window.setTimeout(() => {
-        viewportEnsureTimer = 0;
-        scheduleDelayedCursorEnsures(reason);
-      }, 80);
-      return;
-    }
-    scheduleEnsureCursorVisible(reason, 120);
-  };
-  window.visualViewport?.addEventListener('resize', () => sync('visualViewport.resize'), { passive: true });
-  window.visualViewport?.addEventListener('scroll', () => sync('visualViewport.scroll'), { passive: true });
-  window.addEventListener('resize', () => sync('window.resize'), { passive: true });
-  document.addEventListener('focusin', () => sync('focusin'));
-}
-
-function isTapIgnoredTarget(target: EventTarget | null) {
-  if (!(target instanceof Element)) return false;
-  return Boolean(target.closest('button,a,input,textarea,select'));
-}
-
-function scheduleTapEnsures(reason: string) {
-  scheduleEnsureCursorVisible(`${reason}:tap`, 120);
-  window.setTimeout(() => {
-    scheduleEnsureCursorVisible(`${reason}:tap-delayed`, 320);
-  }, 320);
-}
-
-function scheduleTapCaretSync(
-  x: number,
-  y: number,
-  tapAt: number,
-  selectionSetAtStart: number,
-  reason: string,
-) {
-  const view = editor?.view;
-  if (!view) return;
-
-  window.requestAnimationFrame(() => {
-    window.setTimeout(() => {
-      const currentView = editor?.view;
-      if (!currentView) return;
-
-      const pos = currentView.posAtCoords({ x, y });
-      if (typeof pos !== 'number') return;
-
-      const safePos = Math.max(0, Math.min(pos, currentView.state.doc.length));
-      const currentHead = currentView.state.selection.main.head;
-      if (
-        lastSelectionSetAt > tapAt &&
-        lastSelectionSetAt !== selectionSetAtStart &&
-        Math.abs(currentHead - safePos) <= 2
-      ) {
-        scheduleTapEnsures(`${reason}:native-selection`);
-        return;
-      }
-
-      currentView.dispatch({
-        selection: EditorSelection.cursor(safePos),
-        effects: EditorView.scrollIntoView(safePos, {
-          y: 'nearest',
-          yMargin: 144,
-        }),
-        annotations: Transaction.addToHistory.of(false),
-      });
-
-      currentView.focus();
-      notifySelection();
-      scheduleTapEnsures(`${reason}:posAtCoords`);
-    }, 0);
-  });
-}
-
-function handleTapCaret(
-  x: number,
-  y: number,
-  tapAt: number,
-  selectionSetAtStart: number,
-  reason: string,
-) {
-  if (!contentApplied || contentApplying) {
-    pendingTapBeforeContentApplied = { x, y, at: tapAt, selectionSetAtStart, reason };
-    return;
-  }
-  scheduleTapCaretSync(x, y, tapAt, selectionSetAtStart, reason);
-}
-
 function onContentApplied() {
-  contentApplying = false;
-  contentApplied = true;
-  contentAppliedAt = nowMs();
   const appliedLength = editor?.view.state.doc.length ?? fallbackText.length;
   log('KardLeafCM6Bridge', `content applied len=${appliedLength}`);
   callBridge('onContentApplied', [appliedLength]);
-
-  const tap = pendingTapBeforeContentApplied;
-  pendingTapBeforeContentApplied = null;
-  if (tap && contentAppliedAt - tap.at < 800) {
-    window.requestAnimationFrame(() => {
-      scheduleTapCaretSync(
-        tap.x,
-        tap.y,
-        tap.at,
-        tap.selectionSetAtStart,
-        `${tap.reason}:after-content-applied`,
-      );
-    });
-  }
 }
 
 function createKardLeafBridgePlugin(): EditorPlugin {
   return {
     id: 'kardleaf.androidBridge',
     setup(ctx) {
+      const handleNativeSelectionChange = () => {
+        if (editor?.view) syncNativeSelectionState(editor.view);
+      };
+      document.addEventListener('selectionchange', handleNativeSelectionChange);
       ctx.registerCmExtensions([
         EditorView.updateListener.of((update) => {
           if (suppressBridgeDepth <= 0 && update.docChanged) {
@@ -1039,65 +735,114 @@ function createKardLeafBridgePlugin(): EditorPlugin {
 
           if (update.selectionSet) {
             selectionRevision += 1;
-            lastSelectionSetAt = nowMs();
+            const selection = update.state.selection.main;
+            const pointer = pointerSelectionTrace;
+            const pointerAge = pointer ? Math.round(nowMs() - pointer.startedAt) : -1;
+            const pointerPos = pointer && pointerAge <= 1000
+              ? pointer.position
+              : null;
+            const pointerSelection = pointerPos !== null && selection.head === pointerPos;
+            log(
+              'KardLeafCM6Input',
+              `selection revision=${selectionRevision} from=${selection.from} to=${selection.to} head=${selection.head} ` +
+                `pointer=${pointerSelection} pointerPos=${pointerPos ?? -1} pointerAge=${pointerAge}ms ` +
+                `active=${domNodeTrace(document.activeElement)} ` +
+                `${pointerSelection ? domSelectionTrace() : 'dom=not-sampled'}`,
+            );
+            if (pointerSelection) {
+              pointerSelectionTrace = null;
+            }
             notifySelection();
           }
-          if (update.docChanged && update.view.hasFocus) scheduleDelayedCursorEnsures('docChanged');
           if (update.docChanged) notifyHistoryState();
         }),
         EditorView.domEventHandlers({
           touchstart(event) {
             if (editor?.view) setTouchSelecting(editor.view, true);
             callBridge('onUserInteraction');
-            const touch = event.touches && event.touches[0];
-            if (!touch || isTapIgnoredTarget(event.target)) {
-              pendingTap = null;
-              return false;
-            }
-            pendingTap = {
-              x: touch.clientX,
-              y: touch.clientY,
-              startAt: nowMs(),
-              maxMove: 0,
-              selectionSetAtStart: lastSelectionSetAt,
-            };
-            // Keep focus/keyboard behavior inside CodeMirror/WebView itself.
-            // SwarmNote does not ask the native host to show the keyboard from
-            // touch events; doing so makes normal vertical scrolling look like
-            // a tap and causes IME pop-up/jump bugs on Android WebView.
-            return false;
-          },
-          touchmove(event) {
-            if (!pendingTap) return false;
-            const touch = event.touches && event.touches[0];
-            if (!touch) return false;
-            pendingTap.maxMove = Math.max(
-              pendingTap.maxMove,
-              Math.abs(touch.clientX - pendingTap.x),
-              Math.abs(touch.clientY - pendingTap.y),
-            );
-            return false;
-          },
-          touchend() {
-            if (editor?.view) setTouchSelecting(editor.view, false);
-            const tap = pendingTap;
-            pendingTap = null;
-            if (!tap) return false;
-            const duration = nowMs() - tap.startAt;
-            if (duration <= 280 && tap.maxMove <= 8) {
-              handleTapCaret(
-                tap.x,
-                tap.y,
-                tap.startAt,
-                tap.selectionSetAtStart,
-                'touchend',
+            const touch = event.touches[0];
+            const view = editor?.view;
+            const selection = view?.state.selection.main;
+            const target = event.target instanceof Element ? event.target : null;
+            const editableTarget = target?.closest('[contenteditable]');
+            const ignoredTarget = target?.closest('button,a,input,textarea,select') ||
+              editableTarget && editableTarget !== editor?.view.contentDOM;
+            pointerSelectionTrace = touch && !ignoredTarget
+              ? {
+                  startedAt: nowMs(),
+                  endedAt: 0,
+                  x: touch.clientX,
+                  y: touch.clientY,
+                  position: view ? editorPositionAtPoint(view, touch.clientX, touch.clientY) : null,
+                  maxMove: 0,
+                  target: domNodeTrace(event.target as Node | null),
+                  revisionAtStart: selectionRevision,
+                }
+              : null;
+            if (pointerSelectionTrace) {
+              log(
+                'KardLeafCM6Input',
+                `touch start x=${pointerSelectionTrace.x.toFixed(1)} y=${pointerSelectionTrace.y.toFixed(1)} ` +
+                  `target=${pointerSelectionTrace.target} active=${domNodeTrace(document.activeElement)} ` +
+                  `cm=${selection?.from ?? -1}:${selection?.to ?? -1}:${selection?.head ?? -1} ` +
+                  `revision=${selectionRevision} ${domSelectionTrace()}`,
               );
             }
             return false;
           },
+          touchmove(event) {
+            const pointer = pointerSelectionTrace;
+            const touch = event.touches[0];
+            if (pointer && touch) {
+              pointer.maxMove = Math.max(
+                pointer.maxMove,
+                Math.abs(touch.clientX - pointer.x),
+                Math.abs(touch.clientY - pointer.y),
+              );
+            }
+            return false;
+          },
+          touchend() {
+            const view = editor?.view;
+            if (view) syncNativeSelectionState(view);
+            const pointer = pointerSelectionTrace;
+            if (pointer) {
+              pointer.endedAt = nowMs();
+              pointer.position = view
+                ? editorPositionAtPoint(view, pointer.x, pointer.y)
+                : pointer.position;
+              const selection = view?.state.selection.main;
+              log(
+                'KardLeafCM6Input',
+                `touch end elapsed=${Math.round(pointer.endedAt - pointer.startedAt)}ms target=${pointer.target} ` +
+                  `active=${domNodeTrace(document.activeElement)} cm=${selection?.from ?? -1}:${selection?.to ?? -1}:${
+                    selection?.head ?? -1
+                  } revision=${selectionRevision} revisionAtStart=${pointer.revisionAtStart} ${domSelectionTrace()}`,
+              );
+              if (pointer.endedAt - pointer.startedAt <= 280 && pointer.maxMove <= 8) {
+                window.setTimeout(() => {
+                  const view = editor?.view;
+                  if (!view || pointerSelectionTrace !== pointer || selectionRevision !== pointer.revisionAtStart) return;
+                  const pos = pointer.position;
+                  if (typeof pos !== 'number') return;
+                  view.dispatch({
+                    selection: EditorSelection.cursor(pos),
+                    annotations: Transaction.addToHistory.of(false),
+                  });
+                  view.focus();
+                  pointerSelectionTrace = null;
+                  log(
+                    'KardLeafCM6Input',
+                    `selection recovered head=${pos} elapsed=${Math.round(nowMs() - pointer.startedAt)}ms target=${pointer.target}`,
+                  );
+                }, 80);
+              }
+            }
+            return false;
+          },
           touchcancel() {
-            if (!window.KardLeafAndroid && editor?.view) setTouchSelecting(editor.view, false);
-            pendingTap = null;
+            if (editor?.view) syncNativeSelectionState(editor.view);
+            pointerSelectionTrace = null;
             return false;
           },
           mousedown() {
@@ -1120,6 +865,12 @@ function createKardLeafBridgePlugin(): EditorPlugin {
           },
         },
       ]);
+
+      return {
+        dispose() {
+          document.removeEventListener('selectionchange', handleNativeSelectionChange);
+        },
+      };
     },
   };
 }
@@ -1190,7 +941,7 @@ function showTableToolbar(event: EditorTableContextMenuEvent) {
         position: fixed;
         left: max(10px, env(safe-area-inset-left));
         right: max(10px, env(safe-area-inset-right));
-        bottom: calc(var(--kardleaf-ime-safe-bottom, 0px) + 8px);
+        bottom: 8px;
         z-index: 2147483000;
         display: flex;
         flex-wrap: wrap;
@@ -1291,6 +1042,8 @@ document.addEventListener('focusin', (event) => {
     hideTableToolbar();
   }
 });
+
+document.addEventListener('touchmove', hideTableToolbar, { passive: true });
 
 function titleHeaderHeightPx() {
   return Math.ceil(currentTitleFontSize * 1.5 + 8);
@@ -1406,7 +1159,6 @@ function createEditorInstance(initialText = '', initialSelection?: { anchor: num
   });
   editor.view.scrollDOM.addEventListener('scroll', handleScroll, { passive: true });
   installTitleHeader();
-  installViewportKeyboardSync();
   notifyHistoryState(true);
   notifySelection();
   setStatus('');
@@ -1452,7 +1204,6 @@ function dispatchFullDocument(
 
   const text = String(content ?? '');
   const start = nowMs();
-  contentApplying = true;
 
   try {
     const view = editor.view;
@@ -1476,7 +1227,6 @@ function dispatchFullDocument(
     window.requestAnimationFrame(() => onContentApplied());
     return 'ok';
   } catch (error) {
-    contentApplying = false;
     reportError(`setContent failed len=${text.length}`, error);
     log(
       'KardLeafCM6Perf',
@@ -1530,6 +1280,68 @@ function selectEditorRangeAndReveal(start: unknown, end: unknown) {
   return 'ok';
 }
 
+function clearAndroidSearchState(source: unknown = 'android') {
+  if (!editor) return 'missing';
+  const reason = String(source ?? 'android');
+  try {
+    const view = editor.view;
+    const stateBefore = editor.getSearchState();
+    const selectionBefore = view.state.selection.main;
+    const collapseSelection =
+      Boolean(stateBefore?.query) &&
+      selectionBefore.from !== selectionBefore.to &&
+      stateBefore?.activeMatchIndex != null;
+    editor.clearSearch(reason);
+    setSearchActiveClass(false);
+    if (collapseSelection) {
+      view.dispatch({ selection: EditorSelection.cursor(selectionBefore.head) });
+      notifySelection();
+    }
+    return 'ok';
+  } catch (error) {
+    reportError(`clear search failed source=${reason}`, error);
+    return 'error';
+  }
+}
+
+function setAndroidSearchState(
+  query: unknown,
+  useRegex: unknown,
+  matchCase: unknown,
+  activeMatchIndex: unknown,
+  totalMatches: unknown,
+  source: unknown = 'android',
+) {
+  if (!editor) return 'missing';
+  const queryText = String(query ?? '');
+  const reason = String(source ?? 'android');
+  if (queryText.length === 0) return clearAndroidSearchState(reason);
+  const parsedActive = Number(activeMatchIndex);
+  const parsedTotal = Number(totalMatches);
+  try {
+    editor.setSearchState(
+      {
+        query: queryText,
+        replaceQuery: '',
+        caseSensitive: !!matchCase,
+        wholeWord: false,
+        regexp: !!useRegex,
+        // The Compose search bar owns the visible UI. CodeMirror's panel is
+        // kept open internally because its search highlighter requires it.
+        isOpen: true,
+        activeMatchIndex: Number.isFinite(parsedActive) ? Math.max(0, Math.floor(parsedActive)) : null,
+        totalMatches: Number.isFinite(parsedTotal) ? Math.max(0, Math.floor(parsedTotal)) : 0,
+      },
+      reason,
+    );
+    setSearchActiveClass(true);
+    return 'ok';
+  } catch (error) {
+    reportError(`set search failed source=${reason} queryLen=${queryText.length}`, error);
+    return 'error';
+  }
+}
+
 function refreshImages() {
   const view = editor?.view;
   if (!view) return;
@@ -1571,6 +1383,9 @@ function setImageDataUris(payload: unknown) {
 function installFallbackApi() {
   window.KardLeafEditor = {
     version: VERSION,
+    prepareImeReveal() {
+      return 'missing';
+    },
     setTitleState(title: unknown, hint: unknown, visible: unknown, fontSize: unknown) {
       return setTitleState(title, hint, visible, fontSize);
     },
@@ -1638,17 +1453,6 @@ function installFallbackApi() {
     setImageMap() {
       return 'fallback';
     },
-    ensureCursorVisible() {
-      return 'fallback';
-    },
-    setKeyboardInsetPx(px: unknown) {
-      lastAndroidKeyboardInsetPx = Math.max(0, Number(px) || 0);
-      document.documentElement.style.setProperty(
-        '--kardleaf-ime-safe-bottom',
-        `${lastAndroidKeyboardInsetPx}px`,
-      );
-      return 'fallback';
-    },
     fastScrollToRatio() {
       return 'fallback';
     },
@@ -1662,6 +1466,12 @@ function installFallbackApi() {
         fallbackTextArea.selectionEnd = selection.head;
         fallbackTextArea.focus();
       }
+      return 'fallback';
+    },
+    setSearchState() {
+      return 'fallback';
+    },
+    clearSearchState() {
       return 'fallback';
     },
     scrollToOffset(offset: unknown) {
@@ -1705,6 +1515,9 @@ function installFallbackApi() {
 function installEditorApi() {
   window.KardLeafEditor = {
     version: VERSION,
+    prepareImeReveal(imeInsetPx: unknown) {
+      return prepareImeReveal(imeInsetPx);
+    },
     setTitleState(title: unknown, hint: unknown, visible: unknown, fontSize: unknown) {
       return setTitleState(title, hint, visible, fontSize);
     },
@@ -1794,25 +1607,6 @@ function installEditorApi() {
         refreshImages();
       }
       return `ok:${imageDataUris.size}`;
-    },
-    ensureCursorVisible(reason?: unknown) {
-      return ensureEditorCursorVisible(reason);
-    },
-    nativeSelectionPointer(action: unknown, x: unknown, y: unknown) {
-      return handleNativeSelectionPointer(action, x, y);
-    },
-    setKeyboardInsetPx(px: unknown) {
-      const layoutHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0);
-      const cap = layoutHeight > 0 ? Math.round(layoutHeight * 0.62) : 0;
-      const safePx = Math.min(Math.max(0, Number(px) || 0), cap);
-      lastAndroidKeyboardInsetPx = safePx;
-      lastViewportKeyboardInsetPx = safePx;
-      document.documentElement.style.setProperty(
-        '--kardleaf-ime-safe-bottom',
-        `${safePx}px`,
-      );
-      editor?.setScrollBottomMargin(computeScrollBottomMarginPx(safePx));
-      return 'ok';
     },
     fastScrollToRatio(ratio: unknown) {
       const scroller = editor?.view.scrollDOM;
@@ -1920,6 +1714,25 @@ function installEditorApi() {
     selectRange(start: unknown, end: unknown) {
       return selectEditorRangeAndReveal(start, end);
     },
+    setSearchState(
+      query: unknown,
+      useRegex: unknown,
+      matchCase: unknown,
+      activeMatchIndex: unknown,
+      totalMatches: unknown,
+    ) {
+      return setAndroidSearchState(
+        query,
+        useRegex,
+        matchCase,
+        activeMatchIndex,
+        totalMatches,
+        'android-api',
+      );
+    },
+    clearSearchState(source?: unknown) {
+      return clearAndroidSearchState(source ?? 'android-api');
+    },
     scrollToOffset(offset: unknown) {
       return selectEditorRangeAndReveal(offset, offset);
     },
@@ -1927,6 +1740,10 @@ function installEditorApi() {
       if (!editor || typeof name !== 'string') return 'missing';
       if (name === 'selectRange') return selectEditorRangeAndReveal(args[0], args[1]);
       if (name === 'scrollToOffset') return selectEditorRangeAndReveal(args[0], args[0]);
+      if (name === 'setSearchState') {
+        return setAndroidSearchState(args[0], args[1], args[2], args[3], args[4], 'android-execCommand');
+      }
+      if (name === 'clearSearchState') return clearAndroidSearchState(args[0] ?? 'android-execCommand');
       return editor.execCommand(name, ...args) ?? 'ok';
     },
     destroy() {
@@ -1966,7 +1783,7 @@ function createFallbackTextArea(reason: string) {
 function main() {
   installGlobalErrorHandlers();
   installFallbackApi();
-  installViewportKeyboardSync();
+  window.addEventListener('kardleaf-user-caret', revealActiveEditorCaret);
   injectStyle('kardleaf-katex-css', katexCss);
   setDocumentTheme(window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
 

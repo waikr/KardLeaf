@@ -60,9 +60,13 @@ import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 private const val SETTINGS_TRACE_TAG = "KardLeafSettingsTrace"
 
 private val LocalSettingsListGroup = staticCompositionLocalOf { false }
+private val LocalSettingsShowSubtitles = staticCompositionLocalOf { true }
 
 @Composable
-internal fun SettingsListGroup(content: @Composable () -> Unit) {
+internal fun SettingsListGroup(
+    showSubtitles: Boolean = false,
+    content: @Composable () -> Unit,
+) {
     if (LocalKardLeafThemeStyle.current == PrefsManager.AppThemeStyle.CLEAN_LIST) {
         val cornerRadiusDp = LocalKardLeafGlobalCornerRadiusDp.current.takeIf { it >= 0 } ?: 28
         val shape = RoundedCornerShape(cornerRadiusDp.dp)
@@ -73,12 +77,17 @@ internal fun SettingsListGroup(content: @Composable () -> Unit) {
                 .background(MaterialTheme.colorScheme.surface)
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.52f), shape),
         ) {
-            CompositionLocalProvider(LocalSettingsListGroup provides true) {
+            CompositionLocalProvider(
+                LocalSettingsListGroup provides true,
+                LocalSettingsShowSubtitles provides showSubtitles,
+            ) {
                 content()
             }
         }
     } else {
-        content()
+        CompositionLocalProvider(LocalSettingsShowSubtitles provides showSubtitles) {
+            content()
+        }
     }
 }
 
@@ -361,10 +370,12 @@ internal fun SettingsSwitchRow(
 @Composable
 internal fun SettingsBaseRow(
     icon: ImageVector,
+    showIcon: Boolean = true,
     title: String,
     subtitle: String,
     selected: Boolean = false,
     onClick: () -> Unit,
+    onTitleClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
     contentHorizontalPadding: Dp = 0.dp,
@@ -376,6 +387,7 @@ internal fun SettingsBaseRow(
     val isModern = themeStyle != PrefsManager.AppThemeStyle.CLASSIC
     val cleanListFeatureIconStyle = remember(context) { PrefsManager(context).getCleanListFeatureIconStyle() }
     val inCleanListGroup = LocalSettingsListGroup.current
+    val showSubtitle = LocalSettingsShowSubtitles.current
     val tracedOnClick = {
         KardLeafLog.d(
             SETTINGS_TRACE_TAG,
@@ -419,18 +431,20 @@ internal fun SettingsBaseRow(
         Row(
             modifier = modifier
                 .fillMaxWidth()
-                .heightIn(min = 56.dp)
+                .heightIn(min = 48.dp)
                 .then(clickModifier)
-                .padding(horizontal = contentHorizontalPadding, vertical = 7.dp),
+                .padding(horizontal = contentHorizontalPadding, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp),
-            )
-            Spacer(modifier = Modifier.width(20.dp))
+            if (showIcon) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(modifier = Modifier.width(20.dp))
+            }
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -440,8 +454,9 @@ internal fun SettingsBaseRow(
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 2,
+                    modifier = onTitleClick?.let { Modifier.clickable(onClick = it) } ?: Modifier,
                 )
-                if (subtitle.isNotBlank()) {
+                if (showSubtitle && subtitle.isNotBlank()) {
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodyMedium,
@@ -535,13 +550,13 @@ internal fun SettingsBaseRow(
         val rowContainerModifier = if (isCleanList && inCleanListGroup) {
             Modifier
                 .fillMaxWidth()
-                .heightIn(min = 78.dp)
+                .heightIn(min = 62.dp)
                 .background(backgroundColor)
         } else {
             Modifier
                 .fillMaxWidth()
-                .heightIn(min = if (isCleanList) 78.dp else 0.dp)
-                .padding(vertical = if (isCleanList) 4.dp else 5.dp)
+                .heightIn(min = if (isCleanList) 62.dp else 0.dp)
+                .padding(vertical = if (isCleanList) 3.dp else 4.dp)
                 .shadow(elevation = elevation, shape = rowShape, clip = true)
                 .clip(rowShape)
                 .background(backgroundColor)
@@ -554,7 +569,7 @@ internal fun SettingsBaseRow(
                 .then(clickModifier)
                 .padding(
                     horizontal = contentHorizontalPadding + if (isCleanList) 18.dp else 14.dp,
-                    vertical = if (isCleanList) 14.dp else 12.dp,
+                    vertical = if (isCleanList) 11.dp else 10.dp,
                 ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -569,32 +584,35 @@ internal fun SettingsBaseRow(
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             }
-            Box(
-                modifier = Modifier
-                    .size(if (isCleanList) 40.dp else 42.dp)
-                    .clip(iconShape)
-                    .background(iconBackgroundColor),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = iconColor,
-                    modifier = Modifier.size(if (isCleanList) 24.dp else 22.dp),
-                )
+            if (showIcon) {
+                Box(
+                    modifier = Modifier
+                        .size(if (isCleanList) 40.dp else 42.dp)
+                        .clip(iconShape)
+                        .background(iconBackgroundColor),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = iconColor,
+                        modifier = Modifier.size(if (isCleanList) 24.dp else 22.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.width(if (isCleanList) 12.dp else 14.dp))
             }
-            Spacer(modifier = Modifier.width(if (isCleanList) 12.dp else 14.dp))
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(if (isCleanList) 4.dp else 3.dp),
+                verticalArrangement = Arrangement.spacedBy(if (isCleanList) 3.dp else 2.dp),
             ) {
                 Text(
                     text = title,
                     style = if (isCleanList) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
+                    modifier = onTitleClick?.let { Modifier.clickable(onClick = it) } ?: Modifier,
                 )
-                if (subtitle.isNotBlank()) {
+                if (showSubtitle && subtitle.isNotBlank()) {
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall,

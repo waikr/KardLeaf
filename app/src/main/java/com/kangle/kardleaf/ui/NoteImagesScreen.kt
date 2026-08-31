@@ -47,10 +47,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,29 +62,50 @@ fun NoteImagesScreen(
 ) {
     val notes by viewModel.allNotes.collectAsState(initial = emptyList())
     var images by remember { mutableStateOf<List<GalleryImage>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
 
     LaunchedEffect(notes) {
         val activeNotes = notes.filter { !it.isTrashed }
         if (activeNotes.isEmpty()) {
             images = emptyList()
-            isLoading = false
             return@LaunchedEffect
         }
-        isLoading = true
-        try {
-            images = withContext(Dispatchers.Default) {
-                activeNotes.flatMap { note ->
-                    ensureActive()
-                    galleryImageReferences(note).map { reference ->
-                        GalleryImage(note = note, reference = reference)
-                    }
+
+        // The note list already carries the first image reference. Show those
+        // immediately; a full-file read must never gate opening this screen.
+        val known = linkedSetOf<String>()
+        val indexedImages = activeNotes.flatMap { note ->
+            note.firstImageReference
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { reference ->
+                    known += galleryImageKey(note, reference)
+                    listOf(GalleryImage(note, reference))
                 }
+                ?: emptyList()
+        }
+        images = indexedImages
+        try {
+            // Fill in additional references incrementally. This mirrors the
+            // reference app's lazy resource list and keeps SAF/provider errors
+            // local to one note instead of leaving the whole page spinning.
+            for (note in activeNotes) {
+                ensureActive()
+                val fullNote = try {
+                    viewModel.getFullNoteForShare(note.id)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    null
+                } ?: continue
+                val references = withContext(Dispatchers.Default) { galleryImageReferences(fullNote) }
+                val additions = references
+                    .map { reference -> GalleryImage(note = fullNote, reference = reference) }
+                    .filter { known.add(galleryImageKey(it.note, it.reference)) }
+                if (additions.isNotEmpty()) images += additions
+                yield()
             }
-        } catch (_: Exception) {
-            images = emptyList()
-        } finally {
-            isLoading = false
+        } catch (error: CancellationException) {
+            throw error
         }
     }
 
@@ -102,7 +124,6 @@ fun NoteImagesScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
-                isLoading && images.isEmpty() -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 images.isEmpty() -> Text(
                     text = "当前笔记没有可显示的本地图片",
                     modifier = Modifier.align(Alignment.Center),
@@ -115,7 +136,7 @@ fun NoteImagesScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(images, key = { "${it.note.file.path}:${it.reference}:${it.note.lastModified.time}" }) { image ->
+                    items(images, key = { "${it.note.file.path}:${it.reference}" }) { image ->
                         ImageGalleryCard(
                             image = image,
                             peekThumbnail = { viewModel.peekImageThumbnailBitmap(image.note, image.reference) },
@@ -129,6 +150,9 @@ fun NoteImagesScreen(
     }
 }
 
+private fun galleryImageKey(note: Note, reference: String): String =
+    "${note.file.path}\u0000$reference"
+
 @Composable
 private fun ImageGalleryCard(
     image: GalleryImage,
@@ -136,20 +160,24 @@ private fun ImageGalleryCard(
     loadThumbnail: suspend () -> android.graphics.Bitmap?,
     onClick: () -> Unit,
 ) {
-    var bitmap by remember(image.note.file.path, image.note.lastModified.time, image.reference) {
+    var bitmap by remember(image.note.file.path, image.reference) {
         mutableStateOf(peekThumbnail())
     }
-    var loadFinished by remember(image.note.file.path, image.note.lastModified.time, image.reference) {
+    var loadFinished by remember(image.note.file.path, image.reference) {
         mutableStateOf(false)
     }
 
     LaunchedEffect(image.note.file.path, image.note.lastModified.time, image.reference) {
-        if (bitmap != null) {
-            loadFinished = true
-            return@LaunchedEffect
-        }
+        peekThumbnail()?.let { bitmap = it }
         loadFinished = false
-        bitmap = withTimeoutOrNull(2500L) { loadThumbnail() }
+        val loadedBitmap = try {
+            loadThumbnail()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            null
+        }
+        bitmap = loadedBitmap
         loadFinished = true
     }
 

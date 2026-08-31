@@ -108,6 +108,18 @@ class KardLeafQuillpadEditorViewTest {
         }
 
     @Test
+    fun programmaticMindMapReplacementDoesNotContinueTrailingList() =
+        onMain { view ->
+            val original = "# 根\n## A\n### A1\n"
+            val updated = "$original- 新节点\n"
+            view.bindDocument("mind-map", "", original, KardLeafEditorSnapshot("", original, TextRange(original.length)))
+            view.setContentSelection(0, original.length)
+            view.replaceContentSelection(updated)
+
+            assertEquals(updated, view.getContentString())
+        }
+
+    @Test
     fun visibleImeWithoutFocusDoesNotRequestReveal() =
         onMain { view ->
             view.configureForTest()

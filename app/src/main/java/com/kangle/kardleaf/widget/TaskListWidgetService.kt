@@ -9,6 +9,7 @@ import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.database.AppDatabase
 import com.kangle.kardleaf.data.database.TaskEntity
 import com.kangle.kardleaf.data.task.TaskQuickAddActivity
+import com.kangle.kardleaf.data.task.TaskTimeRules
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import java.util.Calendar
 import kotlinx.coroutines.runBlocking
@@ -116,28 +117,30 @@ class TaskListWidgetService : RemoteViewsService() {
         private fun buildRows(tasks: List<TaskEntity>): List<TaskWidgetRow> {
             if (tasks.isEmpty()) return emptyList()
 
-            val todayEnd = Calendar.getInstance().run {
-                set(Calendar.HOUR_OF_DAY, 23)
-                set(Calendar.MINUTE, 59)
-                set(Calendar.SECOND, 59)
-                set(Calendar.MILLISECOND, 999)
-                timeInMillis
+            val todayEnd = System.currentTimeMillis().let { now ->
+                Calendar.getInstance().apply {
+                    timeInMillis = now
+                    set(Calendar.HOUR_OF_DAY, 23)
+                    set(Calendar.MINUTE, 59)
+                    set(Calendar.SECOND, 59)
+                    set(Calendar.MILLISECOND, 999)
+                }.timeInMillis
             }
             val groups = listOf(
                 TaskGroup(
                     order = 0L,
                     title = "今天以前",
-                    tasks = tasks.filter { task -> task.reminderAt?.let { it <= todayEnd } == true },
+                    tasks = tasks.filter { task -> TaskTimeRules.listTime(task)?.let { it <= todayEnd } == true },
                 ),
                 TaskGroup(
                     order = 1L,
                     title = "稍后",
-                    tasks = tasks.filter { task -> task.reminderAt?.let { it > todayEnd } == true },
+                    tasks = tasks.filter { task -> TaskTimeRules.listTime(task)?.let { it > todayEnd } == true },
                 ),
                 TaskGroup(
                     order = 2L,
                     title = "无提醒",
-                    tasks = tasks.filter { task -> task.reminderAt == null },
+                    tasks = tasks.filter { task -> TaskTimeRules.listTime(task) == null },
                 ),
             )
             val result = mutableListOf<TaskWidgetRow>()

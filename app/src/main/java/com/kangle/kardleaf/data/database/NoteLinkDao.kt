@@ -45,6 +45,41 @@ interface NoteLinkDao {
     )
     suspend fun markTargetUnresolved(path: String, recordId: String)
 
+    @Query(
+        "UPDATE note_links SET sourceRecordId = CASE WHEN sourceRecordId = :oldPath THEN :newPath ELSE sourceRecordId END, " +
+            "sourcePath = :newPath WHERE sourcePath = :oldPath",
+    )
+    suspend fun renameSourcePath(oldPath: String, newPath: String): Int
+
+    @Query(
+        "UPDATE note_links SET sourceRecordId = CASE WHEN sourceRecordId = sourcePath " +
+            "THEN :newFolder || substr(sourcePath, length(:oldFolder) + 1) ELSE sourceRecordId END, " +
+            "sourcePath = :newFolder || substr(sourcePath, length(:oldFolder) + 1) " +
+            "WHERE sourcePath = :oldFolder OR substr(sourcePath, 1, length(:oldFolder) + 1) = :oldFolder || '/'",
+    )
+    suspend fun renameFolderSourcePaths(
+        oldFolder: String,
+        newFolder: String,
+    ): Int
+
+    @Query(
+        "UPDATE note_links SET sourceRecordId = CASE WHEN sourceRecordId = sourcePath " +
+            "THEN :newFolder || substr(sourcePath, length(:oldFolder) + 1) ELSE sourceRecordId END, " +
+            "sourcePath = :newFolder || substr(sourcePath, length(:oldFolder) + 1) " +
+            "WHERE (sourcePath = :oldFolder OR substr(sourcePath, 1, length(:oldFolder) + 1) = :oldFolder || '/') " +
+            "AND sourcePath IN (SELECT filePath FROM notes WHERE isTrashed = 0)",
+    )
+    suspend fun moveActiveFolderSourcePaths(
+        oldFolder: String,
+        newFolder: String,
+    ): Int
+
+    @Query(
+        "UPDATE note_links SET targetRecordId = NULL, targetPath = NULL, resolutionStatus = 'UNRESOLVED' " +
+            "WHERE targetPath = :oldFolder OR substr(targetPath, 1, length(:oldFolder) + 1) = :oldFolder || '/'",
+    )
+    suspend fun markFolderTargetsUnresolved(oldFolder: String): Int
+
     @Query("DELETE FROM note_links WHERE sourcePath IN (:paths) OR targetPath IN (:paths)")
     suspend fun deleteForPaths(paths: List<String>)
 

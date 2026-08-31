@@ -3,6 +3,7 @@ package com.kangle.kardleaf.ui
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.SystemClock
+import android.util.TypedValue
 import androidx.documentfile.provider.DocumentFile
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
@@ -10,6 +11,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -42,6 +45,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
@@ -51,11 +55,9 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.AccountCircle
-import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.History
@@ -68,7 +70,6 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.HorizontalDivider
@@ -95,6 +96,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -109,10 +112,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -143,9 +150,13 @@ import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.repository.VaultInfo
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeMode
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.withContext
@@ -155,6 +166,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -167,15 +179,17 @@ fun AppDrawerContent(
     allNotesIncludingHidden: List<Note> = emptyList(),
     libraryCharacterCount: Long? = null,
     categoryOnly: Boolean = false,
+    isDrawerOpen: Boolean = true,
     onScreenSelect: (MainViewModel.Screen) -> Unit,
     onDashboardFilterSelect: (MainViewModel.NoteFilter) -> Unit,
     onOpenFolder: (String) -> Unit = {},
     onNoteClick: (Note) -> Unit = {},
+    onRevealNote: (Note) -> Unit = {},
     onCreateNote: (String) -> Unit = {},
     onCreateDrawing: () -> Unit = {},
-    onCreateLabel: (String) -> Unit,
+    onCreateLabel: (String, (Boolean) -> Unit) -> Unit,
     onDeleteLabel: (String) -> Unit,
-    onRenameLabel: (String, String) -> Unit,
+    onRenameLabel: (String, String, (Boolean) -> Unit) -> Unit,
     onDeleteFolder: (String) -> Unit = {},
     onOpenSettings: () -> Unit,
     onOpenFolderTree: () -> Unit,
@@ -185,7 +199,7 @@ fun AppDrawerContent(
     onSwitchVault: (VaultInfo) -> Unit = {},
     onDeleteVault: (VaultInfo) -> Unit = {},
     onRenameVault: (VaultInfo, String) -> Unit = { _, _ -> },
-    onRenameNote: (Note, String) -> Unit = { _, _ -> },
+    onRenameNote: (Note, String, (String?) -> Unit) -> Unit = { _, _, _ -> },
     onMoveNote: (Note, String) -> Unit = { _, _ -> },
     onDeleteNote: (Note) -> Unit = {},
     onToggleFavorite: (Note) -> Unit = {},
@@ -196,7 +210,9 @@ fun AppDrawerContent(
     onShowOnboarding: () -> Unit = {},
     onOpenPrivacy: () -> Unit = {},
     onPickDrawerAvatar: () -> Unit = {},
+    onSaveDrawerName: (String) -> Unit = {},
     onThemeModeChange: (PrefsManager.AppThemeMode) -> Unit = {},
+    onOpenDateView: (Date) -> Unit = {},
 ) {
     val context = LocalContext.current
     val drawerPrefs = remember { PrefsManager(context) }
@@ -204,6 +220,7 @@ fun AppDrawerContent(
     val hiddenItems = drawerPrefs.getHiddenDrawerItems()
     val drawerStyle = drawerPrefs.getDrawerStyle()
     val drawerGroupStartItems = drawerPrefs.getDrawerGroupStartItems()
+    val drawerName = drawerPrefs.getDrawerName()
     val isModern = LocalKardLeafThemeStyle.current != PrefsManager.AppThemeStyle.CLASSIC
     val drawerBackground = MaterialTheme.colorScheme.surfaceContainer
 
@@ -218,13 +235,27 @@ fun AppDrawerContent(
                 notes = allNotes + allNotesIncludingHidden,
             )
         }
-        var collapsedFolders by remember(allFolderPaths) {
+        var collapsedFolders by remember(currentVault?.uri) {
             mutableStateOf(allFolderPaths)
         }
+        var collapseInitialized by remember(currentVault?.uri) { mutableStateOf(allFolderPaths.isNotEmpty()) }
+        LaunchedEffect(allFolderPaths) {
+            if (!collapseInitialized && allFolderPaths.isNotEmpty()) {
+                collapsedFolders = allFolderPaths
+                collapseInitialized = true
+            }
+        }
         var showFiles by remember { mutableStateOf(false) }
-        var selectedFolderPath by remember(labels) { mutableStateOf<String?>(null) }
-        var drawerUiBackStack by remember(labels) { mutableStateOf<List<DrawerUiState>>(emptyList()) }
+        var selectedFolderPath by remember(currentVault?.uri) { mutableStateOf<String?>(null) }
+        var drawerUiBackStack by remember(currentVault?.uri) { mutableStateOf<List<DrawerUiState>>(emptyList()) }
         val visibleLabels = labels
+        var heatmapDetailsOpen by remember { mutableStateOf(false) }
+        var heatmapBounds by remember { mutableStateOf<Rect?>(null) }
+        val currentHeatmapBounds = rememberUpdatedState(heatmapBounds)
+
+        LaunchedEffect(isDrawerOpen) {
+            if (!isDrawerOpen) heatmapDetailsOpen = false
+        }
 
         fun currentDrawerUiState(): DrawerUiState =
             DrawerUiState(
@@ -316,11 +347,30 @@ fun AppDrawerContent(
                     }
                 },
                 onNoteClick = onNoteClick,
+                onRevealNote = onRevealNote,
                 onOpenFolder = onOpenFolder,
                 onCreateNote = onCreateNote,
                 onCreateLabel = onCreateLabel,
                 onDeleteLabel = onDeleteLabel,
                 onRenameLabel = onRenameLabel,
+                onFolderRenameCommitted = { oldPath, newPath ->
+                    collapsedFolders = collapsedFolders.mapTo(linkedSetOf()) {
+                        remapDrawerTreePath(it, oldPath, newPath)
+                    }
+                    selectedFolderPath = selectedFolderPath?.let {
+                        remapDrawerTreePath(it, oldPath, newPath)
+                    }
+                    drawerUiBackStack = drawerUiBackStack.map { state ->
+                        state.copy(
+                            selectedFolderPath = state.selectedFolderPath?.let {
+                                remapDrawerTreePath(it, oldPath, newPath)
+                            },
+                            collapsedFolders = state.collapsedFolders.mapTo(linkedSetOf()) {
+                                remapDrawerTreePath(it, oldPath, newPath)
+                            },
+                        )
+                    }
+                },
                 onSelectFolder = { path ->
                     if (selectedFolderPath != path) {
                         KardLeafLog.d(
@@ -355,6 +405,26 @@ fun AppDrawerContent(
                 onSaveFolderDisplayOrder = onSaveFolderDisplayOrder,
             )
         } else {
+            val drawerScrollState = rememberScrollState()
+            val dismissHeatmapOnOutsideRelease = Modifier.pointerInput(heatmapDetailsOpen) {
+                if (heatmapDetailsOpen) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial,
+                        )
+                        val startedOutsideHeatmap = currentHeatmapBounds.value?.contains(down.position) != true
+                        var released = false
+                        while (!released) {
+                            val change = awaitPointerEvent(pass = PointerEventPass.Initial)
+                                .changes
+                                .firstOrNull { it.id == down.id }
+                            released = change == null || !change.pressed
+                        }
+                        if (startedOutsideHeatmap) heatmapDetailsOpen = false
+                    }
+                }
+            }
             Column(
                 modifier = Modifier
                     .fillMaxHeight()
@@ -362,22 +432,32 @@ fun AppDrawerContent(
             ) {
             Column(
                 modifier =
-                    Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
+                        Modifier
+                            .weight(1f)
+                            .verticalScroll(drawerScrollState)
+                            .then(dismissHeatmapOnOutsideRelease),
             ) {
                 if (drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) {
                     // 方案四是独立侧边栏布局，不依赖“非旧主题”。
                     // 否则用户在旧主题/经典主题下选择数据卡片式时，看不到热力图。
                     DataCardDrawerHeader(
                         avatarUri = drawerPrefs.getDrawerAvatarUri(),
+                        drawerName = drawerName,
                         onPickAvatar = onPickDrawerAvatar,
+                        onSaveName = onSaveDrawerName,
                         onOpenSettings = onOpenSettings,
                         onThemeModeChange = onThemeModeChange,
                     )
                     DataCardHeatmap(
                         allNotes = allNotes,
                         libraryCharacterCount = libraryCharacterCount,
+                        drawerPrefs = drawerPrefs,
+                        detailsOpen = heatmapDetailsOpen,
+                        onDetailsOpenChange = { heatmapDetailsOpen = it },
+                        onOpenDateView = onOpenDateView,
+                        modifier = Modifier.onGloballyPositioned { coordinates ->
+                            heatmapBounds = coordinates.boundsInParent()
+                        },
                     )
                 } else {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -447,7 +527,9 @@ fun AppDrawerContent(
 @Composable
 private fun DataCardDrawerHeader(
     avatarUri: String?,
+    drawerName: String?,
     onPickAvatar: () -> Unit,
+    onSaveName: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onThemeModeChange: (PrefsManager.AppThemeMode) -> Unit,
 ) {
@@ -460,9 +542,12 @@ private fun DataCardDrawerHeader(
             PrefsManager.AppThemeMode.SYSTEM -> systemDark
             PrefsManager.AppThemeMode.LIGHT -> false
             PrefsManager.AppThemeMode.DARK -> true
-        }
+    }
     val avatarImage = rememberDrawerAvatarImage(avatarUri)
+    val defaultDrawerName = "${stringResource(R.string.app_name)} ${stringResource(R.string.app_name_cn)}"
+    var currentDrawerName by remember(drawerName) { mutableStateOf(drawerName.orEmpty()) }
     var showAvatarDialog by remember { mutableStateOf(false) }
+    var showNameDialog by remember { mutableStateOf(false) }
 
     if (showAvatarDialog) {
         Dialog(
@@ -545,6 +630,40 @@ private fun DataCardDrawerHeader(
         }
     }
 
+    if (showNameDialog) {
+        var nameInput by remember(currentDrawerName) {
+            mutableStateOf(currentDrawerName.ifBlank { defaultDrawerName })
+        }
+        val trimmedName = nameInput.trim()
+        AlertDialog(
+            onDismissRequest = { showNameDialog = false },
+            title = { Text("更换名称") },
+            text = {
+                OutlinedTextField(
+                    value = nameInput,
+                    onValueChange = { nameInput = it },
+                    singleLine = true,
+                    label = { Text("名称") },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = trimmedName.isNotBlank(),
+                    onClick = {
+                        currentDrawerName = trimmedName
+                        showNameDialog = false
+                        onSaveName(trimmedName)
+                    },
+                ) {
+                    Text("保存")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNameDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -576,21 +695,37 @@ private fun DataCardDrawerHeader(
             }
         }
         Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.app_name),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = stringResource(R.string.app_name_cn),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .clickable { showNameDialog = true },
+            verticalArrangement = Arrangement.Center,
+        ) {
+            if (currentDrawerName.isBlank()) {
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = stringResource(R.string.app_name_cn),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                Text(
+                    text = currentDrawerName,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         IconButton(
             onClick = {
@@ -635,8 +770,30 @@ private fun rememberDrawerAvatarImage(avatarUri: String?): ImageBitmap? {
 private fun DataCardHeatmap(
     allNotes: List<Note>,
     libraryCharacterCount: Long?,
+    drawerPrefs: PrefsManager,
+    detailsOpen: Boolean,
+    onDetailsOpenChange: (Boolean) -> Unit,
+    onOpenDateView: (Date) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val today = remember { heatmapDayStart(Date()) }
+    var metric by remember {
+        mutableStateOf(
+            if (drawerPrefs.isDrawerHeatmapUsingEditTime()) HeatmapMetric.EDITED else HeatmapMetric.CREATED,
+        )
+    }
+    var selectedDayKey by remember(today) { mutableStateOf(today.time) }
+    val heatmapInteractionSource = remember { MutableInteractionSource() }
+    val dateCellInteractionSources = remember { mutableMapOf<Long, MutableInteractionSource>() }
+    val heatmapClickModifier = if (!detailsOpen) {
+        Modifier.clickable(
+            interactionSource = heatmapInteractionSource,
+            indication = null,
+            onClick = { onDetailsOpenChange(true) },
+        )
+    } else {
+        Modifier
+    }
     val monthStart = remember(today) {
         Calendar.getInstance().apply {
             time = today
@@ -652,15 +809,18 @@ private fun DataCardHeatmap(
             }
         }.time
     }
-    val heatmapStats = remember(allNotes, today, monthStart, gridStart) {
+    val heatmapStats = remember(allNotes, today, monthStart, gridStart, metric) {
         buildHeatmapStats(
             notes = allNotes,
             rangeStart = monthStart,
             rangeEnd = today,
             gridStart = gridStart,
+            metric = metric,
         )
     }
     val monthFormatter = remember { SimpleDateFormat("M月", Locale.getDefault()) }
+    val selectedDateFormatter = remember { SimpleDateFormat("yyyy年M月d日", Locale.getDefault()) }
+    val shortDateFormatter = remember { SimpleDateFormat("M/d", Locale.getDefault()) }
     val monthLabels = remember(monthStart) {
         List(3) { offset ->
             Calendar.getInstance().apply {
@@ -669,10 +829,22 @@ private fun DataCardHeatmap(
             }.time
         }.map { monthFormatter.format(it) }
     }
+    val selectedDay = heatmapStats.columns
+        .flatten()
+        .firstOrNull { it.date.time == selectedDayKey }
+    val selectedNotes = remember(allNotes, metric, selectedDayKey) {
+        allNotes
+            .asSequence()
+            .filter { !it.isTrashed && !it.isArchived }
+            .filter { heatmapDayStart(metric.dateOf(it)).time == selectedDayKey }
+            .sortedByDescending { metric.dateOf(it) }
+            .toList()
+    }
     val shape = RoundedCornerShape(22.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(heatmapClickModifier)
             .padding(horizontal = 12.dp, vertical = 2.dp)
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.82f))
@@ -681,9 +853,55 @@ private fun DataCardHeatmap(
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.32f),
                 shape = shape,
             )
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .then(modifier),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (detailsOpen) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = metric.label,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(
+                    onClick = {
+                        metric = if (metric == HeatmapMetric.CREATED) {
+                            HeatmapMetric.EDITED
+                        } else {
+                            HeatmapMetric.CREATED
+                        }
+                        drawerPrefs.saveDrawerHeatmapUsingEditTime(metric == HeatmapMetric.EDITED)
+                        selectedDayKey = today.time
+                    },
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_folder_navigation_switch),
+                        contentDescription = if (metric == HeatmapMetric.CREATED) {
+                            "切换到编辑时间"
+                        } else {
+                            "切换到创建时间"
+                        },
+                        modifier = Modifier.width(24.dp).height(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                IconButton(onClick = { onDetailsOpenChange(false) }) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                        contentDescription = "返回热力图",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -713,22 +931,43 @@ private fun DataCardHeatmap(
                         verticalArrangement = Arrangement.spacedBy(3.dp),
                     ) {
                         week.forEach { day ->
+                            val isInRange = !day.date.before(monthStart) && !day.date.after(today)
+                            val isSelected = detailsOpen && day.date.time == selectedDayKey
                             val color = when {
-                                day.date.before(monthStart) || day.date.after(today) -> {
+                                !isInRange -> {
                                     MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
                                 }
                                 day.noteCount <= 0 -> {
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = heatmapColorAlpha(day.noteCount))
                                 }
-                                day.noteCount == 1 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
-                                day.noteCount == 2 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.46f)
-                                day.noteCount == 3 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.64f)
-                                else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.86f)
+                                else -> MaterialTheme.colorScheme.primary.copy(alpha = heatmapColorAlpha(day.noteCount))
                             }
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(11.dp)
+                                    .then(
+                                        if (isInRange && detailsOpen) {
+                                            Modifier.clickable(
+                                                interactionSource = dateCellInteractionSources.getOrPut(day.date.time) {
+                                                    MutableInteractionSource()
+                                                },
+                                                indication = null,
+                                                onClick = { selectedDayKey = day.date.time },
+                                            )
+                                        } else {
+                                            Modifier
+                                        },
+                                    )
+                                    .border(
+                                        width = if (isSelected) 1.dp else 0.dp,
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.onSurface
+                                        } else {
+                                            Color.Transparent
+                                        },
+                                        shape = RoundedCornerShape(2.dp),
+                                    )
                                     .clip(RoundedCornerShape(2.dp))
                                     .background(color),
                             )
@@ -774,6 +1013,98 @@ private fun DataCardHeatmap(
                 modifier = Modifier.weight(1f),
             )
         }
+
+        if (detailsOpen) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.42f))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                DataCardHeatmapStat(
+                    value = heatmapStats.peakDay?.noteCount?.toString() ?: "0",
+                    label = "单日峰值",
+                    modifier = Modifier.weight(1f),
+                )
+                DataCardStatDivider()
+                DataCardHeatmapStat(
+                    value = heatmapStats.longestStreak.toString(),
+                    label = "最长连续",
+                    modifier = Modifier.weight(1f),
+                )
+                DataCardStatDivider()
+                DataCardHeatmapStat(
+                    value = shortDateFormatter.format(heatmapStats.peakDay?.date ?: today),
+                    label = "峰值日期",
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { selectedDay?.date?.let(onOpenDateView) },
+                    )
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = selectedDay?.date?.let { selectedDateFormatter.format(it) } ?: "选择一天",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = if (selectedDay == null || selectedDay.noteCount == 0) {
+                                "这一天没有${metric.noteLabel}的笔记"
+                            } else {
+                                "${selectedDay.noteCount} 篇笔记"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                selectedNotes.take(3).forEach { note ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(MaterialTheme.colorScheme.primary),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = note.title.ifBlank { "无标题" },
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (selectedNotes.size > 3) {
+                    Text(
+                        text = "还有 ${selectedNotes.size - 3} 篇笔记",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -810,38 +1141,62 @@ private fun DataCardStatDivider() {
     )
 }
 
-private data class HeatmapStats(
+internal enum class HeatmapMetric(
+    val label: String,
+    val noteLabel: String,
+) {
+    CREATED("创建时间", "创建"),
+    EDITED("编辑时间", "编辑");
+
+    fun dateOf(note: Note): Date = if (this == CREATED) note.createdAt else note.lastModified
+}
+
+internal data class HeatmapStats(
     val columns: List<List<HeatmapDay>>,
     val activeDayCount: Int,
     val noteCount: Int,
+    val peakDay: HeatmapDay?,
+    val longestStreak: Int,
 )
 
-private data class HeatmapDay(
+internal data class HeatmapDay(
     val date: Date,
     val noteCount: Int,
 )
 
-private fun buildHeatmapStats(
+internal fun heatmapColorAlpha(noteCount: Int): Float =
+    when {
+        noteCount <= 0 -> 0.42f
+        noteCount <= 10 -> 0.28f
+        noteCount <= 20 -> 0.46f
+        noteCount <= 30 -> 0.64f
+        else -> 0.86f
+    }
+
+internal fun buildHeatmapStats(
     notes: List<Note>,
     rangeStart: Date,
     rangeEnd: Date,
     gridStart: Date,
+    metric: HeatmapMetric = HeatmapMetric.CREATED,
 ): HeatmapStats {
     val dayCounts = mutableMapOf<Long, Int>()
     var noteCount = 0
+    val normalizedRangeStart = heatmapDayStart(rangeStart)
+    val normalizedRangeEnd = heatmapDayStart(rangeEnd)
 
     notes.forEach { note ->
         if (note.isTrashed || note.isArchived) return@forEach
-        val createdDay = heatmapDayStart(note.createdAt)
-        if (createdDay.before(rangeStart) || createdDay.after(rangeEnd)) return@forEach
-        val key = createdDay.time
+        val eventDay = heatmapDayStart(metric.dateOf(note))
+        if (eventDay.before(normalizedRangeStart) || eventDay.after(normalizedRangeEnd)) return@forEach
+        val key = eventDay.time
         dayCounts[key] = (dayCounts[key] ?: 0) + 1
         noteCount++
     }
 
     val columns = mutableListOf<List<HeatmapDay>>()
     val cursor = Calendar.getInstance().apply { time = gridStart }
-    while (!cursor.time.after(rangeEnd)) {
+    while (!cursor.time.after(normalizedRangeEnd)) {
         val week = mutableListOf<HeatmapDay>()
         repeat(7) {
             val date = cursor.time
@@ -855,10 +1210,28 @@ private fun buildHeatmapStats(
         columns = columns,
         activeDayCount = dayCounts.size,
         noteCount = noteCount,
+        peakDay = dayCounts.maxByOrNull { it.value }?.let { HeatmapDay(Date(it.key), it.value) },
+        longestStreak = longestHeatmapStreak(dayCounts, normalizedRangeStart, normalizedRangeEnd),
     )
 }
 
-private fun heatmapDayStart(date: Date): Date =
+private fun longestHeatmapStreak(dayCounts: Map<Long, Int>, rangeStart: Date, rangeEnd: Date): Int {
+    val cursor = Calendar.getInstance().apply { time = rangeStart }
+    var current = 0
+    var longest = 0
+    while (!cursor.time.after(rangeEnd)) {
+        if ((dayCounts[cursor.time.time] ?: 0) > 0) {
+            current++
+            longest = maxOf(longest, current)
+        } else {
+            current = 0
+        }
+        cursor.add(Calendar.DAY_OF_MONTH, 1)
+    }
+    return longest
+}
+
+internal fun heatmapDayStart(date: Date): Date =
     Calendar.getInstance().apply {
         time = date
         set(Calendar.HOUR_OF_DAY, 0)
@@ -898,6 +1271,178 @@ private fun FileTreeToolbarIconButton(
     }
 }
 
+private const val FILE_TREE_SWIPE_ACTION_WIDTH_DP = 64
+private const val FILE_TREE_SWIPE_TRIGGER_DISTANCE_MM = 7f
+
+@Composable
+private fun FileTreeSwipeIndicator(
+    isRevealReady: Boolean,
+    singleContentDescription: String? = null,
+    singleRotation: Float = 0f,
+) {
+    if (isRevealReady) {
+        Icon(
+            painter = painterResource(R.drawable.ic_folder_navigation_expand),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+    } else {
+        Icon(
+            imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+            contentDescription = singleContentDescription,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .size(18.dp)
+                .graphicsLayer { rotationZ = singleRotation },
+        )
+    }
+}
+
+@Composable
+private fun FileTreeSwipeReveal(
+    itemKey: String,
+    onReveal: () -> Unit,
+    enabled: Boolean = true,
+    content: @Composable (Modifier, Float, Boolean) -> Unit,
+) {
+    if (!enabled) {
+        content(Modifier.fillMaxWidth(), 0f, false)
+        return
+    }
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    var offset by remember(itemKey) { mutableStateOf(0f) }
+    val currentOnReveal by rememberUpdatedState(onReveal)
+    val triggerDistancePx = remember(context) {
+        TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_MM,
+            FILE_TREE_SWIPE_TRIGGER_DISTANCE_MM,
+            context.resources.displayMetrics,
+        )
+    }
+    val actionWidth = FILE_TREE_SWIPE_ACTION_WIDTH_DP.dp
+    val actionWidthPx = with(density) { actionWidth.toPx() }
+    val revealProgress = (offset / actionWidthPx).coerceIn(0f, 1f)
+    val isRevealReady = offset >= triggerDistancePx
+    val gestureSerial = remember(itemKey) { intArrayOf(0) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(itemKey, triggerDistancePx, actionWidthPx) {
+                awaitEachGesture {
+                    val gestureId = ++gestureSerial[0]
+                    val gestureStart = SystemClock.uptimeMillis()
+                    val down = awaitFirstDown(
+                        requireUnconsumed = false,
+                        pass = PointerEventPass.Initial,
+                    )
+                    KardLeafLog.d(
+                        FILE_TREE_TRACE_TAG,
+                        "swipe down keyHash=${itemKey.hashCode()} gesture=$gestureId " +
+                            "pointer=${down.id} x=${down.position.x} y=${down.position.y} " +
+                            "offset=$offset t=$gestureStart",
+                    )
+                    val pointerId = down.id
+                    var lastX = down.position.x
+                    var totalDx = 0f
+                    var totalDy = 0f
+                    var moveCount = 0
+                    var dragging = false
+
+                    while (true) {
+                        val change = awaitPointerEvent(pass = PointerEventPass.Initial)
+                            .changes
+                            .firstOrNull { it.id == pointerId }
+                        if (change == null) {
+                            KardLeafLog.d(
+                                FILE_TREE_TRACE_TAG,
+                                "swipe cancel keyHash=${itemKey.hashCode()} gesture=$gestureId " +
+                                    "reason=pointerMissing dragging=$dragging moves=$moveCount " +
+                                    "offset=$offset elapsed=${SystemClock.uptimeMillis() - gestureStart}",
+                            )
+                            if (dragging) offset = 0f
+                            break
+                        }
+                        if (!change.pressed) {
+                            val offsetBeforeReset = offset
+                            val shouldReveal = dragging && offsetBeforeReset >= triggerDistancePx
+                            KardLeafLog.d(
+                                FILE_TREE_TRACE_TAG,
+                                "swipe up keyHash=${itemKey.hashCode()} gesture=$gestureId " +
+                                    "dragging=$dragging moves=$moveCount dx=$totalDx dy=$totalDy " +
+                                    "offset=$offsetBeforeReset trigger=$triggerDistancePx " +
+                                    "shouldReveal=$shouldReveal elapsed=${SystemClock.uptimeMillis() - gestureStart}",
+                            )
+                            if (dragging) {
+                                offset = 0f
+                                if (shouldReveal) {
+                                    KardLeafLog.d(
+                                        FILE_TREE_TRACE_TAG,
+                                        "swipe reveal keyHash=${itemKey.hashCode()} gesture=$gestureId",
+                                    )
+                                    currentOnReveal()
+                                }
+                            }
+                            break
+                        }
+
+                        moveCount++
+                        val dx = change.position.x - lastX
+                        lastX = change.position.x
+                        totalDx = change.position.x - down.position.x
+                        totalDy = change.position.y - down.position.y
+                        val absDx = kotlin.math.abs(totalDx)
+                        val absDy = kotlin.math.abs(totalDy)
+
+                        if (!dragging) {
+                            when {
+                                absDy > viewConfiguration.touchSlop && absDy >= absDx -> {
+                                    KardLeafLog.d(
+                                        FILE_TREE_TRACE_TAG,
+                                        "swipe cancel keyHash=${itemKey.hashCode()} gesture=$gestureId " +
+                                            "reason=vertical dx=$totalDx dy=$totalDy moves=$moveCount",
+                                    )
+                                    break
+                                }
+                                totalDx > viewConfiguration.touchSlop && totalDx > absDy * 1.2f -> {
+                                    dragging = true
+                                    offset = totalDx.coerceIn(0f, actionWidthPx)
+                                    KardLeafLog.d(
+                                        FILE_TREE_TRACE_TAG,
+                                        "swipe dragStart keyHash=${itemKey.hashCode()} gesture=$gestureId " +
+                                            "dx=$totalDx dy=$totalDy offset=$offset moves=$moveCount",
+                                    )
+                                    change.consume()
+                                }
+                                absDx > viewConfiguration.touchSlop -> {
+                                    KardLeafLog.d(
+                                        FILE_TREE_TRACE_TAG,
+                                        "swipe cancel keyHash=${itemKey.hashCode()} gesture=$gestureId " +
+                                            "reason=horizontal dx=$totalDx dy=$totalDy moves=$moveCount",
+                                    )
+                                    break
+                                }
+                            }
+                        } else {
+                            offset = (offset + dx).coerceIn(0f, actionWidthPx)
+                            change.consume()
+                        }
+                    }
+                }
+            },
+    ) {
+        content(
+            Modifier
+                .fillMaxWidth()
+                .graphicsLayer { translationX = offset.roundToInt().toFloat() },
+            revealProgress,
+            isRevealReady,
+        )
+    }
+}
+
 private class AboveFileTreePopupPositionProvider(
     private val gapPx: Int,
 ) : PopupPositionProvider {
@@ -928,7 +1473,11 @@ private fun FileTreeActionPopup(
     Popup(
         popupPositionProvider = positionProvider,
         onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true),
+        properties = PopupProperties(
+            focusable = false,
+            dismissOnBackPress = false,
+            dismissOnClickOutside = true,
+        ),
     ) {
         Surface(
             shape = MaterialTheme.shapes.extraSmall,
@@ -956,11 +1505,13 @@ private fun CategoryDrawerContent(
     selectedFolderPath: String?,
     onToggleFolder: (String) -> Unit,
     onNoteClick: (Note) -> Unit,
+    onRevealNote: (Note) -> Unit,
     onOpenFolder: (String) -> Unit,
     onCreateNote: (String) -> Unit,
-    onCreateLabel: (String) -> Unit,
+    onCreateLabel: (String, (Boolean) -> Unit) -> Unit,
     onDeleteLabel: (String) -> Unit,
-    onRenameLabel: (String, String) -> Unit,
+    onRenameLabel: (String, String, (Boolean) -> Unit) -> Unit,
+    onFolderRenameCommitted: (String, String) -> Unit,
     onSelectFolder: (String?) -> Unit,
     onExpandAll: () -> Unit,
     onCollapseAll: () -> Unit,
@@ -971,7 +1522,7 @@ private fun CategoryDrawerContent(
     onSwitchVault: (VaultInfo) -> Unit,
     onDeleteVault: (VaultInfo) -> Unit,
     onRenameVault: (VaultInfo, String) -> Unit,
-    onRenameNote: (Note, String) -> Unit,
+    onRenameNote: (Note, String, (String?) -> Unit) -> Unit,
     onMoveNote: (Note, String) -> Unit,
     onDeleteNote: (Note) -> Unit,
     onToggleFavorite: (Note) -> Unit,
@@ -996,10 +1547,25 @@ private fun CategoryDrawerContent(
     var showFilterMenu by remember { mutableStateOf(false) }
     var showHiddenFolders by remember { mutableStateOf(false) }
     var showAllFiles by remember { mutableStateOf(false) }
+    val optimisticMutations = remember(currentVault?.uri) { mutableStateListOf<DrawerOptimisticMutation>() }
+    var nextMutationId by remember(currentVault?.uri) { mutableStateOf(0L) }
+    val mutationSnapshot = optimisticMutations.toList()
+    val displayedVisibleLabels = applyDrawerMutationsToPaths(visibleLabels, mutationSnapshot)
+        .filterNot(::isHiddenDrawerPath)
+    val displayedAllLabels = applyDrawerMutationsToPaths(allLabels, mutationSnapshot)
+    val displayedNotes = applyDrawerMutationsToNotes(allNotes, mutationSnapshot)
+        .filterNot { isHiddenDrawerPath(it.folder) }
+    val displayedAllNotes = applyDrawerMutationsToNotes(allNotesIncludingHidden, mutationSnapshot)
+    val displayedCollapsedFolders = collapsedFolders.mapTo(linkedSetOf()) { path ->
+        applyDrawerFolderRenames(path, mutationSnapshot)
+    }
+    val displayedSelectedFolderPath = selectedFolderPath?.let { path ->
+        applyDrawerFolderRenames(path, mutationSnapshot)
+    }
     val context = LocalContext.current
     val fileTreeScrollState = rememberScrollState()
     var drawerScanResult by remember(currentVault?.uri) { mutableStateOf(DrawerScanResult()) }
-    // ponytail: scan only while a filter needs it; add an indexed file cache if this becomes slow.
+    // ponytail: cap SAF traversal concurrency at 8; add an indexed file cache only if this remains slow.
     LaunchedEffect(currentVault?.uri, showHiddenFolders, showAllFiles) {
         drawerScanResult = if (showHiddenFolders || showAllFiles) {
             scanDrawerFiles(
@@ -1011,21 +1577,26 @@ private fun CategoryDrawerContent(
             DrawerScanResult()
         }
     }
+    val displayedScannedFolders = applyDrawerMutationsToPaths(drawerScanResult.folders.toList(), mutationSnapshot)
+    val displayedScannedFiles = drawerScanResult.files.map { file ->
+        val path = applyDrawerMutationsToNotePath(file.path, mutationSnapshot)
+        file.copy(name = path.substringAfterLast('/'), path = path)
+    }
     val treeLabels = remember(
-        visibleLabels,
-        allLabels,
+        displayedVisibleLabels,
+        displayedAllLabels,
         showHiddenFolders,
-        drawerScanResult.folders,
+        displayedScannedFolders,
         inlineFolderEditor?.path,
     ) {
-        (if (showHiddenFolders) allLabels else visibleLabels) +
-            drawerScanResult.folders +
+        (if (showHiddenFolders) displayedAllLabels else displayedVisibleLabels) +
+            displayedScannedFolders +
             listOfNotNull(inlineFolderEditor?.path)
     }
-    val treeNotes = if (showHiddenFolders && allNotesIncludingHidden.isNotEmpty()) {
-        allNotesIncludingHidden
+    val treeNotes = if (showHiddenFolders && displayedAllNotes.isNotEmpty()) {
+        displayedAllNotes
     } else {
-        allNotes
+        displayedNotes
     }
     val normalizedLabels = remember(treeLabels) { treeLabels.map(::normalizeDrawerPath) }
     val normalizedNotes = remember(treeNotes) {
@@ -1044,6 +1615,25 @@ private fun CategoryDrawerContent(
         normalizedDrawerPaths(normalizedLabels, normalizedNotes)
     }
 
+    LaunchedEffect(visibleLabels, allLabels, allNotes, allNotesIncludingHidden, mutationSnapshot) {
+        val baseFolders = normalizedDrawerPaths(visibleLabels + allLabels, allNotes + allNotesIncludingHidden).toSet()
+        val baseNotes = (allNotes + allNotesIncludingHidden).map { normalizeDrawerPath(it.file.path) }.toSet()
+        val reflectedIds = mutationSnapshot.mapIndexedNotNull { index, mutation ->
+            if (!mutation.committed) return@mapIndexedNotNull null
+            val later = mutationSnapshot.drop(index + 1).filter { it.committed }
+            val reflected = when (mutation) {
+                is DrawerOptimisticMutation.CreateFolder ->
+                    applyDrawerFolderRenames(mutation.path, later) in baseFolders
+                is DrawerOptimisticMutation.RenameFolder ->
+                    applyDrawerFolderRenames(mutation.newPath, later) in baseFolders
+                is DrawerOptimisticMutation.RenameNote ->
+                    applyDrawerMutationsToNotePath(mutation.newPath, later) in baseNotes
+            }
+            mutation.id.takeIf { reflected }
+        }.toSet()
+        if (reflectedIds.isNotEmpty()) optimisticMutations.removeAll { it.id in reflectedIds }
+    }
+
     fun clearInlineEditorState() {
         inlineFolderEditor = null
         inlineFolderText = TextFieldValue()
@@ -1054,6 +1644,36 @@ private fun CategoryDrawerContent(
     fun cancelInlineEditor() {
         clearInlineEditorState()
         onSelectFolder(null)
+    }
+
+    fun submitFolderRename(oldPath: String, newPath: String) {
+        val mutation = DrawerOptimisticMutation.RenameFolder(++nextMutationId, oldPath, newPath)
+        optimisticMutations += mutation
+        onRenameLabel(oldPath, newPath) { success ->
+            val index = optimisticMutations.indexOfFirst { it.id == mutation.id }
+            if (index >= 0) {
+                if (success) {
+                    optimisticMutations[index] = mutation.copy(committed = true)
+                    val oldParent = parentDrawerFolderPath(oldPath)
+                    val affectedParents = (allFolderPaths.filter { it == oldPath || it.startsWith("$oldPath/") } + oldParent)
+                        .distinct()
+                    affectedParents.forEach { parent ->
+                        val order = getFolderDisplayOrder(parent)
+                        val renamedParent = remapDrawerTreePath(parent, oldPath, newPath)
+                        if (parent != renamedParent) onSaveFolderDisplayOrder(parent, emptyList())
+                        if (order.isNotEmpty()) {
+                            onSaveFolderDisplayOrder(
+                                renamedParent,
+                                order.map { remapDrawerTreePath(it, oldPath, newPath) },
+                            )
+                        }
+                    }
+                    onFolderRenameCommitted(oldPath, newPath)
+                } else {
+                    optimisticMutations.removeAt(index)
+                }
+            }
+        }
     }
 
     fun finishInlineEditor(): Boolean {
@@ -1076,9 +1696,20 @@ private fun CategoryDrawerContent(
             )
             val callbackStartedAt = SystemClock.elapsedRealtime()
             if (editor.isNew) {
-                onCreateLabel(newPath)
+                val mutation = DrawerOptimisticMutation.CreateFolder(++nextMutationId, newPath)
+                optimisticMutations += mutation
+                onCreateLabel(newPath) { success ->
+                    val index = optimisticMutations.indexOfFirst { it.id == mutation.id }
+                    if (index >= 0) {
+                        if (success) {
+                            optimisticMutations[index] = mutation.copy(committed = true)
+                        } else {
+                            optimisticMutations.removeAt(index)
+                        }
+                    }
+                }
             } else if (newPath != editor.path) {
-                onRenameLabel(editor.path, newPath)
+                submitFolderRename(editor.path, newPath)
             }
             KardLeafLog.d(
                 FILE_TREE_TRACE_TAG,
@@ -1105,7 +1736,40 @@ private fun CategoryDrawerContent(
                     "changed=${title != note.title} textLength=${inlineNoteText.text.length}",
             )
             val callbackStartedAt = SystemClock.elapsedRealtime()
-            if (title != note.title) onRenameNote(note, title)
+            if (title != note.title) {
+                val baseTitle = NoteFormatUtils.sanitizeMarkdownFileBaseName(title)
+                var optimisticTitle = baseTitle
+                var optimisticPath = joinDrawerFolderPath(note.folder, "$optimisticTitle.md")
+                val sourcePath = normalizeDrawerPath(note.file.path)
+                val occupiedPaths = normalizedNotes.mapTo(hashSetOf()) { normalizeDrawerPath(it.file.path) }
+                var counter = 1
+                while (optimisticPath != sourcePath && optimisticPath in occupiedPaths) {
+                    optimisticTitle = "$baseTitle($counter)"
+                    optimisticPath = joinDrawerFolderPath(note.folder, "$optimisticTitle.md")
+                    counter++
+                }
+                val mutation = DrawerOptimisticMutation.RenameNote(
+                    id = ++nextMutationId,
+                    oldPath = sourcePath,
+                    newPath = optimisticPath,
+                    newTitle = optimisticTitle,
+                )
+                optimisticMutations += mutation
+                onRenameNote(note, title) { savedPath ->
+                    val index = optimisticMutations.indexOfFirst { it.id == mutation.id }
+                    if (index >= 0) {
+                        if (savedPath != null) {
+                            optimisticMutations[index] = mutation.copy(
+                                newPath = normalizeDrawerPath(savedPath),
+                                newTitle = savedPath.substringAfterLast('/').substringBeforeLast('.'),
+                                committed = true,
+                            )
+                        } else {
+                            optimisticMutations.removeAt(index)
+                        }
+                    }
+                }
+            }
             KardLeafLog.d(
                 FILE_TREE_TRACE_TAG,
                 "inline callback returned kind=note elapsed=${SystemClock.elapsedRealtime() - callbackStartedAt}ms",
@@ -1138,7 +1802,7 @@ private fun CategoryDrawerContent(
     fun startNewFolder(parent: String) {
         if (!selectFolder(null)) return
         val normalizedParent = normalizeDrawerPath(parent)
-        if (normalizedParent in collapsedFolders) onToggleFolder(normalizedParent)
+        if (normalizedParent in displayedCollapsedFolders) onToggleFolder(normalizedParent)
         val path = joinDrawerFolderPath(normalizedParent, INLINE_NEW_FOLDER_PATH)
         inlineFolderEditor = DrawerInlineFolderEditor(path, normalizedParent, isNew = true)
         inlineFolderText = TextFieldValue()
@@ -1163,7 +1827,7 @@ private fun CategoryDrawerContent(
     val inlineFolderPath = inlineFolderEditor?.path
     val inlineNotePath = inlineNoteTarget?.file?.path
 
-    BackHandler(enabled = inlineFolderEditor != null || inlineNoteTarget != null || selectedFolderPath != null || noteMoveTarget != null || noteDeleteTarget != null) {
+    BackHandler(enabled = inlineFolderEditor != null || inlineNoteTarget != null || displayedSelectedFolderPath != null || noteMoveTarget != null || noteDeleteTarget != null) {
         when {
             inlineFolderEditor != null || inlineNoteTarget != null -> cancelInlineEditor()
             noteMoveTarget != null -> noteMoveTarget = null
@@ -1334,14 +1998,20 @@ private fun CategoryDrawerContent(
                         trailingIcon = {
                             if (showHiddenFolders) Icon(Icons.Filled.Check, contentDescription = null)
                         },
-                        onClick = { showHiddenFolders = !showHiddenFolders },
+                        onClick = {
+                            showHiddenFolders = !showHiddenFolders
+                            showFilterMenu = false
+                        },
                     )
                     DropdownMenuItem(
                         text = { Text("显示全部文件") },
                         trailingIcon = {
                             if (showAllFiles) Icon(Icons.Filled.Check, contentDescription = null)
                         },
-                        onClick = { showAllFiles = !showAllFiles },
+                        onClick = {
+                            showAllFiles = !showAllFiles
+                            showFilterMenu = false
+                        },
                     )
                 }
             }
@@ -1398,12 +2068,12 @@ private fun CategoryDrawerContent(
             FileDrawerSection(
                 visibleLabels = treeLabels,
                 allNotes = treeNotes,
-                extraFiles = drawerScanResult.files,
+                extraFiles = displayedScannedFiles,
                 showAllFiles = showAllFiles,
                 currentScreen = currentScreen,
                 currentFilter = currentFilter,
-                collapsedFolders = collapsedFolders,
-                selectedFolderPath = selectedFolderPath,
+                collapsedFolders = displayedCollapsedFolders,
+                selectedFolderPath = displayedSelectedFolderPath,
                 showHiddenFolders = showHiddenFolders,
                 inlineFolderPath = inlineFolderPath,
                 inlineFolderText = inlineFolderText,
@@ -1411,11 +2081,12 @@ private fun CategoryDrawerContent(
                 inlineNoteText = inlineNoteText,
                 onToggleFolder = onToggleFolder,
                 onNoteClick = onNoteClick,
+                onRevealNote = onRevealNote,
                 onOpenFolder = onOpenFolder,
                 onCreateNote = onCreateNote,
                 onCreateFolder = ::startNewFolder,
                 onDeleteLabel = onDeleteLabel,
-                onRenameLabel = onRenameLabel,
+                onRenameLabel = ::submitFolderRename,
                 onSelectFolder = ::selectFolder,
                 onRenameFolder = ::startRenameFolder,
                 onMoveFolder = { moveTarget = it },
@@ -1437,17 +2108,20 @@ private fun CategoryDrawerContent(
     }
 
     moveTarget?.let { path ->
-        DrawerMoveFolderDialog(
+        DrawerMoveFolderMenu(
             folderPath = path,
             labels = normalizedLabels,
             onDismiss = { moveTarget = null },
             onMove = { targetParent ->
                 val newPath = joinDrawerFolderPath(targetParent, path.substringAfterLast('/'))
                 when {
-                    newPath == path -> moveTarget = null
+                    newPath == path -> {
+                        context.showToast("源目录与目标目录相同")
+                        moveTarget = null
+                    }
                     newPath in normalizedLabels -> context.showToast("目标位置已存在同名文件夹")
                     else -> {
-                        onRenameLabel(path, newPath)
+                        submitFolderRename(path, newPath)
                         moveTarget = null
                     }
                 }
@@ -1513,15 +2187,27 @@ private fun CategoryDrawerContent(
     }
 
     noteMoveTarget?.let { note ->
-        DrawerMoveFolderDialog(
+        DrawerMoveFolderMenu(
             title = "移动文件",
             folderPath = note.file.path,
             initialParentPath = normalizeDrawerPath(note.folder),
             labels = normalizedLabels,
             onDismiss = { noteMoveTarget = null },
             onMove = { targetFolder ->
-                onMoveNote(note, targetFolder)
-                noteMoveTarget = null
+                val newPath = joinDrawerFolderPath(targetFolder, note.file.name)
+                when {
+                    newPath == normalizeDrawerPath(note.file.path) -> {
+                        context.showToast("源目录与目标目录相同")
+                        noteMoveTarget = null
+                    }
+                    normalizedNotes.any { normalizeDrawerPath(it.file.path) == newPath } -> {
+                        context.showToast("目标位置已存在同名文件")
+                    }
+                    else -> {
+                        onMoveNote(note, targetFolder)
+                        noteMoveTarget = null
+                    }
+                }
             },
         )
     }
@@ -1607,7 +2293,7 @@ private fun DrawerFolderNameDialog(
 }
 
 @Composable
-private fun DrawerMoveFolderDialog(
+private fun DrawerMoveFolderMenu(
     title: String = "移动文件夹",
     folderPath: String,
     initialParentPath: String? = null,
@@ -1615,9 +2301,6 @@ private fun DrawerMoveFolderDialog(
     onDismiss: () -> Unit,
     onMove: (String) -> Unit,
 ) {
-    var selectedParent by remember(folderPath) {
-        mutableStateOf(initialParentPath ?: parentDrawerFolderPath(folderPath))
-    }
     val availableParents = remember(labels, folderPath) {
         (listOf("") + labels)
             .filter { path ->
@@ -1626,65 +2309,34 @@ private fun DrawerMoveFolderDialog(
             .distinct()
             .sorted()
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 360.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                Text(
-                    text = folderPath,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(8.dp))
-                availableParents.forEach { parent ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { selectedParent = parent }
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Outlined.Folder,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .padding(end = 10.dp)
-                                .size(22.dp),
-                            tint = if (selectedParent == parent) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                        Text(
-                            text = parent.ifBlank { "根目录" },
-                            color = if (selectedParent == parent) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onMove(selectedParent) }) { Text("移动") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
+    val nodes = remember(availableParents) {
+        val folders = buildFileTreePickerFolderNodes(availableParents.filter(String::isNotBlank))
+        listOf(
+            FileTreePickerNode(
+                id = DRAWER_MOVE_ROOT_ID,
+                label = "根目录",
+                value = "",
+                hasChildren = folders.any { it.depth == 0 },
+            ),
+        ) + folders.map { folder ->
+            folder.copy(
+                depth = folder.depth + 1,
+                parentId = folder.parentId ?: DRAWER_MOVE_ROOT_ID,
+            )
+        }
+    }
+    val selectedParent = initialParentPath ?: parentDrawerFolderPath(folderPath)
+    FileTreePickerDialog(
+        title = title,
+        nodes = nodes,
+        selectedId = selectedParent.ifBlank { DRAWER_MOVE_ROOT_ID },
+        selectionMode = FileTreeSelectionMode.FOLDER,
+        onSelect = { onMove(it.value) },
+        onDismiss = onDismiss,
     )
 }
+
+private const val DRAWER_MOVE_ROOT_ID = "__kardleaf_drawer_move_root__"
 
 @Composable
 private fun DrawerFolderSortDialog(
@@ -1700,18 +2352,25 @@ private fun DrawerFolderSortDialog(
     val normalizedPaths = remember(allFolderPaths, allNotes) {
         normalizedDrawerPaths(allFolderPaths, allNotes)
     }
-    val parentChoices = remember(normalizedPaths) {
-        (listOf("") + normalizedPaths)
-            .distinct()
-            .filter { parent ->
-                buildFolderNodes(normalizedPaths, allNotes, parent, getFolderDisplayOrder).size > 1
-            }
+    val foldersByParent = remember(normalizedPaths, allNotes, folderOrderVersion) {
+        val result = mutableMapOf<String, List<FolderNode>>()
+        fun index(parent: String, nodes: List<FolderNode>) {
+            result[parent] = nodes
+            nodes.forEach { node -> index(node.path, node.children) }
+        }
+        index("", buildFolderTree(normalizedPaths, allNotes, getFolderDisplayOrder))
+        result
+    }
+    val parentChoices = remember(foldersByParent) {
+        foldersByParent
+            .filterValues { it.size > 1 }
+            .keys
             .sortedWith(compareBy<String> { it.isNotBlank() }.thenBy { it })
     }
     var selectedParent by remember(initialParentPath) { mutableStateOf(initialParentPath) }
     var showParentMenu by remember { mutableStateOf(false) }
-    val folders = remember(normalizedPaths, selectedParent, folderOrderVersion) {
-        buildFolderNodes(normalizedPaths, allNotes, selectedParent, getFolderDisplayOrder)
+    val folders = remember(foldersByParent, selectedParent) {
+        foldersByParent[selectedParent].orEmpty()
     }
     val orderedFolders = remember { mutableStateListOf<FolderNode>() }
     val foldersKey = remember(folders) { folders.joinToString("|") { it.path } }
@@ -1841,7 +2500,7 @@ private fun DrawerItemGroup(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .padding(horizontal = 12.dp, vertical = 5.dp)
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) 0.72f else 0.88f))
             .border(
@@ -1849,7 +2508,7 @@ private fun DrawerItemGroup(
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.38f),
                 shape = shape,
             )
-            .padding(vertical = if (drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) 8.dp else 6.dp),
+            .padding(vertical = if (drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) 6.dp else 5.dp),
     ) {
         content()
     }
@@ -1900,6 +2559,109 @@ private data class DrawerUiState(
     val collapsedFolders: Set<String>,
 )
 
+private sealed interface DrawerOptimisticMutation {
+    val id: Long
+    val committed: Boolean
+
+    data class CreateFolder(
+        override val id: Long,
+        val path: String,
+        override val committed: Boolean = false,
+    ) : DrawerOptimisticMutation
+
+    data class RenameFolder(
+        override val id: Long,
+        val oldPath: String,
+        val newPath: String,
+        override val committed: Boolean = false,
+    ) : DrawerOptimisticMutation
+
+    data class RenameNote(
+        override val id: Long,
+        val oldPath: String,
+        val newPath: String,
+        val newTitle: String,
+        override val committed: Boolean = false,
+    ) : DrawerOptimisticMutation
+}
+
+internal fun remapDrawerTreePath(path: String, oldPath: String, newPath: String): String =
+    when {
+        path == oldPath -> newPath
+        path.startsWith("$oldPath/") -> newPath + path.removePrefix(oldPath)
+        else -> path
+    }
+
+private fun applyDrawerFolderRenames(
+    path: String,
+    mutations: List<DrawerOptimisticMutation>,
+): String = mutations.fold(normalizeDrawerPath(path)) { current, mutation ->
+    if (mutation is DrawerOptimisticMutation.RenameFolder) {
+        remapDrawerTreePath(current, mutation.oldPath, mutation.newPath)
+    } else {
+        current
+    }
+}
+
+private fun applyDrawerMutationsToNotePath(
+    path: String,
+    mutations: List<DrawerOptimisticMutation>,
+): String = mutations.fold(normalizeDrawerPath(path)) { current, mutation ->
+    when (mutation) {
+        is DrawerOptimisticMutation.RenameFolder ->
+            remapDrawerTreePath(current, mutation.oldPath, mutation.newPath)
+        is DrawerOptimisticMutation.RenameNote ->
+            if (current == mutation.oldPath) mutation.newPath else current
+        is DrawerOptimisticMutation.CreateFolder -> current
+    }
+}
+
+private fun applyDrawerMutationsToPaths(
+    paths: List<String>,
+    mutations: List<DrawerOptimisticMutation>,
+): List<String> {
+    var result = paths.mapTo(linkedSetOf(), ::normalizeDrawerPath)
+    mutations.forEach { mutation ->
+        result = when (mutation) {
+            is DrawerOptimisticMutation.CreateFolder -> (result + mutation.path).toCollection(linkedSetOf())
+            is DrawerOptimisticMutation.RenameFolder -> result.mapTo(linkedSetOf()) { path ->
+                remapDrawerTreePath(path, mutation.oldPath, mutation.newPath)
+            }
+            is DrawerOptimisticMutation.RenameNote -> result
+        }
+    }
+    return result.filter { it.isNotBlank() }
+}
+
+private fun applyDrawerMutationsToNotes(
+    notes: List<Note>,
+    mutations: List<DrawerOptimisticMutation>,
+): List<Note> = notes.map { note ->
+    mutations.fold(note) { current, mutation ->
+        when (mutation) {
+            is DrawerOptimisticMutation.RenameFolder -> {
+                val newPath = remapDrawerTreePath(
+                    normalizeDrawerPath(current.file.path),
+                    mutation.oldPath,
+                    mutation.newPath,
+                )
+                if (newPath == normalizeDrawerPath(current.file.path)) current else current.copy(file = java.io.File(newPath))
+            }
+            is DrawerOptimisticMutation.RenameNote -> {
+                if (normalizeDrawerPath(current.file.path) == mutation.oldPath) {
+                    current.copy(file = java.io.File(mutation.newPath), title = mutation.newTitle)
+                } else {
+                    current
+                }
+            }
+            is DrawerOptimisticMutation.CreateFolder -> current
+        }
+    }
+}
+
+private fun isHiddenDrawerPath(path: String): Boolean =
+    normalizeDrawerPath(path).split('/').any { it.startsWith('.') }
+
 private const val INLINE_NEW_FOLDER_PATH = "__kardleaf_inline_new_folder__"
 private const val FILE_TREE_TRACE_TAG = "KardLeafFileTree"
 
@@ -1935,27 +2697,33 @@ private suspend fun scanDrawerFiles(
     val root = rootUri
         ?.let { runCatching { DocumentFile.fromTreeUri(context, Uri.parse(it)) }.getOrNull() }
         ?: return@withContext DrawerScanResult()
-    val folders = linkedSetOf<String>()
-    val files = mutableListOf<DrawerFile>()
+    val scanDispatcher = Dispatchers.IO.limitedParallelism(8)
 
-    fun visit(directory: DocumentFile, parentPath: String) {
-        directory.listFiles().forEach { child ->
+    suspend fun visit(directory: DocumentFile, parentPath: String): DrawerScanResult = coroutineScope {
+        val childFolders = linkedSetOf<String>()
+        val childFiles = mutableListOf<DrawerFile>()
+        val nestedScans = directory.listFiles().mapNotNull { child ->
             val name = child.name?.trim().orEmpty()
-            if (name.isBlank()) return@forEach
+            if (name.isBlank()) return@mapNotNull null
             val path = joinDrawerFolderPath(parentPath, name)
             if (child.isDirectory) {
-                if (!includeHiddenFolders && name.startsWith('.')) return@forEach
-                folders += path
-                visit(child, path)
-            } else if (child.isFile) {
-                if (!includeHiddenFolders && path.split('/').any { it.startsWith('.') }) return@forEach
-                files += DrawerFile(name = name, path = path)
+                if (!includeHiddenFolders && name.startsWith('.')) return@mapNotNull null
+                childFolders += path
+                async(scanDispatcher) { visit(child, path) }
+            } else {
+                if (!includeHiddenFolders && path.split('/').any { it.startsWith('.') }) return@mapNotNull null
+                childFiles += DrawerFile(name = name, path = path)
+                null
             }
         }
+        nestedScans.awaitAll().forEach { result ->
+            childFolders += result.folders
+            childFiles += result.files
+        }
+        DrawerScanResult(folders = childFolders, files = childFiles)
     }
 
     visit(root, "")
-    DrawerScanResult(folders = folders, files = files)
 }
 
 @Composable
@@ -1975,6 +2743,7 @@ private fun FileDrawerSection(
     extraFiles: List<DrawerFile>,
     onToggleFolder: (String) -> Unit,
     onNoteClick: (Note) -> Unit,
+    onRevealNote: (Note) -> Unit,
     onOpenFolder: (String) -> Unit,
     onCreateNote: (String) -> Unit,
     onCreateFolder: (String) -> Unit,
@@ -2028,6 +2797,7 @@ private fun FileDrawerSection(
             inlineNoteText = inlineNoteText,
             onToggleFolder = onToggleFolder,
             onNoteClick = onNoteClick,
+            onRevealNote = onRevealNote,
             onOpenFolder = onOpenFolder,
             onCreateNote = onCreateNote,
             onCreateFolder = onCreateFolder,
@@ -2054,6 +2824,7 @@ private fun FileDrawerSection(
             note = note,
             depth = 0,
             onNoteClick = onNoteClick,
+            onRevealNote = onRevealNote,
             onRenameNote = onRenameNote,
             onMoveNote = onMoveNote,
             onDeleteNote = onDeleteNote,
@@ -2108,50 +2879,57 @@ private fun buildFolderTree(
     notes: List<Note>,
     savedOrderFor: (String) -> List<String> = { emptyList() },
     files: List<DrawerFile> = emptyList(),
-): List<FolderNode> = buildFolderNodes(
-    normalizedPaths = normalizedDrawerPaths(paths, notes, files),
-    notes = notes,
-    prefix = "",
-    savedOrderFor = savedOrderFor,
-    files = files,
-)
-
-private fun buildFolderNodes(
-    normalizedPaths: List<String>,
-    notes: List<Note>,
-    prefix: String,
-    savedOrderFor: (String) -> List<String>,
-    files: List<DrawerFile> = emptyList(),
 ): List<FolderNode> {
-    val prefixWithSlash = prefix.takeIf { it.isNotBlank() }?.let { "$it/" }.orEmpty()
-    val orderIndex = savedOrderFor(prefix).withIndex().associate { it.value to it.index }
-    return normalizedPaths
-        .asSequence()
-        .filter { it.startsWith(prefixWithSlash) && it != prefix }
-        .map { it.removePrefix(prefixWithSlash).substringBefore("/") }
-        .filter { it.isNotBlank() }
-        .distinct()
+    val childrenByParent = mutableMapOf<String, LinkedHashSet<String>>()
+    normalizedDrawerPaths(paths, notes, files).forEach { path ->
+        var parent = ""
+        path.split('/').filter { it.isNotBlank() }.forEach { name ->
+            childrenByParent.getOrPut(parent) { linkedSetOf() }.add(name)
+            parent = joinDrawerFolderPath(parent, name)
+        }
+    }
+    val notesByFolder = notes.groupBy { normalizeDrawerPath(it.folder) }
+    val filesByFolder = files.groupBy { parentDrawerFolderPath(normalizeDrawerPath(it.path)) }
+    val locale = Locale.getDefault()
+
+    fun build(parent: String): List<FolderNode> {
+        val orderIndex = savedOrderFor(parent).withIndex().associate { it.value to it.index }
+        return childrenByParent[parent]
+            .orEmpty()
+            .asSequence()
         .sortedWith(
             compareBy<String> { name ->
-                val path = if (prefix.isBlank()) name else "$prefix/$name"
+                val path = joinDrawerFolderPath(parent, name)
                 orderIndex[path] ?: Int.MAX_VALUE
-            }.thenBy { it.lowercase(Locale.getDefault()) },
+            }.thenBy { it.lowercase(locale) },
         )
         .map { name ->
-            val path = if (prefix.isBlank()) name else "$prefix/$name"
+            val path = joinDrawerFolderPath(parent, name)
             FolderNode(
                 name = name,
                 path = path,
-                children = buildFolderNodes(normalizedPaths, notes, path, savedOrderFor, files),
-                notes = notes
-                    .filter { normalizeDrawerPath(it.folder) == path }
-                    .sortedBy { it.title.lowercase(Locale.getDefault()) },
-                files = files
-                    .filter { parentDrawerFolderPath(normalizeDrawerPath(it.path)) == path }
-                    .sortedBy { it.name.lowercase(Locale.getDefault()) },
+                children = build(path),
+                notes = notesByFolder[path].orEmpty().sortedBy { it.title.lowercase(locale) },
+                files = filesByFolder[path].orEmpty().sortedBy { it.name.lowercase(locale) },
             )
         }
         .toList()
+    }
+    return build("")
+}
+
+internal fun Modifier.fileTreeHierarchyGuide(
+    depth: Int,
+    guideIndent: Int,
+    guideColor: Color,
+): Modifier = drawBehind {
+    val x = (24 + depth * guideIndent).dp.toPx()
+    drawLine(
+        color = guideColor,
+        start = Offset(x, 0f),
+        end = Offset(x, size.height),
+        strokeWidth = 1.dp.toPx(),
+    )
 }
 
 @Composable
@@ -2167,6 +2945,7 @@ private fun FolderTree(
     inlineNoteText: TextFieldValue,
     onToggleFolder: (String) -> Unit,
     onNoteClick: (Note) -> Unit,
+    onRevealNote: (Note) -> Unit,
     onOpenFolder: (String) -> Unit,
     onCreateNote: (String) -> Unit,
     onCreateFolder: (String) -> Unit,
@@ -2198,6 +2977,7 @@ private fun FolderTree(
             collapsedFolders = collapsedFolders,
             selectedFolderPath = selectedFolderPath,
             onToggleFolder = onToggleFolder,
+            onRevealNote = onRevealNote,
             onCreateNote = onCreateNote,
             onCreateFolder = onCreateFolder,
             onDeleteLabel = onDeleteLabel,
@@ -2220,15 +3000,7 @@ private fun FolderTree(
         if (node.path !in collapsedFolders && (node.children.isNotEmpty() || node.notes.isNotEmpty() || node.files.isNotEmpty())) {
             val guideColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f)
             Column(
-                modifier = Modifier.drawBehind {
-                    val x = (24 + depth * guideIndent).dp.toPx()
-                    drawLine(
-                        color = guideColor,
-                        start = androidx.compose.ui.geometry.Offset(x, 0f),
-                        end = androidx.compose.ui.geometry.Offset(x, size.height),
-                        strokeWidth = 1.dp.toPx(),
-                    )
-                },
+                modifier = Modifier.fileTreeHierarchyGuide(depth, guideIndent, guideColor),
             ) {
                 if (node.children.isNotEmpty()) {
                     FolderTree(
@@ -2243,6 +3015,7 @@ private fun FolderTree(
                         inlineNoteText = inlineNoteText,
                         onToggleFolder = onToggleFolder,
                         onNoteClick = onNoteClick,
+                        onRevealNote = onRevealNote,
                         onOpenFolder = onOpenFolder,
                         onCreateNote = onCreateNote,
                         onCreateFolder = onCreateFolder,
@@ -2270,6 +3043,7 @@ private fun FolderTree(
                         note = note,
                         depth = depth + 1,
                         onNoteClick = onNoteClick,
+                        onRevealNote = onRevealNote,
                         onRenameNote = onRenameNote,
                         onMoveNote = onMoveNote,
                         onDeleteNote = onDeleteNote,
@@ -2299,6 +3073,7 @@ private fun FolderNoteItem(
     note: Note,
     depth: Int,
     onNoteClick: (Note) -> Unit,
+    onRevealNote: (Note) -> Unit,
     onRenameNote: (Note) -> Unit,
     onMoveNote: (Note) -> Unit,
     onDeleteNote: (Note) -> Unit,
@@ -2312,67 +3087,114 @@ private fun FolderNoteItem(
 ) {
     var showMenu by remember(note.file.path) { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
-    Box {
-        ThemedDrawerItem(
-            label = note.title.ifBlank { note.file.nameWithoutExtension },
-            icon = null,
-            selected = false,
-            onClick = {
-                if (!inline) {
-                    onClearFolderSelection(null)
-                    onNoteClick(note)
-                }
-            },
-            onLongClick = if (inline) null else { offset ->
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                KardLeafLog.d(
-                    FILE_TREE_TRACE_TAG,
-                    "note long pathHash=${note.file.path.hashCode()} " +
-                        "selectionCleared=true xPx=${offset.x}",
-                )
-                onClearFolderSelection(null)
-                showMenu = true
-            },
-            content = if (inline) {
-                {
-                    DrawerInlineNameField(
-                        value = inlineText,
-                        placeholder = null,
-                        onValueChange = onInlineTextChange,
-                        onDone = onInlineDone,
-                        modifier = Modifier.weight(1f),
+    val isModern = LocalKardLeafThemeStyle.current != PrefsManager.AppThemeStyle.CLASSIC
+    val noteIndicatorStart = if (isModern) (18 + depth * 12).dp else (16 + depth * 16).dp
+    val menuRenderCount = remember(note.file.path) { intArrayOf(0) }
+    LaunchedEffect(showMenu) {
+        if (showMenu) {
+            KardLeafLog.d(
+                FILE_TREE_TRACE_TAG,
+                "note menuState pathHash=${note.file.path.hashCode()} showMenu=true inline=$inline",
+            )
+        }
+    }
+    SideEffect {
+        if (showMenu) {
+            KardLeafLog.d(
+                FILE_TREE_TRACE_TAG,
+                "note compose pathHash=${note.file.path.hashCode()} " +
+                    "count=${++menuRenderCount[0]} showMenu=true inline=$inline",
+            )
+        }
+    }
+    val itemContent: @Composable (Modifier, Float, Boolean) -> Unit = { swipeModifier, swipeProgress, isRevealReady ->
+        Box(modifier = swipeModifier) {
+            ThemedDrawerItem(
+                label = note.title.ifBlank { note.file.nameWithoutExtension },
+                icon = null,
+                selected = false,
+                onClick = {
+                    if (!inline) {
+                        onClearFolderSelection(null)
+                        onNoteClick(note)
+                    }
+                },
+                onLongClick = if (inline) null else { offset ->
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    KardLeafLog.d(
+                        FILE_TREE_TRACE_TAG,
+                        "note long pathHash=${note.file.path.hashCode()} " +
+                            "showMenuBefore=$showMenu selectionCleared=true xPx=${offset.x} " +
+                            "yPx=${offset.y} t=${SystemClock.uptimeMillis()}",
                     )
+                    onClearFolderSelection(null)
+                    showMenu = true
+                    KardLeafLog.d(
+                        FILE_TREE_TRACE_TAG,
+                        "note long stateSet pathHash=${note.file.path.hashCode()} showMenu=true",
+                    )
+                },
+                content = if (inline) {
+                    {
+                        DrawerInlineNameField(
+                            value = inlineText,
+                            placeholder = null,
+                            onValueChange = onInlineTextChange,
+                            onDone = onInlineDone,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                } else {
+                    null
+                },
+                modifier = Modifier.padding(start = (24 + depth * 12).dp),
+                compact = true,
+            )
+            if (!inline && swipeProgress > 0f) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = noteIndicatorStart)
+                        .size(20.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    FileTreeSwipeIndicator(isRevealReady = isRevealReady)
                 }
-            } else {
-                null
-            },
-            modifier = Modifier.padding(start = (24 + depth * 12).dp),
-            compact = true,
-        )
-        DrawerNoteActionMenu(
-            expanded = showMenu && !inline,
-            isFavorite = note.isFavorite,
-            onDismiss = {
-                KardLeafLog.d(FILE_TREE_TRACE_TAG, "note menu dismiss pathHash=${note.file.path.hashCode()}")
-                showMenu = false
-            },
-            onRename = {
-                showMenu = false
-                onRenameNote(note)
-            },
-            onMove = {
-                showMenu = false
-                onMoveNote(note)
-            },
-            onDelete = {
-                KardLeafLog.d(FILE_TREE_TRACE_TAG, "note action=delete pathHash=${note.file.path.hashCode()}")
-                showMenu = false
-                onDeleteNote(note)
-            },
-            onToggleFavorite = {
-                showMenu = false
-                onToggleFavorite(note)
-            },
+            }
+            DrawerNoteActionMenu(
+                expanded = showMenu && !inline,
+                isFavorite = note.isFavorite,
+                onDismiss = {
+                    KardLeafLog.d(FILE_TREE_TRACE_TAG, "note menu dismiss pathHash=${note.file.path.hashCode()}")
+                    showMenu = false
+                },
+                onRename = {
+                    showMenu = false
+                    onRenameNote(note)
+                },
+                onMove = {
+                    showMenu = false
+                    onMoveNote(note)
+                },
+                onDelete = {
+                    KardLeafLog.d(FILE_TREE_TRACE_TAG, "note action=delete pathHash=${note.file.path.hashCode()}")
+                    showMenu = false
+                    onDeleteNote(note)
+                },
+                onToggleFavorite = {
+                    showMenu = false
+                    onToggleFavorite(note)
+                },
+            )
+        }
+    }
+    if (inline) {
+        itemContent(Modifier.fillMaxWidth(), 0f, false)
+    } else {
+        FileTreeSwipeReveal(
+            itemKey = note.file.path,
+            onReveal = { onRevealNote(note) },
+            content = itemContent,
         )
     }
 }
@@ -2435,7 +3257,7 @@ private fun DrawerFileItem(
 ) {
     ThemedDrawerItem(
         label = file.name,
-        icon = Icons.Outlined.Description,
+        icon = null,
         selected = false,
         onClick = onClick,
         modifier = Modifier.padding(start = (24 + depth * 12).dp),
@@ -2459,7 +3281,11 @@ private fun DrawerFolderActionMenu(
             onDismiss()
             onOpenFolder()
         }) {
-            Icon(Icons.Outlined.OpenInNew, contentDescription = "首页打开")
+            Icon(
+                painter = painterResource(R.drawable.ic_folder_navigation_expand),
+                contentDescription = "首页打开",
+                tint = Color.Unspecified,
+            )
         }
         FileTreeToolbarIconButton(onClick = {
             onDismiss()
@@ -2486,6 +3312,7 @@ private fun DrawerFolderActionMenu(
             Icon(
                 painter = painterResource(R.drawable.ic_file_tree_new_note),
                 contentDescription = "新增文件",
+                modifier = Modifier.size(30.dp),
                 tint = Color.Unspecified,
             )
         }
@@ -2496,6 +3323,7 @@ private fun DrawerFolderActionMenu(
             Icon(
                 painter = painterResource(R.drawable.ic_file_tree_new_folder),
                 contentDescription = "新增文件夹",
+                modifier = Modifier.size(30.dp),
                 tint = Color.Unspecified,
             )
         }
@@ -2540,6 +3368,7 @@ private fun FolderTreeItem(
     currentFilter: MainViewModel.NoteFilter,
     collapsedFolders: Set<String>,
     selectedFolderPath: String?,
+    onRevealNote: (Note) -> Unit,
     inline: Boolean,
     inlineText: TextFieldValue,
     onInlineTextChange: (TextFieldValue) -> Unit,
@@ -2568,6 +3397,24 @@ private fun FolderTreeItem(
     val canExpand = true
     val isCollapsed = node.path in collapsedFolders
     val canManage = node.path.split('/').none { it == ".KardLeaf" }
+    val menuRenderCount = remember(node.path) { intArrayOf(0) }
+    LaunchedEffect(isActionSelected) {
+        if (isActionSelected) {
+            KardLeafLog.d(
+                FILE_TREE_TRACE_TAG,
+                "folder menuState pathHash=${node.path.hashCode()} selected=true inline=$inline",
+            )
+        }
+    }
+    SideEffect {
+        if (isActionSelected) {
+            KardLeafLog.d(
+                FILE_TREE_TRACE_TAG,
+                "folder compose pathHash=${node.path.hashCode()} " +
+                    "count=${++menuRenderCount[0]} selected=true inline=$inline",
+            )
+        }
+    }
 
     val folderClick: () -> Unit = {
         KardLeafLog.d(
@@ -2582,9 +3429,15 @@ private fun FolderTreeItem(
         KardLeafLog.d(
             FILE_TREE_TRACE_TAG,
             "folder long pathHash=${node.path.hashCode()} " +
-                "selectedBeforeHash=${selectedFolderPath?.hashCode()} xPx=${offset.x}",
+                "selectedBeforeHash=${selectedFolderPath?.hashCode()} " +
+                "isActionSelected=$isActionSelected inline=$inline " +
+                "xPx=${offset.x} yPx=${offset.y} t=${SystemClock.uptimeMillis()}",
         )
         onSelectFolder(node.path)
+        KardLeafLog.d(
+            FILE_TREE_TRACE_TAG,
+            "folder long stateSet pathHash=${node.path.hashCode()} selected=true",
+        )
     }
     val dismissFolderMenu = {
         KardLeafLog.d(
@@ -2615,7 +3468,12 @@ private fun FolderTreeItem(
     )
 
     if (!isModern) {
-        Box {
+        FileTreeSwipeReveal(
+            itemKey = node.path,
+            onReveal = { onOpenFolder(node.path) },
+            enabled = !inline && canManage,
+        ) { swipeModifier, _, isRevealReady ->
+            Box(modifier = swipeModifier) {
             Row(
                 modifier =
                     Modifier
@@ -2632,6 +3490,20 @@ private fun FolderTreeItem(
                             if (!inline) {
                                 Modifier.pointerInput(node.path) {
                                     detectTapGestures(
+                                        onPress = {
+                                            val pressStart = SystemClock.uptimeMillis()
+                                            KardLeafLog.d(
+                                                FILE_TREE_TRACE_TAG,
+                                                "folder pressStart pathHash=${node.path.hashCode()} " +
+                                                    "t=$pressStart",
+                                            )
+                                            val released = tryAwaitRelease()
+                                            KardLeafLog.d(
+                                                FILE_TREE_TRACE_TAG,
+                                                "folder pressEnd pathHash=${node.path.hashCode()} " +
+                                                    "released=$released elapsed=${SystemClock.uptimeMillis() - pressStart}",
+                                            )
+                                        },
                                         onTap = { folderClick() },
                                         onLongPress = folderLongClick,
                                     )
@@ -2648,13 +3520,10 @@ private fun FolderTreeItem(
                     contentAlignment = Alignment.Center,
                 ) {
                     if (canExpand) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                            contentDescription = if (isCollapsed) "展开文件夹" else "折叠文件夹",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .size(18.dp)
-                                .graphicsLayer { rotationZ = chevronRotation },
+                        FileTreeSwipeIndicator(
+                            isRevealReady = isRevealReady,
+                            singleContentDescription = if (isCollapsed) "展开文件夹" else "折叠文件夹",
+                            singleRotation = chevronRotation,
                         )
                     }
                 }
@@ -2680,6 +3549,7 @@ private fun FolderTreeItem(
                 }
             }
             if (isActionSelected && !inline) folderMenu()
+            }
         }
         return
     }
@@ -2692,7 +3562,12 @@ private fun FolderTreeItem(
             Color.Transparent
         }
     val borderColor = Color.Transparent
-    Box {
+    FileTreeSwipeReveal(
+        itemKey = node.path,
+        onReveal = { onOpenFolder(node.path) },
+        enabled = !inline && canManage,
+    ) { swipeModifier, _, isRevealReady ->
+        Box(modifier = swipeModifier) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2705,6 +3580,20 @@ private fun FolderTreeItem(
                     if (!inline) {
                         Modifier.pointerInput(node.path) {
                             detectTapGestures(
+                                onPress = {
+                                    val pressStart = SystemClock.uptimeMillis()
+                                    KardLeafLog.d(
+                                        FILE_TREE_TRACE_TAG,
+                                        "folder pressStart pathHash=${node.path.hashCode()} " +
+                                            "t=$pressStart",
+                                    )
+                                    val released = tryAwaitRelease()
+                                    KardLeafLog.d(
+                                        FILE_TREE_TRACE_TAG,
+                                        "folder pressEnd pathHash=${node.path.hashCode()} " +
+                                            "released=$released elapsed=${SystemClock.uptimeMillis() - pressStart}",
+                                    )
+                                },
                                 onTap = { folderClick() },
                                 onLongPress = folderLongClick,
                             )
@@ -2721,13 +3610,10 @@ private fun FolderTreeItem(
                 contentAlignment = Alignment.Center,
             ) {
                 if (canExpand) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                        contentDescription = if (isCollapsed) "展开文件夹" else "折叠文件夹",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .size(18.dp)
-                            .graphicsLayer { rotationZ = chevronRotation },
+                    FileTreeSwipeIndicator(
+                        isRevealReady = isRevealReady,
+                        singleContentDescription = if (isCollapsed) "展开文件夹" else "折叠文件夹",
+                        singleRotation = chevronRotation,
                     )
                 }
             }
@@ -2753,5 +3639,6 @@ private fun FolderTreeItem(
             }
         }
         if (isActionSelected && !inline) folderMenu()
+        }
     }
 }

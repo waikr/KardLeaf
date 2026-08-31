@@ -59,13 +59,13 @@ interface NoteHistoryDao {
         """
         SELECT id, noteId, title, substr(content, 1, 200) AS content, savedAtMs
         FROM note_history
-        WHERE title LIKE '%' || :query || '%' OR content LIKE '%' || :query || '%'
+        WHERE title LIKE '%' || :likeQuery || '%' ESCAPE '\' OR content LIKE '%' || :likeQuery || '%' ESCAPE '\'
         ORDER BY savedAtMs DESC
         LIMIT :limit
         """,
     )
     fun searchHistoryPreview(
-        query: String,
+        likeQuery: String,
         limit: Int,
     ): Flow<List<NoteHistoryEntity>>
 
@@ -80,6 +80,9 @@ interface NoteHistoryDao {
 
     @Query("DELETE FROM note_history WHERE noteId = :noteId")
     suspend fun deleteByNoteId(noteId: String)
+
+    @Query("DELETE FROM note_history")
+    suspend fun deleteAll()
 
     @Query(
         """

@@ -94,9 +94,9 @@ fun FolderPathStrip(
 
     Column(
         modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp)
+                Modifier
+                    .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 2.dp)
                 .clipToBounds(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {

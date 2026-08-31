@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class TaskTestDocumentsProvider extends ContentProvider {
@@ -46,6 +47,7 @@ public final class TaskTestDocumentsProvider extends ContentProvider {
     private static TaskTestDocumentsProvider instance;
     private final Map<String, Node> nodes = new LinkedHashMap<>();
     private final AtomicLong nextId = new AtomicLong();
+    private final AtomicBoolean failNextChildQuery = new AtomicBoolean();
     private File rootDirectory;
 
     private static final class Node {
@@ -168,6 +170,10 @@ public final class TaskTestDocumentsProvider extends ContentProvider {
             resetTree();
             return Bundle.EMPTY;
         }
+        if ("testFailNextChildQuery".equals(method)) {
+            failNextChildQuery.set(true);
+            return Bundle.EMPTY;
+        }
         if (extras == null) return Bundle.EMPTY;
         Uri documentUri = extras.getParcelable("uri");
         if (documentUri == null) return Bundle.EMPTY;
@@ -249,6 +255,9 @@ public final class TaskTestDocumentsProvider extends ContentProvider {
 
     public Cursor queryChildDocuments(String parentDocumentId, String[] projection, String sortOrder)
         throws FileNotFoundException {
+        if (failNextChildQuery.getAndSet(false)) {
+            throw new IllegalStateException("Injected child query failure");
+        }
         MatrixCursor cursor = cursor(projection, DOCUMENT_COLUMNS);
         List<Node> children = new ArrayList<>();
         for (Node child : nodes.values()) {
@@ -319,6 +328,7 @@ public final class TaskTestDocumentsProvider extends ContentProvider {
         if (!rootDirectory.mkdirs()) throw new IllegalStateException("Could not create test document root");
         nodes.clear();
         nextId.set(0L);
+        failNextChildQuery.set(false);
         nodes.put(ROOT_ID, new Node(ROOT_ID, null, "root", true, rootDirectory));
     }
 

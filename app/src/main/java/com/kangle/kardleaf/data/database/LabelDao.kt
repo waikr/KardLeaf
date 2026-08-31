@@ -26,6 +26,15 @@ interface LabelDao {
         namePrefix: String,
     )
 
+    @Query(
+        "UPDATE labels SET name = :newName || substr(name, length(:oldName) + 1) " +
+            "WHERE name = :oldName OR substr(name, 1, length(:oldName) + 1) = :oldName || '/'",
+    )
+    suspend fun renameTree(
+        oldName: String,
+        newName: String,
+    ): Int
+
     @Query("DELETE FROM labels")
     suspend fun deleteAll()
 }

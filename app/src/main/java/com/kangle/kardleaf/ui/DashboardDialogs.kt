@@ -5,6 +5,11 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -64,31 +69,72 @@ fun CreateLabelDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun NotePropertiesDialog(
     note: Note,
     textStats: NoteTextStats? = null,
+    noteCountByTag: Map<String, Int> = emptyMap(),
     onDismiss: () -> Unit,
+    onTimeChange: (NoteTimeField, Long) -> Unit = { _, _ -> },
 ) {
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
     val numberFormat = remember { NumberFormat.getIntegerInstance(Locale.getDefault()) }
     val pendingText = "统计中…"
+    var editingField by remember(note.id) { mutableStateOf<NoteTimeField?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("属性") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 PropertyRow("文件名", note.file.name)
                 PropertyRow("文件夹", note.folder.ifBlank { "根目录" })
                 PropertyRow("路径", note.file.path)
+                PropertyRow(
+                    label = "标签",
+                    value = note.tags.joinToString("、").ifBlank { "无" },
+                    content = {
+                        if (note.tags.isEmpty()) {
+                            Text(
+                                text = "无",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        } else {
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                note.tags.distinct().forEach { tag ->
+                                    FolderNavigationChip(
+                                        text = tag,
+                                        count = noteCountByTag[tag] ?: 0,
+                                        selected = false,
+                                        countBeforeText = true,
+                                    )
+                                }
+                            }
+                        }
+                    },
+                )
                 PropertyRow("字符数", textStats?.let { numberFormat.format(it.characterCount) } ?: pendingText)
                 PropertyRow("词数", textStats?.let { numberFormat.format(it.wordCountWithPunctuation) } ?: pendingText)
                 PropertyRow("词数（不带标点）", textStats?.let { numberFormat.format(it.wordCountWithoutPunctuation) } ?: pendingText)
                 PropertyRow("行数", textStats?.let { numberFormat.format(it.lineCount) } ?: pendingText)
                 PropertyRow("段落数", textStats?.let { numberFormat.format(it.paragraphCount) } ?: pendingText)
-                PropertyRow("创建时间", dateFormat.format(note.createdAt))
-                PropertyRow("修改时间", dateFormat.format(note.lastModified))
+                PropertyRow(
+                    label = "创建时间",
+                    value = dateFormat.format(note.createdAt),
+                    onClick = { editingField = NoteTimeField.CREATED },
+                )
+                PropertyRow(
+                    label = "修改时间",
+                    value = dateFormat.format(note.updatedAt),
+                )
             }
         },
         confirmButton = {
@@ -97,6 +143,18 @@ fun NotePropertiesDialog(
             }
         },
     )
+
+    editingField?.let { field ->
+        NoteTimestampPickerDialog(
+            initialTimestamp = if (field == NoteTimeField.CREATED) note.createdAt.time else note.updatedAt.time,
+            title = if (field == NoteTimeField.CREATED) "修改创建时间" else "修改时间",
+            onDismiss = { editingField = null },
+            onConfirm = { timestamp ->
+                onTimeChange(field, timestamp)
+                editingField = null
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -104,6 +162,13 @@ fun NotePropertiesDialog(
 private fun PropertyRow(
     label: String,
     value: String,
+    onClick: () -> Unit = {},
+    content: @Composable () -> Unit = {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    },
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
@@ -111,7 +176,7 @@ private fun PropertyRow(
 
     Column(
         modifier = Modifier.combinedClickable(
-            onClick = {},
+            onClick = onClick,
             onLongClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 clipboard.setText(AnnotatedString(value))
@@ -124,10 +189,7 @@ private fun PropertyRow(
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        content()
     }
 }
 

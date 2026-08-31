@@ -70,8 +70,10 @@ import com.kangle.kardleaf.data.task.TaskMarkdownStore
 import com.kangle.kardleaf.data.sync.WebDavCloudSyncManager
 import com.kangle.kardleaf.ui.DashboardScreen
 import com.kangle.kardleaf.ui.EditorScreen
+import com.kangle.kardleaf.ui.AppUpdateDialog
 import com.kangle.kardleaf.ui.KardLeafMotion
 import com.kangle.kardleaf.ui.MainViewModel
+import com.kangle.kardleaf.ui.NoteRefreshReason
 import com.kangle.kardleaf.ui.KardLeafCustomFeatures
 import com.kangle.kardleaf.ui.kardLeafHorizontalContentTransform
 import com.kangle.kardleaf.ui.kardLeafSharedAxisXIn
@@ -154,6 +156,7 @@ class MainActivity : FragmentActivity() {
     private lateinit var prefsManager: PrefsManager
     private var vaultChangeObserver: VaultChangeObserver? = null
     private var hasCompletedFirstResume = false
+    private var isRootFolderReady = false
     private var hasPassedFirstPreDraw = false
     private var pendingUserDataExport: String? = null
     private var pendingPrivacyExport: String? = null
@@ -163,6 +166,7 @@ class MainActivity : FragmentActivity() {
     private var editorImagePickerLaunchElapsedMs = 0L
     private var webDavRealtimeSyncJob: Job? = null
     private var appUpdateCheckJob: Job? = null
+    private val automaticUpdateReleaseRequest = MutableStateFlow<AppReleaseInfo?>(null)
     private var sampleVaultCleanupPromptJob: Job? = null
     private var latestSampleVaultUri: Uri? = null
     private val sampleVaultCleanupPromptRequest = MutableStateFlow(0L)
@@ -374,8 +378,12 @@ class MainActivity : FragmentActivity() {
             restartForVaultSwitch()
         } else {
             showToast("正在导入...")
-            viewModel.setRootFolder(uri, onRootFolderReady = ::inspectMissingTaskFile)
-            vaultChangeObserver?.start(uri)
+            isRootFolderReady = false
+            viewModel.setRootFolder(uri) {
+                isRootFolderReady = true
+                vaultChangeObserver?.start(uri)
+                inspectMissingTaskFile()
+            }
         }
     }
 
@@ -399,15 +407,13 @@ class MainActivity : FragmentActivity() {
         }
         showToast("已新建 KardLeaf 示例笔记库，正在导入示例笔记")
         viewModel.setFilter(MainViewModel.NoteFilter.All)
+        isRootFolderReady = false
         viewModel.setRootFolder(sampleVaultUri) {
+            isRootFolderReady = true
             viewModel.setFilter(MainViewModel.NoteFilter.All)
-            lifecycleScope.launch {
-                delay(300L)
-                viewModel.refreshNotes()
-            }
+            vaultChangeObserver?.start(sampleVaultUri)
             inspectMissingTaskFile()
         }
-        vaultChangeObserver?.start(sampleVaultUri)
         scheduleSampleVaultCleanupPrompt(sampleVaultUri)
     }
 
@@ -861,7 +867,11 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                 context = this,
                 scope = lifecycleScope,
                 onChanged = { changedUri ->
-                    viewModel.onExternalVaultChanged(forceContentReloadFallback = true, changedUri = changedUri)
+                    viewModel.onExternalVaultChanged(
+                        forceContentReloadFallback = true,
+                        changedUri = changedUri,
+                        reason = NoteRefreshReason.EXTERNAL_OBSERVER,
+                    )
                 },
             )
 
@@ -874,11 +884,24 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                 "activity setRootFolder savedUri scanImmediately=false elapsed=${SystemClock.elapsedRealtime() - startupStartMs}ms",
             )
             val refreshAfterSwitch = savedInstanceState == null && intent.getBooleanExtra(EXTRA_REFRESH_SWITCHED_VAULT, false)
-            viewModel.setRootFolder(savedRootUri, scanImmediately = false) {
-                if (refreshAfterSwitch) viewModel.refreshNotes(showVaultSwitchProgress = true)
+            viewModel.setRootFolder(
+                uri = savedRootUri,
+                scanImmediately = false,
+                scanWhenDatabaseEmpty = false,
+            ) {
+                isRootFolderReady = true
+                viewModel.refreshNotes(
+                    showVaultSwitchProgress = refreshAfterSwitch,
+                    reason =
+                        if (refreshAfterSwitch) {
+                            NoteRefreshReason.VAULT_SWITCH_REFRESH
+                        } else {
+                            NoteRefreshReason.COLD_START_REFRESH
+                        },
+                )
+                vaultChangeObserver?.start(savedRootUri)
                 inspectMissingTaskFile()
             }
-            vaultChangeObserver?.start(savedRootUri)
         } else if (prefsManager.getRootUri() != null) {
             viewModel.resetPermissionNeeded()
         }
@@ -914,11 +937,13 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                 ) {
                     val isEditorOpen by viewModel.isEditorOpen.collectAsState()
                     val isLoading by viewModel.isLoading.collectAsState()
+                    val automaticUpdateRelease by automaticUpdateReleaseRequest.collectAsState()
                     val editorTransitionState = remember { MutableTransitionState(false) }
                     var isEditorExitPending by remember { mutableStateOf(false) }
                     var showPrivacy by remember { mutableStateOf(false) }
                     val currentScreen by viewModel.currentScreen.collectAsState()
                     val currentFilter by viewModel.currentFilter.collectAsState()
+                    val homeBottomToolbarButtonSizeDp by viewModel.homeBottomToolbarButtonSizeDp.collectAsState()
                     val sampleCleanupPromptRequestId by sampleVaultCleanupPromptRequest.collectAsState()
                     val missingTaskFile by missingTaskFilePrompt.collectAsState()
                     val labels by viewModel.labels.collectAsState()
@@ -929,6 +954,15 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     val drawerAvatarRevision by drawerAvatarRevisionRequest.collectAsState()
                     val yamlTags by viewModel.yamlTags.collectAsState()
                     val folderOrderVersion by viewModel.folderManagerOrderVersion.collectAsState()
+
+                    automaticUpdateRelease?.let { release ->
+                        AppUpdateDialog(
+                            result = AppUpdateCheckResult.UpdateAvailable(release),
+                            settingsEnglish = prefsManager.getAppLanguage() == "en",
+                            onDismiss = { automaticUpdateReleaseRequest.value = null },
+                        )
+                    }
+
                     val registeredVaults = remember(vaultRegistryRevision) { prefsManager.getVaults() }
                     val activeVault = remember(vaultRegistryRevision) { prefsManager.getActiveVault() }
                     var dashboardFilterReturnScreen by androidx.compose.runtime.remember {
@@ -1153,6 +1187,9 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     var showCategoryDrawerContent by androidx.compose.runtime.remember {
                         androidx.compose.runtime.mutableStateOf(false)
                     }
+                    var pendingDateViewMillis by androidx.compose.runtime.remember {
+                        androidx.compose.runtime.mutableStateOf<Long?>(null)
+                    }
                     var openDrawingPadAfterEditorOpen by androidx.compose.runtime.remember {
                         androidx.compose.runtime.mutableStateOf(false)
                     }
@@ -1321,6 +1358,14 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                     allNotesIncludingHidden = allNotesIncludingHidden,
                                     libraryCharacterCount = libraryCharacterCount,
                                     categoryOnly = showCategoryDrawerContent,
+                                    isDrawerOpen = drawerState.isOpen,
+                                    onOpenDateView = { date ->
+                                        clearTemporaryDashboardReturn()
+                                        pendingDateViewMillis = date.time
+                                        closeDrawerThen {
+                                            viewModel.navigateTo(MainViewModel.Screen.Dates)
+                                        }
+                                    },
                                 onScreenSelect = { screen ->
                                     clearTemporaryDashboardReturn()
                                     closeDrawerThen {
@@ -1329,6 +1374,12 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                 },
                                 onDashboardFilterSelect = selectFilterFromDrawer,
                                 onOpenFolder = { path -> selectFilterFromDrawer(MainViewModel.NoteFilter.Label(path)) },
+                                onRevealNote = { note ->
+                                    clearTemporaryDashboardReturn()
+                                    closeDrawerThen {
+                                        viewModel.revealNoteInParentFolder(note)
+                                    }
+                                },
                                 onNoteClick = { note ->
                                     clearTemporaryDashboardReturn()
                                     closeDrawerThen {
@@ -1355,14 +1406,21 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         viewModel.createNote(source = "drawer_new_drawing")
                                     }
                                 },
-                                onCreateLabel = { path -> viewModel.createLabel(path) },
+                                onCreateLabel = { path, onDone ->
+                                    viewModel.createLabel(path) { success ->
+                                        if (!success) showToast("创建文件夹失败")
+                                        onDone(success)
+                                    }
+                                },
                                 onDeleteLabel = { name -> labelToDelete = name },
-                                onRenameLabel = { oldPath, newPath ->
+                                onRenameLabel = { oldPath, newPath, onDone ->
                                     viewModel.renameLabel(
                                         oldPath = oldPath,
                                         newPath = newPath,
+                                        onSuccess = { onDone(true) },
                                         onError = { error ->
                                             showToast(error)
+                                            onDone(false)
                                         },
                                     )
                                 },
@@ -1394,8 +1452,17 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                     prefsManager.registerVault(vault.uri, name)
                                     vaultRegistryRevision++
                                 },
-                                onRenameNote = { note, name -> viewModel.renameNote(note, name) },
-                                onMoveNote = { note, target -> viewModel.moveNote(note, target) },
+                                onRenameNote = { note, name, onDone ->
+                                    viewModel.renameNote(note, name) { savedPath ->
+                                        if (savedPath == null) showToast("文件重命名失败")
+                                        onDone(savedPath)
+                                    }
+                                },
+                                onMoveNote = { note, target ->
+                                    viewModel.moveNote(note, target) { savedPath ->
+                                        if (savedPath == null) showToast("文件移动失败")
+                                    }
+                                },
                                 onDeleteNote = { note -> viewModel.deleteNote(note) },
                                 onToggleFavorite = { note -> viewModel.toggleFavorite(note) },
                                 folderOrderVersion = folderOrderVersion,
@@ -1410,6 +1477,10 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         closeDrawerThen { showPrivacy = true }
                                     },
                                     onPickDrawerAvatar = { launchDrawerAvatarPicker() },
+                                    onSaveDrawerName = { name ->
+                                        prefsManager.saveDrawerName(name)
+                                        showToast("名称已更新")
+                                    },
                                     onThemeModeChange = { mode ->
                                         prefsManager.saveAppThemeMode(mode)
                                         themeRevision++
@@ -1616,6 +1687,8 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                     com.kangle.kardleaf.ui.DateNotesScreen(
                                         viewModel = viewModel,
                                         onOpenDrawer = { openDrawerIfAllowed() },
+                                        initialDateMillis = pendingDateViewMillis,
+                                        onInitialDateApplied = { pendingDateViewMillis = null },
                                         onNoteClick = { note ->
                                             if (!isDrawerContentBlocked()) {
                                                 val session = markEditorOpenStart("dates_note_click", note)
@@ -1657,6 +1730,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                     com.kangle.kardleaf.ui.TaskListScreen(
                                         noteRepository = repository,
                                         onOpenDrawer = { openDrawerIfAllowed() },
+                                        onOpenSettings = { viewModel.navigateTo(MainViewModel.Screen.Settings) },
                                         onOpenNotePath = { notePath ->
                                             markEditorOpenStart("tasks_note_click")
                                             blockDrawerOpenBriefly()
@@ -1677,13 +1751,23 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                                 openNoteWithSelectedKernel(note, session)
                                             }
                                         },
+                                        homeBottomToolbarButtonSizeDp = homeBottomToolbarButtonSizeDp,
                                     )
                                 }
                                 MainViewModel.Screen.Settings -> {
                                 com.kangle.kardleaf.ui.KardLeafSettingsScreen(
                                     onBack = { viewModel.navigateTo(MainViewModel.Screen.Dashboard) },
-                                    onSelectDatabase = {
-                                        launchOpenDocumentTree()
+                                    vaults = registeredVaults,
+                                    currentVault = activeVault,
+                                    onAddVault = { launchOpenDocumentTree() },
+                                    onSwitchVault = ::switchVault,
+                                    onDeleteVault = { vault ->
+                                        deleteVault(vault)
+                                        vaultRegistryRevision++
+                                    },
+                                    onRenameVault = { vault, name ->
+                                        prefsManager.registerVault(vault.uri, name)
+                                        vaultRegistryRevision++
                                     },
                                     onSelectTaskFolder = {
                                         launchTaskFolderPicker { drawerSettingsRevision += 1 }
@@ -1709,7 +1793,18 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                         viewModel.onExternalVaultChanged(
                                             forceContentReloadFallback = changedPaths.isEmpty(),
                                             changedPaths = changedPaths,
+                                            reason = NoteRefreshReason.WEBDAV_REFRESH,
                                         )
+                                    },
+                                    onSetPrivacyPassword = { currentPassword, newPassword ->
+                                        if (currentPassword == null) {
+                                            runCatching { repository.initializePrivacyVault(newPassword) }
+                                        } else {
+                                            viewModel.changePrivacyVaultPassword(currentPassword, newPassword)
+                                        }
+                                    },
+                                    onRemovePrivacyPassword = { password ->
+                                        viewModel.removePrivacyVaultPassword(password)
                                     },
                                     labels = labels,
                                 )
@@ -1915,6 +2010,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                     viewModel.onExternalVaultChanged(
                                         forceContentReloadFallback = false,
                                         changedPaths = result.changedPaths,
+                                        reason = NoteRefreshReason.WEBDAV_REFRESH,
                                     )
                                 }
                             }
@@ -1982,22 +2078,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
             }
             return
         }
-        val message = buildString {
-            append("当前版本：${BuildConfig.VERSION_NAME}\n")
-            append("最新版本：${release.tagName}")
-            if (release.publishedDate.isNotBlank()) append("\n发布日期：${release.publishedDate}")
-            if (release.releaseNotes.isNotBlank()) append("\n\n${release.releaseNotes}")
-        }
-        android.app.AlertDialog.Builder(this)
-            .setTitle("发现新版本")
-            .setMessage(message)
-            .setNegativeButton("稍后", null)
-            .setPositiveButton("下载更新") { _, _ ->
-                runCatching {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(release.downloadUrl)))
-                }.onFailure { showToast("无法打开下载链接") }
-            }
-            .show()
+        automaticUpdateReleaseRequest.value = release
     }
 
     private fun maybeShowDevBuildToast() {
@@ -2032,13 +2113,18 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
         maybeCheckForAppUpdate()
         val persistedRootUri = getPersistedRootUriWithPermission()
         persistedRootUri?.let { uri ->
-            vaultChangeObserver?.start(uri)
-            if (hasCompletedFirstResume) {
+            if (isRootFolderReady) {
+                vaultChangeObserver?.start(uri)
+            }
+            if (hasCompletedFirstResume && isRootFolderReady) {
                 KardLeafLog.d(
                     STARTUP_PERF_TRACE_TAG,
                     "activity onResume external refresh trigger elapsed=${SystemClock.elapsedRealtime() - resumeStartMs}ms",
                 )
-                viewModel.onExternalVaultChanged(forceContentReloadFallback = false)
+                viewModel.onExternalVaultChanged(
+                    forceContentReloadFallback = false,
+                    reason = NoteRefreshReason.RESUME_REFRESH,
+                )
             }
         }
         hasCompletedFirstResume = true

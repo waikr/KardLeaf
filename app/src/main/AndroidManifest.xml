@@ -10,6 +10,7 @@
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -151,7 +152,6 @@
             android:exported="true"
             android:finishOnTaskLaunch="true"
             android:launchMode="singleTop"
-            android:noHistory="true"
             android:taskAffinity=""
             android:theme="@style/Theme.KardLeaf.WidgetOverlay">
             <intent-filter>
@@ -193,7 +193,7 @@
             android:noHistory="true"
             android:taskAffinity=""
             android:theme="@style/Theme.KardLeaf.WidgetOverlay"
-            android:windowSoftInputMode="adjustResize|stateAlwaysVisible" />
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name="org.qosp.notes.ui.QuillpadSandboxActivity"

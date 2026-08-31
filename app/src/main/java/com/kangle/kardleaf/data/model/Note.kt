@@ -9,6 +9,7 @@ data class Note(
     val content: String,
     val lastModified: Date,
     val createdAt: Date = lastModified,
+    val updatedAt: Date = lastModified,
     val color: Long,
     val reminder: Long? = null,
     val isPinned: Boolean = false,

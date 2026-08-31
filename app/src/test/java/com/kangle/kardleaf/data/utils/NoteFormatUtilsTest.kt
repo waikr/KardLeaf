@@ -30,6 +30,49 @@ class NoteFormatUtilsTest {
     }
 
     @Test
+    fun readsAndWritesWebSourceMetadata() {
+        val note =
+            Note(
+                file = File("Article.md"),
+                title = "Article",
+                content = "Body",
+                lastModified = Date(0),
+                color = 0xFFFFFFFF,
+                sourceType = NoteFormatUtils.SOURCE_TYPE_WEB_ONLINE,
+                sourceUrl = "https://example.com/article",
+            )
+
+        val frontMatter = NoteFormatUtils.parseFrontMatter(NoteFormatUtils.constructFileContent(note))
+
+        assertEquals(NoteFormatUtils.SOURCE_TYPE_WEB_ONLINE, NoteFormatUtils.extractSourceType(frontMatter))
+        assertEquals("https://example.com/article", NoteFormatUtils.extractSourceUrl(frontMatter))
+    }
+
+    @Test
+    fun readsAndWritesNoteTimestamps() {
+        val createdAt = 1_700_000_000_000L
+        val updatedAt = 1_700_123_456_000L
+        val note = Note(
+            file = File("Timestamps.md"),
+            title = "Timestamps",
+            content = "Body",
+            lastModified = Date(0),
+            color = 0xFFFFFFFF,
+        )
+
+        val frontMatter = NoteFormatUtils.parseFrontMatter(
+            NoteFormatUtils.constructFileContent(
+                note = note,
+                createdAtOverride = Date(createdAt),
+                updatedAtOverride = Date(updatedAt),
+            ),
+        )
+
+        assertEquals(createdAt, NoteFormatUtils.extractCreatedAt(frontMatter))
+        assertEquals(updatedAt, NoteFormatUtils.extractUpdatedAt(frontMatter))
+    }
+
+    @Test
     fun sanitizesMarkdownFileBaseName() {
         assertEquals("abcdefghi", NoteFormatUtils.sanitizeMarkdownFileBaseName("  a/b\\c:d*e?f\"g<h>i|  "))
         assertEquals("Untitled", NoteFormatUtils.sanitizeMarkdownFileBaseName(" /\\:*?\"<>| "))
@@ -67,6 +110,24 @@ class NoteFormatUtilsTest {
                 ![local](../source/images/a.png)
             """.trimIndent(),
             rewritten,
+        )
+    }
+
+    @Test
+    fun scansImageReferencesWithUnicodeSpacesHashesParenthesesAndPercent() {
+        val markdown = """
+            ![[中文 文件#1 (原图) 100%.png]]
+            ![alt](中文 文件#1 (原图) 100%.png)
+            ![alt](<含 空格 (括号) # 百分号%.png>)
+        """.trimIndent()
+
+        assertEquals(
+            listOf(
+                "中文 文件#1 (原图) 100%.png",
+                "中文 文件#1 (原图) 100%.png",
+                "含 空格 (括号) # 百分号%.png",
+            ),
+            NoteFormatUtils.findMarkdownImageReferences(markdown).map { it.reference },
         )
     }
 }

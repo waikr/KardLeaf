@@ -11,6 +11,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
@@ -42,6 +45,7 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.MergeType
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
@@ -50,6 +54,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,6 +65,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -81,7 +87,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
+import com.kangle.kardleaf.data.repository.MergeNotesOptions
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 
 private const val BACK_TRACE_TAG = "KardLeafBackTrace"
@@ -108,6 +116,7 @@ private fun selectionToolbarActionLabel(item: PrefsManager.SelectionToolbarItemI
     when (item) {
         PrefsManager.SelectionToolbarItemId.MOVE -> "移动"
         PrefsManager.SelectionToolbarItemId.COPY -> "复制"
+        PrefsManager.SelectionToolbarItemId.MERGE -> "合并"
         PrefsManager.SelectionToolbarItemId.PIN -> "置顶/取消置顶"
         PrefsManager.SelectionToolbarItemId.FAVORITE -> "收藏/取消收藏"
         PrefsManager.SelectionToolbarItemId.TAG -> "添加标签"
@@ -122,6 +131,7 @@ private fun selectionToolbarActionIcon(item: PrefsManager.SelectionToolbarItemId
     when (item) {
         PrefsManager.SelectionToolbarItemId.MOVE -> Icons.AutoMirrored.Outlined.DriveFileMove
         PrefsManager.SelectionToolbarItemId.COPY -> Icons.Outlined.ContentCopy
+        PrefsManager.SelectionToolbarItemId.MERGE -> Icons.Outlined.MergeType
         PrefsManager.SelectionToolbarItemId.PIN -> Icons.Outlined.PushPin
         PrefsManager.SelectionToolbarItemId.FAVORITE -> Icons.Outlined.StarBorder
         PrefsManager.SelectionToolbarItemId.TAG -> Icons.Outlined.Sell
@@ -438,6 +448,156 @@ private fun MoveDestinationRow(
     }
 }
 
+private data class MergeSeparatorChoice(
+    val label: String,
+    val value: String,
+)
+
+private val mergeSeparatorChoices = listOf(
+    MergeSeparatorChoice("空一行", MergeNotesOptions.DEFAULT_SEPARATOR),
+    MergeSeparatorChoice("换行", "\n"),
+    MergeSeparatorChoice("不连接", ""),
+)
+
+@Composable
+private fun MergeSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 7.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp),
+        ) {
+            Text(text = title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+internal fun MergeNotesBottomSheet(
+    selectionCount: Int,
+    onDismiss: () -> Unit,
+    onMerge: (MergeNotesOptions) -> Unit,
+) {
+    var includeTitles by remember { mutableStateOf(false) }
+    var separator by remember { mutableStateOf(MergeNotesOptions.DEFAULT_SEPARATOR) }
+    var moveSourcesToTrash by remember { mutableStateOf(false) }
+    var mergeMetadata by remember { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier
+            .fillMaxWidth()
+            .fillMaxHeight(0.78f),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp),
+        ) {
+            Text(
+                text = "合并笔记",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "共 $selectionCount 篇，按当前列表顺序合并到第一篇笔记",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+            )
+
+            MergeSwitchRow(
+                title = "合并标题",
+                subtitle = "在每篇正文前添加 Markdown 标题",
+                checked = includeTitles,
+                onCheckedChange = { includeTitles = it },
+            )
+
+            Text(
+                text = "正文连接",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 8.dp, bottom = 6.dp),
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                mergeSeparatorChoices.forEach { choice ->
+                    FilterChip(
+                        selected = separator == choice.value,
+                        onClick = { separator = choice.value },
+                        label = { Text(choice.label) },
+                    )
+                }
+            }
+
+            MergeSwitchRow(
+                title = "源文件移入回收站",
+                subtitle = if (moveSourcesToTrash) "合并后仍可从回收站恢复" else "合并后直接删除源文件",
+                checked = moveSourcesToTrash,
+                onCheckedChange = { moveSourcesToTrash = it },
+            )
+            MergeSwitchRow(
+                title = "合并元数据",
+                subtitle = "合并标签和源笔记的自定义 YAML 字段",
+                checked = mergeMetadata,
+                onCheckedChange = { mergeMetadata = it },
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
+                }
+                TextButton(
+                    onClick = {
+                        onMerge(
+                            MergeNotesOptions(
+                                includeTitles = includeTitles,
+                                separator = separator,
+                                moveSourcesToTrash = moveSourcesToTrash,
+                                mergeMetadata = mergeMetadata,
+                            ),
+                        )
+                    },
+                ) {
+                    Text("开始合并")
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SelectionTopAppBar(
@@ -465,23 +625,27 @@ fun SelectionTopAppBar(
     onDuplicate: () -> Unit = {},
     onShare: () -> Unit = {},
     onMoveToPrivacy: () -> Unit = {},
+    onMerge: (MergeNotesOptions) -> Unit = {},
 ) {
     var showMoveMenu by remember { mutableStateOf(false) }
     var lastMoveMenuDismissAt by remember { mutableStateOf(0L) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showMergeSheet by remember { mutableStateOf(false) }
     var lastMoreMenuDismissAt by remember { mutableStateOf(0L) }
     var showTagDialog by remember { mutableStateOf(false) }
     var tagText by remember { mutableStateOf("") }
+    val normalizedTagInput = NoteFormatUtils.normalizeTags(listOf(tagText))
 
     LaunchedEffect(showMoveMenu, showMoreMenu) {
         KardLeafLog.d(BACK_TRACE_TAG, "SelectionTopAppBar state changed showMoveMenu=$showMoveMenu showMoreMenu=$showMoreMenu")
     }
 
-    BackHandler(enabled = showMoreMenu || showMoveMenu) {
+    BackHandler(enabled = showMoreMenu || showMoveMenu || showMergeSheet) {
         KardLeafLog.d(BACK_TRACE_TAG, "SelectionTopAppBar BackHandler hit showMoreMenu=$showMoreMenu showMoveMenu=$showMoveMenu")
         showMoreMenu = false
         showMoveMenu = false
+        showMergeSheet = false
     }
     if (showTagDialog) {
         AlertDialog(
@@ -555,13 +719,9 @@ fun SelectionTopAppBar(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val tags = tagText.split(',', '，')
-                        .map { it.trim().removePrefix("#").trim() }
-                        .filter { it.isNotBlank() }
-                        .distinctBy { it.lowercase() }
-                    onApplyTags(tags)
+                    onApplyTags(normalizedTagInput)
                     showTagDialog = false
-                }) {
+                }, enabled = normalizedTagInput.isNotEmpty()) {
                     Text("保存")
                 }
             },
@@ -588,6 +748,17 @@ fun SelectionTopAppBar(
                 onMove(targetLabel)
                 lastMoveMenuDismissAt = SystemClock.uptimeMillis()
                 showMoveMenu = false
+            },
+        )
+    }
+
+    if (showMergeSheet) {
+        MergeNotesBottomSheet(
+            selectionCount = selectionCount,
+            onDismiss = { showMergeSheet = false },
+            onMerge = { options ->
+                showMergeSheet = false
+                onMerge(options)
             },
         )
     }
@@ -630,6 +801,7 @@ fun SelectionTopAppBar(
                 when (item) {
                     PrefsManager.SelectionToolbarItemId.MOVE -> !isTrash && !isArchive
                     PrefsManager.SelectionToolbarItemId.COPY -> !isTrash && allSelectedActive
+                    PrefsManager.SelectionToolbarItemId.MERGE -> !isTrash && allSelectedActive && selectionCount >= 2
                     PrefsManager.SelectionToolbarItemId.PIN -> !isTrash && allSelectedActive
                     PrefsManager.SelectionToolbarItemId.FAVORITE -> !isTrash
                     PrefsManager.SelectionToolbarItemId.TAG -> !isTrash && selectedNotesForTags.isNotEmpty()
@@ -659,6 +831,7 @@ fun SelectionTopAppBar(
                         }
                     }
                     PrefsManager.SelectionToolbarItemId.COPY -> onDuplicate()
+                    PrefsManager.SelectionToolbarItemId.MERGE -> showMergeSheet = true
                     PrefsManager.SelectionToolbarItemId.PIN -> onPin()
                     PrefsManager.SelectionToolbarItemId.FAVORITE -> onFavorite()
                     PrefsManager.SelectionToolbarItemId.TAG -> {

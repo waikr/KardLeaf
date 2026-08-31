@@ -19,9 +19,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.staggeredgrid.items
-import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
@@ -48,6 +49,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -85,6 +88,7 @@ fun PrivacyScreen(
     val prefsManager = remember { PrefsManager(context) }
     val privacyNotes by viewModel.privacyNotes.collectAsState()
     var hasPrivacyPwd by remember { mutableStateOf(prefsManager.getPrivacyPasswordHash() != null) }
+    var vaultChecked by remember { mutableStateOf(false) }
     var unlocked by remember { mutableStateOf(false) }
     var pwdInput by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -96,36 +100,67 @@ fun PrivacyScreen(
     val canUsePrivacyBiometric =
         hasPrivacyPwd && prefsManager.isPrivacyBiometricUnlockEnabled() && isBiometricUnlockAvailable(context)
 
+    LaunchedEffect(Unit) {
+        viewModel.hasPrivacyVault { exists ->
+            hasPrivacyPwd = hasPrivacyPwd || exists
+            vaultChecked = true
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { viewModel.lockPrivacyVault() }
+    }
+
     BackHandler(enabled = !showEditor) {
+        viewModel.lockPrivacyVault()
         onBack()
     }
 
     fun unlockWithPrivacyBiometric() {
-        showBiometricUnlockPrompt(
-            context = context,
-            title = "隐私仓库指纹解锁",
-            subtitle = "验证后查看隐私笔记",
-            onSuccess = {
-                unlocked = true
-                errorMsg = null
-                pwdInput = ""
-            },
-            onError = { errorMsg = it },
-        )
+        viewModel.preparePrivacyBiometricUnlock { prepared ->
+            prepared.onSuccess { request ->
+                if (request == null) {
+                    errorMsg = "首次使用请先输入隐私密码"
+                    return@onSuccess
+                }
+                showBiometricCryptoUnlockPrompt(
+                    context = context,
+                    title = "隐私仓库指纹解锁",
+                    subtitle = "验证后查看隐私笔记",
+                    cipher = request.cipher,
+                    onSuccess = { authenticatedCipher ->
+                        viewModel.unlockPrivacyVaultWithBiometric(request.copy(cipher = authenticatedCipher)) { result ->
+                            result.onSuccess {
+                                unlocked = true
+                                errorMsg = null
+                                pwdInput = ""
+                            }.onFailure { errorMsg = it.message ?: "指纹解锁失败" }
+                        }
+                    },
+                    onError = { errorMsg = it },
+                )
+            }.onFailure { errorMsg = it.message ?: "指纹快捷密钥不可用" }
+        }
     }
 
     fun verifyPrivacyPassword(input: String) {
-        val inputHash = hashPassword(input)
-        if (inputHash == prefsManager.getPrivacyPasswordHash()) {
-            unlocked = true
-            errorMsg = null
-            pwdInput = ""
-        } else {
-            errorMsg = "隐私密码错误"
-            if (prefsManager.getPasswordInputMode() == PrefsManager.PasswordInputMode.SIMPLE) {
+        viewModel.unlockPrivacyVault(input) { result ->
+            result.onSuccess {
+                unlocked = true
+                errorMsg = null
                 pwdInput = ""
+            }.onFailure {
+                errorMsg = it.message ?: "隐私密码错误或文件已损坏"
+                if (prefsManager.getPasswordInputMode() == PrefsManager.PasswordInputMode.SIMPLE) {
+                    pwdInput = ""
+                }
             }
         }
+    }
+
+    if (!vaultChecked) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        return
     }
 
     if (hasPrivacyPwd && !unlocked) {
@@ -157,18 +192,22 @@ fun PrivacyScreen(
             privacyInitialContent = editorContent,
             privacyDocumentKey = editorSessionKey,
             onSavePrivacyNote = { id, title, content, onSaved ->
-                viewModel.savePrivacyNoteAndReturnId(id, title, content) { savedId ->
-                    editingId = savedId
-                    editorTitle = title
-                    editorContent = content
-                    onSaved(savedId)
+                viewModel.savePrivacyNote(id, title, content) { result ->
+                    result.onSuccess { savedId ->
+                        editingId = savedId
+                        editorTitle = title
+                        editorContent = content
+                    }
+                    onSaved(result)
                 }
             },
             onPickImage = onPickImage,
             onDeletePrivacyNote = if (editingId > 0L) {
                 {
-                    viewModel.deletePrivacyNote(editingId)
-                    showEditor = false
+                    viewModel.deletePrivacyNote(editingId) { result ->
+                        result.onSuccess { showEditor = false }
+                            .onFailure { context.showToast(it.message ?: "隐私笔记删除失败") }
+                    }
                 }
             } else {
                 null
@@ -239,11 +278,16 @@ fun PrivacyScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding),
-                    onPasswordCreated = {
-                        hasPrivacyPwd = true
-                        unlocked = true
-                        errorMsg = null
-                        pwdInput = ""
+                    onPasswordCreated = { password, onResult ->
+                        viewModel.initializePrivacyVault(password) { result ->
+                            result.onSuccess {
+                                hasPrivacyPwd = true
+                                unlocked = true
+                                errorMsg = null
+                                pwdInput = ""
+                            }
+                            onResult(result)
+                        }
                     },
                 )
             }
@@ -259,13 +303,16 @@ fun PrivacyScreen(
                     onContentChange = { editorContent = it },
                     onCancel = { showEditor = false },
                     onDelete = {
-                        viewModel.deletePrivacyNote(editingId)
-                        showEditor = false
+                        viewModel.deletePrivacyNote(editingId) { result ->
+                            result.onSuccess { showEditor = false }
+                                .onFailure { context.showToast(it.message ?: "隐私笔记删除失败") }
+                        }
                     },
                     onSave = {
                         val title = editorTitle.ifBlank { "未命名" }
-                        viewModel.savePrivacyNote(editingId, title, editorContent) {
-                            showEditor = false
+                        viewModel.savePrivacyNote(editingId, title, editorContent) { result ->
+                            result.onSuccess { showEditor = false }
+                                .onFailure { context.showToast(it.message ?: "隐私笔记保存失败") }
                         }
                     },
                 )
@@ -295,12 +342,13 @@ fun PrivacyScreen(
 private fun PrivacySetupContent(
     prefsManager: PrefsManager,
     modifier: Modifier = Modifier,
-    onPasswordCreated: () -> Unit,
+    onPasswordCreated: (String, (Result<Unit>) -> Unit) -> Unit,
 ) {
     val passwordInputMode = remember { prefsManager.getPasswordInputMode() }
     var privacyPwd by remember { mutableStateOf("") }
     var privacyPwdConfirm by remember { mutableStateOf("") }
     var privacyPwdError by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier,
@@ -367,7 +415,7 @@ private fun PrivacySetupContent(
                         )
                     }
                     Button(
-                        enabled = privacyPwd.isNotBlank() || privacyPwdConfirm.isNotBlank(),
+                        enabled = !saving && (privacyPwd.isNotBlank() || privacyPwdConfirm.isNotBlank()),
                         onClick = {
                             val minSimpleOk = passwordInputMode != PrefsManager.PasswordInputMode.SIMPLE || privacyPwd.length == 4
                             when {
@@ -375,11 +423,15 @@ private fun PrivacySetupContent(
                                 !minSimpleOk -> privacyPwdError = "简单密码必须是 4 位数字"
                                 privacyPwd != privacyPwdConfirm -> privacyPwdError = "两次输入的隐私密码不一致"
                                 else -> {
-                                    prefsManager.savePrivacyPasswordHash(hashPassword(privacyPwd))
-                                    privacyPwd = ""
-                                    privacyPwdConfirm = ""
-                                    privacyPwdError = null
-                                    onPasswordCreated()
+                                    saving = true
+                                    onPasswordCreated(privacyPwd) { result ->
+                                        saving = false
+                                        result.onSuccess {
+                                            privacyPwd = ""
+                                            privacyPwdConfirm = ""
+                                            privacyPwdError = null
+                                        }.onFailure { privacyPwdError = it.message ?: "隐私仓库创建失败" }
+                                    }
                                 }
                             }
                         },

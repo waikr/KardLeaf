@@ -5,6 +5,7 @@ import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.DocumentsContract
+import androidx.documentfile.provider.DocumentFile
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.kangle.kardleaf.data.database.AppDatabase
@@ -14,6 +15,7 @@ import com.kangle.kardleaf.data.database.TaskGroupEntity
 import com.kangle.kardleaf.data.repository.MetadataManager
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.repository.RoomNoteRepository
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -113,6 +115,31 @@ class TaskMarkdownStoreEndToEndTest {
         assertGroupNames("Build", "Build/Android", "Build/Android/Compose")
         assertTaskGroups(fixture.tasks)
         assertEquals(3, database.taskDao().getAllGroupsSnapshot().size)
+    }
+
+    @Test
+    fun refreshImportsExternalMarkdownAndKeepsCacheWhenScanFails() = runBlocking {
+        val root = requireNotNull(DocumentFile.fromTreeUri(context, Uri.parse(TEST_ROOT_URI)))
+        val external = requireNotNull(root.createFile("text/markdown", "syncthing.md"))
+        context.contentResolver.openOutputStream(external.uri, "wt")!!.bufferedWriter().use {
+            it.write("# Syncthing\n\nexternal content")
+        }
+
+        val imported = repository.refreshNotes()
+        repository.isIndexing.first { indexing -> !indexing }
+        assertTrue(imported.success)
+        assertEquals(setOf("syncthing.md"), imported.addedPaths)
+        assertNotNull(repository.getNote("syncthing.md"))
+
+        context.contentResolver.call(
+            Uri.parse("content://${TaskTestDocumentsProvider.AUTHORITY}"),
+            "testFailNextChildQuery",
+            null,
+            null,
+        )
+        val failed = repository.refreshNotes()
+        assertFalse(failed.success)
+        assertNotNull(repository.getNote("syncthing.md"))
     }
 
     private suspend fun createFixture(): Fixture {

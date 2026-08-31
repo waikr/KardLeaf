@@ -1,6 +1,5 @@
 :root {
   color-scheme: light dark;
-  --kardleaf-ime-safe-bottom: 0px;
   --kl-title-header-height: 0px;
   --kl-title-font-size: 22px;
   --kl-shell-bg: #f4faff;
@@ -94,13 +93,22 @@ body {
   overflow: hidden;
 }
 
+.cm-searchMatch,
+.cm-searchMatch-selected {
+  background-color: rgba(255, 214, 10, 0.55) !important;
+}
+
+.cm-editor.kl-search-active .cm-selectionBackground,
+.cm-editor.kl-search-active .cm-content ::selection {
+  background-color: rgba(255, 214, 10, 0.55) !important;
+}
+
 .cm-scroller {
   position: relative;
   overflow-x: hidden !important;
   overflow-y: auto !important;
   overscroll-behavior: contain;
   touch-action: pan-y;
-  scroll-padding-bottom: calc(var(--kardleaf-ime-safe-bottom) + 96px);
   font-family: inherit;
 }
 
@@ -146,7 +154,6 @@ body {
   box-sizing: border-box;
   min-height: 100%;
   padding-top: var(--kl-title-header-height) !important;
-  padding-bottom: max(50vh, calc(32px + var(--kardleaf-ime-safe-bottom)));
   overflow-wrap: anywhere;
   word-break: break-word;
 }

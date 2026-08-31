@@ -2,6 +2,7 @@ package com.kangle.kardleaf.ui
 
 import android.app.Activity
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
@@ -14,6 +15,7 @@ import android.os.Looper
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -22,35 +24,62 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.FormatListBulleted
+import androidx.compose.material.icons.outlined.ScreenRotation
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.ui.editor.MindMapDocument
 import com.kangle.kardleaf.ui.editor.MindMapNode
@@ -71,13 +100,12 @@ internal fun MarkdownMindMapScreen(
     modifier: Modifier = Modifier,
     onDismiss: () -> Unit,
     onBackToHome: () -> Unit,
-    onOpenSource: () -> Unit,
-    onMindMapNodeClick: (MindMapNode) -> Unit,
-    onNodeReparent: (movingIndex: Int, parentIndex: Int, gestureSequence: Int) -> Unit = { _, _, _ -> },
-    onNodeAddChild: (parentIndex: Int, title: String) -> Unit = { _, _ -> },
-    onNodeAddSibling: (anchorIndex: Int, title: String) -> Unit = { _, _ -> },
+    onOpenSource: () -> Unit = {},
+    onTitleChange: (String) -> Unit = {},
+    onNodeMove: (movingIndex: Int, targetParentIndex: Int, targetChildIndex: Int, gestureSequence: Int) -> Unit = { _, _, _, _ -> },
+    onNodeAddChild: (parentIndex: Int, title: String, renameIndex: Int, renameTitle: String) -> Unit = { _, _, _, _ -> },
+    onNodeAddSibling: (anchorIndex: Int, title: String, renameIndex: Int, renameTitle: String) -> Unit = { _, _, _, _ -> },
     onNodeRename: (nodeIndex: Int, title: String) -> Unit = { _, _ -> },
-    onNodeMove: (nodeIndex: Int, moveUp: Boolean) -> Unit = { _, _ -> },
     onNodeDelete: (nodeIndex: Int) -> Unit = {},
     onUndo: () -> Unit = {},
     onRedo: () -> Unit = {},
@@ -86,24 +114,106 @@ internal fun MarkdownMindMapScreen(
 ) {
     fun modelIndex(webIndex: Int): Int = if (webIndex < 0) 0 else webIndex
 
+    val context = LocalContext.current
     val configuration = LocalConfiguration.current
-    val activity = LocalContext.current as? Activity
-    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val activity = context as? Activity
+    val orientation = configuration.orientation
+    val isLandscape = orientation == Configuration.ORIENTATION_LANDSCAPE
+    val prefsManager = remember { PrefsManager(context.applicationContext) }
+    var mindMapTheme by remember { mutableStateOf(prefsManager.getMindMapTheme()) }
+
+    fun toggleOrientation() {
+        val host = activity ?: return
+        val decorView = host.window.decorView
+        val currentIsLandscape = if (decorView.width > 0 && decorView.height > 0) {
+            decorView.width > decorView.height
+        } else {
+            host.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        }
+        val targetOrientation = if (currentIsLandscape) {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        KardLeafLog.d(
+            MIND_MAP_GESTURE_TRACE_TAG,
+            "orientation-toggle currentLandscape=$currentIsLandscape target=$targetOrientation " +
+                "config=${host.resources.configuration.orientation} requested=${host.requestedOrientation} " +
+                "decor=${decorView.width}x${decorView.height}",
+        )
+        decorView.post {
+            host.setRequestedOrientation(targetOrientation)
+            KardLeafLog.d(
+                MIND_MAP_GESTURE_TRACE_TAG,
+                "orientation-toggle requested target=$targetOrientation",
+            )
+        }
+    }
+    var showTitleEditor by remember(displayTitle, document?.root?.text) { mutableStateOf(false) }
+    var titleDraft by remember(displayTitle, document?.root?.text) {
+        mutableStateOf(displayTitle.ifBlank { document?.root?.text.orEmpty() })
+    }
+    var showOutline by remember(document?.content) { mutableStateOf(false) }
+    var outlineSelectionIndex by remember(document?.content) { mutableStateOf<Int?>(null) }
+    val toolbarIconTint = if (isDark) {
+        androidx.compose.ui.graphics.Color(0xFFE1E5E8)
+    } else {
+        androidx.compose.ui.graphics.Color(0xFF4B4F52)
+    }
+    var pendingExitAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    fun resetOrientationForExit(source: String) {
+        activity?.let { host ->
+            KardLeafLog.d(
+                MIND_MAP_GESTURE_TRACE_TAG,
+                "orientation-reset source=$source config=${host.resources.configuration.orientation} " +
+                    "requested=${host.requestedOrientation} decor=${host.window.decorView.width}x${host.window.decorView.height} " +
+                    "target=${ActivityInfo.SCREEN_ORIENTATION_PORTRAIT}",
+            )
+            host.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+
+    fun requestExit(action: () -> Unit) {
+        if (document == null || unavailableTitle != null) {
+            action()
+        } else if (pendingExitAction == null) {
+            pendingExitAction = action
+        }
+    }
 
     fun dismissMindMap(returnToHome: Boolean = false) {
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        if (returnToHome) onBackToHome() else onDismiss()
+        KardLeafLog.d(
+            MIND_MAP_GESTURE_TRACE_TAG,
+            "exit-request source=${if (returnToHome) "back-to-home" else "dismiss"} " +
+                "pending=${pendingExitAction != null} document=${document != null}",
+        )
+        requestExit {
+            resetOrientationForExit(if (returnToHome) "back-to-home" else "dismiss")
+            if (returnToHome) onBackToHome() else onDismiss()
+        }
+    }
+
+    fun openTitleEditor() {
+        titleDraft = displayTitle.ifBlank { document?.root?.text.orEmpty() }
+        showTitleEditor = true
     }
 
     fun openSource() {
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        onOpenSource()
+        KardLeafLog.d(
+            MIND_MAP_GESTURE_TRACE_TAG,
+            "exit-request source=open-source pending=${pendingExitAction != null} document=${document != null}",
+        )
+        requestExit {
+            resetOrientationForExit("open-source")
+            onOpenSource()
+        }
     }
 
     BackHandler { dismissMindMap(returnToHome = true) }
     DisposableEffect(activity) {
         onDispose {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            resetOrientationForExit("dispose")
         }
     }
 
@@ -117,7 +227,8 @@ internal fun MarkdownMindMapScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .background(MaterialTheme.colorScheme.background),
+                        .background(MaterialTheme.colorScheme.background)
+                        .zIndex(1f),
                 ) {
                     Row(
                         modifier = Modifier
@@ -126,35 +237,42 @@ internal fun MarkdownMindMapScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         IconButton(onClick = { dismissMindMap(returnToHome = true) }) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "关闭思维导图")
+                            Icon(
+                                Icons.AutoMirrored.Outlined.ArrowBack,
+                                contentDescription = "关闭思维导图",
+                                tint = toolbarIconTint,
+                            )
                         }
                         Text(
                             text = displayTitle.ifBlank { document?.root?.text ?: "思维导图" },
                             style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(onClick = ::openTitleEditor),
                         )
-                        TextButton(onClick = ::openSource) {
-                            Text("原文")
+                        IconButton(onClick = { showOutline = !showOutline }) {
+                            Icon(
+                                Icons.Outlined.FormatListBulleted,
+                                contentDescription = if (showOutline) "关闭大纲" else "打开大纲",
+                                tint = toolbarIconTint,
+                            )
                         }
-                        TextButton(
-                            onClick = {
-                                val currentOrientation = activity?.resources?.configuration?.orientation
-                                    ?: configuration.orientation
-                                activity?.requestedOrientation = if (currentOrientation == Configuration.ORIENTATION_LANDSCAPE) {
-                                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                                } else {
-                                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                                }
-                            },
-                        ) {
-                            Text(if (isLandscape) "竖屏" else "横屏")
+                        IconButton(onClick = ::openSource) {
+                            Icon(Icons.Outlined.Description, contentDescription = "打开原文", tint = toolbarIconTint)
+                        }
+                        IconButton(onClick = ::toggleOrientation) {
+                            Icon(
+                                Icons.Outlined.ScreenRotation,
+                                contentDescription = if (isLandscape) "切换为竖屏" else "切换为横屏",
+                                tint = toolbarIconTint,
+                            )
                         }
                     }
                 }
             },
         ) { padding ->
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
@@ -178,36 +296,191 @@ internal fun MarkdownMindMapScreen(
                         MarkdownMindMapWebView(
                             document = document,
                             isDark = isDark,
-                            onMindMapNodeClick = { node ->
-                                dismissMindMap()
-                                onMindMapNodeClick(node)
+                            initialThemeKey = mindMapTheme.key,
+                            onThemeChange = { themeKey ->
+                                mindMapTheme = PrefsManager.MindMapTheme.fromKey(themeKey)
+                                prefsManager.saveMindMapTheme(mindMapTheme)
                             },
-                            onNodeReparent = { movingIndex, parentIndex, gestureSequence ->
-                                onNodeReparent(modelIndex(movingIndex), modelIndex(parentIndex), gestureSequence)
+                            onNodeMove = { movingIndex, targetParentIndex, targetChildIndex, gestureSequence ->
+                                onNodeMove(
+                                    modelIndex(movingIndex),
+                                    modelIndex(targetParentIndex),
+                                    targetChildIndex,
+                                    gestureSequence,
+                                )
                             },
                             onUndo = onUndo,
                             onRedo = onRedo,
                             canUndo = canUndo,
                             canRedo = canRedo,
-                            orientation = configuration.orientation,
+                            orientation = orientation,
+                            outlineSelectionIndex = outlineSelectionIndex,
+                            onOutlineSelectionConsumed = { outlineSelectionIndex = null },
                             initialEditNodeIndex = initialEditNodeIndex,
                             onInitialEditConsumed = onInitialEditConsumed,
-                            onNodeAddChild = { parentIndex, title ->
-                                onNodeAddChild(modelIndex(parentIndex), title)
+                            exitAction = pendingExitAction,
+                            onExitActionConsumed = { pendingExitAction = null },
+                            onNodeAddChild = { parentIndex, title, renameIndex, renameTitle ->
+                                onNodeAddChild(modelIndex(parentIndex), title, renameIndex, renameTitle)
                             },
-                            onNodeAddSibling = { anchorIndex, title ->
-                                onNodeAddSibling(modelIndex(anchorIndex), title)
+                            onNodeAddSibling = { anchorIndex, title, renameIndex, renameTitle ->
+                                onNodeAddSibling(modelIndex(anchorIndex), title, renameIndex, renameTitle)
                             },
                             onNodeRename = { nodeIndex, title -> onNodeRename(modelIndex(nodeIndex), title) },
-                            onNodeMove = { nodeIndex, moveUp -> onNodeMove(modelIndex(nodeIndex), moveUp) },
                             onNodeDelete = { nodeIndex -> onNodeDelete(modelIndex(nodeIndex)) },
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }
+                if (showOutline && document != null) {
+                    MindMapOutlinePanel(
+                        nodes = document.nodes,
+                        onClose = { showOutline = false },
+                        onNodeClick = { index ->
+                            outlineSelectionIndex = index
+                            showOutline = false
+                        },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .fillMaxHeight()
+                            .zIndex(2f),
+                    )
+                }
             }
         }
 
+        if (showTitleEditor) {
+            AlertDialog(
+                onDismissRequest = { showTitleEditor = false },
+                title = { Text("修改名称") },
+                text = {
+                    OutlinedTextField(
+                        value = titleDraft,
+                        onValueChange = { titleDraft = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("名称") },
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showTitleEditor = false
+                            onTitleChange(titleDraft.trim())
+                        },
+                    ) {
+                        Text("保存")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showTitleEditor = false }) {
+                        Text("取消")
+                    }
+                },
+            )
+        }
+
+    }
+}
+
+@Composable
+private fun MindMapOutlinePanel(
+    nodes: List<MindMapNode>,
+    onClose: () -> Unit,
+    onNodeClick: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var collapsed by remember(nodes) { mutableStateOf(emptySet<Int>()) }
+    val childrenByParent = remember(nodes) { nodes.groupBy { it.parentIndex } }
+    val scrollState = rememberScrollState()
+
+    fun isHidden(node: MindMapNode): Boolean {
+        var parentIndex = node.parentIndex
+        while (parentIndex != null) {
+            if (parentIndex in collapsed) return true
+            parentIndex = nodes.getOrNull(parentIndex)?.parentIndex
+        }
+        return false
+    }
+
+    Surface(
+        modifier = modifier
+            .width(300.dp)
+            .clip(MaterialTheme.shapes.large)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 4.dp,
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .padding(start = 16.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.AccountTree, contentDescription = null, modifier = Modifier.size(20.dp))
+                Text(
+                    text = "大纲",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Outlined.Close, contentDescription = "关闭大纲")
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState)
+                    .padding(vertical = 6.dp),
+            ) {
+                nodes.forEach { node ->
+                    if (!isHidden(node)) {
+                        val hasChildren = childrenByParent[node.index].orEmpty().isNotEmpty()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onNodeClick(node.index) }
+                                .padding(end = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Spacer(Modifier.width((node.depth * 16).dp))
+                            if (hasChildren) {
+                                IconButton(
+                                    onClick = {
+                                        collapsed = if (node.index in collapsed) {
+                                            collapsed - node.index
+                                        } else {
+                                            collapsed + node.index
+                                        }
+                                    },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(
+                                        if (node.index in collapsed) Icons.Outlined.ChevronRight else Icons.Outlined.ExpandMore,
+                                        contentDescription = if (node.index in collapsed) "展开子节点" else "折叠子节点",
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            } else {
+                                Spacer(Modifier.size(32.dp))
+                            }
+                            Text(
+                                text = node.text,
+                                style = if (node.depth == 0) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(vertical = 8.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -267,34 +540,38 @@ private fun MindMapUnavailableHint(
 private fun MarkdownMindMapWebView(
     document: MindMapDocument,
     isDark: Boolean,
-    onMindMapNodeClick: (MindMapNode) -> Unit,
-    onNodeReparent: (movingIndex: Int, parentIndex: Int, gestureSequence: Int) -> Unit,
+    initialThemeKey: String,
+    onThemeChange: (String) -> Unit,
+    onNodeMove: (movingIndex: Int, targetParentIndex: Int, targetChildIndex: Int, gestureSequence: Int) -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     canUndo: Boolean,
     canRedo: Boolean,
     orientation: Int,
+    outlineSelectionIndex: Int?,
+    onOutlineSelectionConsumed: () -> Unit,
     initialEditNodeIndex: Int?,
     onInitialEditConsumed: () -> Unit,
-    onNodeAddChild: (parentIndex: Int, title: String) -> Unit,
-    onNodeAddSibling: (anchorIndex: Int, title: String) -> Unit,
+    exitAction: (() -> Unit)?,
+    onExitActionConsumed: () -> Unit,
+    onNodeAddChild: (parentIndex: Int, title: String, renameIndex: Int, renameTitle: String) -> Unit,
+    onNodeAddSibling: (anchorIndex: Int, title: String, renameIndex: Int, renameTitle: String) -> Unit,
     onNodeRename: (nodeIndex: Int, title: String) -> Unit,
-    onNodeMove: (nodeIndex: Int, moveUp: Boolean) -> Unit,
     onNodeDelete: (nodeIndex: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val currentOnMindMapNodeClick = rememberUpdatedState(onMindMapNodeClick)
-    val currentOnNodeReparent = rememberUpdatedState(onNodeReparent)
+    val currentOnNodeMove = rememberUpdatedState(onNodeMove)
+    val currentOnThemeChange = rememberUpdatedState(onThemeChange)
     val currentOnUndo = rememberUpdatedState(onUndo)
     val currentOnRedo = rememberUpdatedState(onRedo)
     val currentOnNodeAddChild = rememberUpdatedState(onNodeAddChild)
     val currentOnNodeAddSibling = rememberUpdatedState(onNodeAddSibling)
     val currentOnNodeRename = rememberUpdatedState(onNodeRename)
-    val currentOnNodeMove = rememberUpdatedState(onNodeMove)
     val currentOnNodeDelete = rememberUpdatedState(onNodeDelete)
     val currentOnInitialEditConsumed = rememberUpdatedState(onInitialEditConsumed)
+    val currentOnOutlineSelectionConsumed = rememberUpdatedState(onOutlineSelectionConsumed)
     val currentDocument = rememberUpdatedState(document)
-    val html = rememberMindMapHtml(isDark)
+    val html = rememberMindMapHtml(isDark, initialThemeKey)
     val signature = rememberMindMapSignature(document, isDark, canUndo, canRedo)
     val updateScript = rememberMindMapUpdateScript(document, canUndo, canRedo)
 
@@ -331,25 +608,6 @@ private fun MarkdownMindMapWebView(
                 val state = MindMapWebViewState(Handler(Looper.getMainLooper()))
                 tag = state
                 state.webView = this
-                ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
-                    val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
-                    val navigationInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
-                    val imeBottom = if (insets.isVisible(WindowInsetsCompat.Type.ime())) {
-                        (imeInsets.bottom - navigationInsets.bottom).coerceAtLeast(0)
-                    } else {
-                        0
-                    }
-                    val density = resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
-                    state.imeBottomCssPx = (imeBottom / density).roundToInt()
-                    if (state.pageReady) {
-                        (view as? WebView)?.evaluateJavascript(
-                            "window.KardLeafMindMapSetImeBottom && window.KardLeafMindMapSetImeBottom(${state.imeBottomCssPx});",
-                            null,
-                        )
-                    }
-                    insets
-                }
-                ViewCompat.requestApplyInsets(this)
                 val visibleFrame = Rect()
                 viewTreeObserver.addOnGlobalLayoutListener {
                     if (state.released) return@addOnGlobalLayoutListener
@@ -362,8 +620,19 @@ private fun MarkdownMindMapWebView(
                     val density = resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
                     val nextImeBottomCssPx = (imeBottom / density).roundToInt()
                     if (nextImeBottomCssPx != state.imeBottomCssPx) {
+                        KardLeafLog.d(
+                            MIND_MAP_GESTURE_TRACE_TAG,
+                            "ime-native source=global-layout rawBottom=$imeBottom navigationBottom=$navigationBottom " +
+                                "visibleFrame=${visibleFrame.left},${visibleFrame.top},${visibleFrame.right},${visibleFrame.bottom} " +
+                                "root=${rootView.width}x${rootView.height} webView=${width}x${height} density=$density " +
+                                "css=$nextImeBottomCssPx previousCss=${state.imeBottomCssPx} pageReady=${state.pageReady}",
+                        )
                         state.imeBottomCssPx = nextImeBottomCssPx
                         if (state.pageReady) {
+                            KardLeafLog.d(
+                                MIND_MAP_GESTURE_TRACE_TAG,
+                                "ime-native dispatch source=global-layout css=${state.imeBottomCssPx}",
+                            )
                             evaluateJavascript(
                                 "window.KardLeafMindMapSetImeBottom && window.KardLeafMindMapSetImeBottom(${state.imeBottomCssPx});",
                                 null,
@@ -396,11 +665,16 @@ private fun MarkdownMindMapWebView(
                         state.pageReady = true
                         KardLeafLog.d(
                             MIND_MAP_GESTURE_TRACE_TAG,
-                            "viewport page-ready orientation=${state.appliedOrientation} url=${url ?: "none"}",
+                            "viewport page-ready orientation=${state.appliedOrientation} url=${url ?: "none"} " +
+                                "ime-native-css=${state.imeBottomCssPx} webView=${view.width}x${view.height}",
                         )
                         applyPendingMindMapUpdate(view, state) {
                             currentOnInitialEditConsumed.value()
                         }
+                        KardLeafLog.d(
+                            MIND_MAP_GESTURE_TRACE_TAG,
+                            "ime-native dispatch source=page-ready css=${state.imeBottomCssPx}",
+                        )
                         view.evaluateJavascript(
                             "window.KardLeafMindMapSetImeBottom && window.KardLeafMindMapSetImeBottom(${state.imeBottomCssPx});",
                             null,
@@ -410,27 +684,70 @@ private fun MarkdownMindMapWebView(
                 addJavascriptInterface(
                     object {
                         @JavascriptInterface
-                        fun onNodeClick(index: Int) {
-                            state.postIfActive {
-                                val modelIndex = if (index < 0) 0 else index
-                                currentDocument.value.nodes.getOrNull(modelIndex)?.let { currentOnMindMapNodeClick.value(it) }
+                        fun onNodeMove(
+                            movingIndex: Int,
+                            targetParentIndex: Int,
+                            targetChildIndex: Int,
+                            gestureSequence: Int,
+                        ) {
+                            val bridgeDocument = currentDocument.value
+                            val bridgeMoving = bridgeDocument.nodes.getOrNull(movingIndex)
+                            val bridgeTargetParent = bridgeDocument.nodes.getOrNull(targetParentIndex)
+                            val bridgeOldChildIndex = bridgeMoving?.let { moving ->
+                                bridgeDocument.nodes
+                                    .filter { it.parentIndex == moving.parentIndex }
+                                    .indexOfFirst { it.index == movingIndex }
+                            } ?: -1
+                            val bridgeTargetChildCount = bridgeTargetParent?.let {
+                                bridgeDocument.nodes.count { node ->
+                                    node.parentIndex == targetParentIndex && node.index != movingIndex
+                                }
+                            } ?: -1
+                            KardLeafLog.d(
+                                MIND_MAP_GESTURE_TRACE_TAG,
+                                "bridge move gesture=$gestureSequence movingIndex=$movingIndex " +
+                                    "targetParentIndex=$targetParentIndex targetChildIndex=$targetChildIndex " +
+                                    "pageReady=${state.pageReady} released=${state.released} nodes=${bridgeDocument.nodes.size} " +
+                                    "movingDepth=${bridgeMoving?.depth ?: -1} movingParent=${bridgeMoving?.parentIndex} " +
+                                    "oldChildIndex=$bridgeOldChildIndex targetParentDepth=${bridgeTargetParent?.depth ?: -1} " +
+                                    "targetChildCount=$bridgeTargetChildCount",
+                            )
+                            state.postIfActive("move") {
+                                KardLeafLog.d(
+                                    MIND_MAP_GESTURE_TRACE_TAG,
+                                    "bridge move dispatched gesture=$gestureSequence movingIndex=$movingIndex " +
+                                        "targetParentIndex=$targetParentIndex targetChildIndex=$targetChildIndex " +
+                                        "nodes=${currentDocument.value.nodes.size}",
+                                )
+                                currentOnNodeMove.value(
+                                    movingIndex,
+                                    targetParentIndex,
+                                    targetChildIndex,
+                                    gestureSequence,
+                                )
                             }
                         }
 
                         @JavascriptInterface
-                        fun onNodeReparent(movingIndex: Int, parentIndex: Int, gestureSequence: Int) {
+                        fun onThemeChange(themeKey: String) {
+                            state.postIfActive("theme-change") {
+                                currentOnThemeChange.value(themeKey)
+                            }
+                        }
+
+                        @JavascriptInterface
+                        fun onInlineRenameFinished() {
                             KardLeafLog.d(
                                 MIND_MAP_GESTURE_TRACE_TAG,
-                                "bridge reparent gesture=$gestureSequence movingIndex=$movingIndex parentIndex=$parentIndex " +
-                                    "pageReady=${state.pageReady} released=${state.released} nodes=${currentDocument.value.nodes.size}",
+                                "bridge inline-rename-finished received pageReady=${state.pageReady} " +
+                                    "released=${state.released} pending=${state.pendingInlineRenameContinuation != null}",
                             )
-                            state.postIfActive("reparent") {
+                            state.postIfActive("inline-rename-finished") {
                                 KardLeafLog.d(
                                     MIND_MAP_GESTURE_TRACE_TAG,
-                                    "bridge reparent dispatched gesture=$gestureSequence movingIndex=$movingIndex parentIndex=$parentIndex " +
-                                        "nodes=${currentDocument.value.nodes.size}",
+                                    "bridge inline-rename-finished dispatched pending=${state.pendingInlineRenameContinuation != null}",
                                 )
-                                currentOnNodeReparent.value(movingIndex, parentIndex, gestureSequence)
+                                completeMindMapInlineRename(state)
                             }
                         }
 
@@ -442,63 +759,100 @@ private fun MarkdownMindMapWebView(
                         @JavascriptInterface
                         fun onLongPress() {
                             state.postIfActive("long-press-haptic") {
-                                val performed = state.webView?.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) == true
-                                KardLeafLog.d(MIND_MAP_GESTURE_TRACE_TAG, "long-press-haptic performed=$performed")
+                                state.webView?.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                             }
                         }
 
                         @JavascriptInterface
                         fun onUndo() {
-                            state.postIfActive {
+                            KardLeafLog.d(
+                                MIND_MAP_GESTURE_TRACE_TAG,
+                                "bridge undo received pageReady=${state.pageReady} released=${state.released}",
+                            )
+                            state.postIfActive("undo") {
                                 currentOnUndo.value()
                             }
                         }
 
                         @JavascriptInterface
                         fun onRedo() {
-                            state.postIfActive {
+                            KardLeafLog.d(
+                                MIND_MAP_GESTURE_TRACE_TAG,
+                                "bridge redo received pageReady=${state.pageReady} released=${state.released}",
+                            )
+                            state.postIfActive("redo") {
                                 currentOnRedo.value()
                             }
                         }
 
                         @JavascriptInterface
                         fun onExportImage() {
-                            state.postIfActive {
+                            KardLeafLog.d(
+                                MIND_MAP_GESTURE_TRACE_TAG,
+                                "bridge export received pageReady=${state.pageReady} released=${state.released} " +
+                                    "webViewPresent=${state.webView != null}",
+                            )
+                            state.postIfActive("export") {
                                 state.webView?.let(::exportMindMapImage)
                             }
                         }
 
                         @JavascriptInterface
-                        fun onNodeAddChild(parentIndex: Int, title: String) {
-                            state.postIfActive {
-                                currentOnNodeAddChild.value(parentIndex, title)
+                        fun onNodeAddChild(parentIndex: Int, title: String, renameIndex: Int, renameTitle: String) {
+                            KardLeafLog.d(
+                                MIND_MAP_GESTURE_TRACE_TAG,
+                                "bridge add-child received parentIndex=$parentIndex titleLen=${title.length} " +
+                                    "titleEndsWithHash=${title.endsWith('#')} pageReady=${state.pageReady} released=${state.released}",
+                            )
+                            state.postIfActive("add-child") {
+                                KardLeafLog.d(
+                                    MIND_MAP_GESTURE_TRACE_TAG,
+                                    "bridge add-child dispatched parentIndex=$parentIndex titleLen=${title.length}",
+                                )
+                                currentOnNodeAddChild.value(parentIndex, title, renameIndex, renameTitle)
                             }
                         }
 
                         @JavascriptInterface
-                        fun onNodeAddSibling(anchorIndex: Int, title: String) {
-                            state.postIfActive {
-                                currentOnNodeAddSibling.value(anchorIndex, title)
+                        fun onNodeAddSibling(anchorIndex: Int, title: String, renameIndex: Int, renameTitle: String) {
+                            KardLeafLog.d(
+                                MIND_MAP_GESTURE_TRACE_TAG,
+                                "bridge add-sibling received anchorIndex=$anchorIndex titleLen=${title.length} " +
+                                    "titleEndsWithHash=${title.endsWith('#')} pageReady=${state.pageReady} released=${state.released}",
+                            )
+                            state.postIfActive("add-sibling") {
+                                KardLeafLog.d(
+                                    MIND_MAP_GESTURE_TRACE_TAG,
+                                    "bridge add-sibling dispatched anchorIndex=$anchorIndex titleLen=${title.length}",
+                                )
+                                currentOnNodeAddSibling.value(anchorIndex, title, renameIndex, renameTitle)
                             }
                         }
 
                         @JavascriptInterface
                         fun onNodeRename(index: Int, title: String) {
-                            state.postIfActive {
+                            KardLeafLog.d(
+                                MIND_MAP_GESTURE_TRACE_TAG,
+                                "bridge rename received index=$index titleLen=${title.length} " +
+                                    "titleEndsWithHash=${title.endsWith('#')} pageReady=${state.pageReady} released=${state.released}",
+                            )
+                            state.postIfActive("rename") {
+                                KardLeafLog.d(
+                                    MIND_MAP_GESTURE_TRACE_TAG,
+                                    "bridge rename dispatched index=$index titleLen=${title.length}",
+                                )
                                 currentOnNodeRename.value(index, title)
                             }
                         }
 
                         @JavascriptInterface
-                        fun onNodeMove(index: Int, moveUp: Boolean) {
-                            state.postIfActive {
-                                currentOnNodeMove.value(index, moveUp)
-                            }
-                        }
-
-                        @JavascriptInterface
                         fun onNodeDelete(index: Int) {
-                            state.postIfActive {
+                            KardLeafLog.d(
+                                MIND_MAP_GESTURE_TRACE_TAG,
+                                "bridge delete received index=$index pageReady=${state.pageReady} released=${state.released}",
+                            )
+                            state.postIfActive("delete") {
+                                KardLeafLog.d(MIND_MAP_GESTURE_TRACE_TAG, "bridge delete dispatched index=$index")
                                 currentOnNodeDelete.value(index)
                             }
                         }
@@ -509,33 +863,79 @@ private fun MarkdownMindMapWebView(
         },
         update = { webView ->
             val state = webView.tag as? MindMapWebViewState ?: return@AndroidView
+                if (exitAction != null && state.dispatchedExitAction !== exitAction) {
+                    KardLeafLog.d(
+                        MIND_MAP_GESTURE_TRACE_TAG,
+                        "exit-dispatch source=compose-update pageReady=${state.pageReady} released=${state.released} " +
+                            "pendingRename=${state.pendingInlineRenameContinuation != null}",
+                    )
+                    state.dispatchedExitAction = exitAction
+                    requestMindMapInlineRenameCommit(webView, state) {
+                        KardLeafLog.d(
+                            MIND_MAP_GESTURE_TRACE_TAG,
+                            "exit-dispatch commit-complete released=${state.released}",
+                        )
+                        state.dispatchedExitAction = null
+                        onExitActionConsumed()
+                        exitAction()
+                    }
+                }
                 if (initialEditNodeIndex == null) {
                     state.pendingInitialEditIndex = null
                     state.dispatchedInitialEditIndex = null
                 } else if (state.dispatchedInitialEditIndex != initialEditNodeIndex) {
                     state.pendingInitialEditIndex = initialEditNodeIndex
+                    KardLeafLog.d(
+                        MIND_MAP_GESTURE_TRACE_TAG,
+                        "initial-edit pending index=$initialEditNodeIndex pageReady=${state.pageReady}",
+                    )
                 }
                 state.pendingSignature = signature
                 state.pendingScript = updateScript
-                if (state.themeIsDark != isDark) {
-                    state.themeIsDark = isDark
-                    state.pageReady = false
-                    state.appliedSignature = null
-                    state.appliedOrientation = orientation
+                if (state.themeIsDark != isDark && !state.themeReloadPending) {
+                    val nextThemeIsDark = isDark
                     KardLeafLog.d(
                         MIND_MAP_GESTURE_TRACE_TAG,
-                        "viewport page-reload reason=theme orientation-baseline=$orientation",
+                        "theme-reload requested dark=$nextThemeIsDark pageReady=${state.pageReady} " +
+                            "pendingRename=${state.pendingInlineRenameContinuation != null}",
                     )
-                    webView.loadDataWithBaseURL(
-                    MIND_MAP_BASE_URL,
-                    html,
-                    "text/html",
-                    "UTF-8",
-                    null,
-                )
+                    state.themeReloadPending = true
+                    requestMindMapInlineRenameCommit(webView, state) {
+                        state.themeReloadPending = false
+                        if (!state.released) {
+                            state.themeIsDark = nextThemeIsDark
+                            state.pageReady = false
+                            state.appliedSignature = null
+                            state.appliedOrientation = orientation
+                            webView.loadDataWithBaseURL(
+                                MIND_MAP_BASE_URL,
+                                html,
+                                "text/html",
+                                "UTF-8",
+                                null,
+                            )
+                        }
+                    }
+                } else if (state.themeReloadPending) {
+                    return@AndroidView
                 } else if (state.pageReady) {
                     applyPendingMindMapUpdate(webView, state) {
                         currentOnInitialEditConsumed.value()
+                    }
+                    if (outlineSelectionIndex == null) {
+                        state.dispatchedOutlineSelectionIndex = null
+                    } else if (state.dispatchedOutlineSelectionIndex != outlineSelectionIndex) {
+                        val selectedIndex = outlineSelectionIndex
+                        state.dispatchedOutlineSelectionIndex = selectedIndex
+                        KardLeafLog.d(
+                            MIND_MAP_GESTURE_TRACE_TAG,
+                            "outline-select dispatch index=$selectedIndex",
+                        )
+                        webView.evaluateJavascript(
+                            "window.KardLeafMindMapSelectNode && window.KardLeafMindMapSelectNode($selectedIndex);",
+                            null,
+                        )
+                        currentOnOutlineSelectionConsumed.value()
                     }
                     val previousOrientation = state.appliedOrientation
                     if (previousOrientation == null) {
@@ -560,7 +960,16 @@ private fun MarkdownMindMapWebView(
         onRelease = { webView ->
             val state = webView.tag as? MindMapWebViewState
             if (state?.released == true) return@AndroidView
+            KardLeafLog.d(
+                MIND_MAP_GESTURE_TRACE_TAG,
+                "webview-release pageReady=${state?.pageReady ?: false} released=${state?.released ?: false} " +
+                    "imeCss=${state?.imeBottomCssPx ?: -1} appliedOrientation=${state?.appliedOrientation} " +
+                    "pendingRename=${state?.pendingInlineRenameContinuation != null} dispatchedExit=${state?.dispatchedExitAction != null} " +
+                    "webView=${webView.width}x${webView.height}",
+            )
             state?.released = true
+            state?.pendingInlineRenameContinuation = null
+            state?.dispatchedExitAction = null
             state?.mainHandler?.removeCallbacksAndMessages(null)
             state?.webView = null
             webView.stopLoading()
@@ -586,6 +995,10 @@ private data class MindMapWebViewState(
     var dispatchedInitialEditIndex: Int? = null,
     var imeBottomCssPx: Int = 0,
     var appliedOrientation: Int? = null,
+    var themeReloadPending: Boolean = false,
+    var pendingInlineRenameContinuation: (() -> Unit)? = null,
+    var dispatchedExitAction: (() -> Unit)? = null,
+    var dispatchedOutlineSelectionIndex: Int? = null,
     var webView: WebView? = null,
     @Volatile
     var released: Boolean = false,
@@ -610,6 +1023,59 @@ private const val MIND_MAP_BRIDGE_NAME = "KardLeafMindMap"
 private const val MIND_MAP_GESTURE_TRACE_TAG = "KardLeafMindMapGestureTrace"
 private val MIND_MAP_BASE_URI: Uri = Uri.parse(MIND_MAP_BASE_URL)
 
+private fun completeMindMapInlineRename(state: MindMapWebViewState) {
+    val continuation = state.pendingInlineRenameContinuation
+    if (continuation == null) {
+        KardLeafLog.d(MIND_MAP_GESTURE_TRACE_TAG, "rename-commit complete skipped pending=false")
+        return
+    }
+    KardLeafLog.d(
+        MIND_MAP_GESTURE_TRACE_TAG,
+        "rename-commit complete pending=true released=${state.released} pageReady=${state.pageReady}",
+    )
+    state.pendingInlineRenameContinuation = null
+    continuation()
+}
+
+private fun requestMindMapInlineRenameCommit(
+    webView: WebView,
+    state: MindMapWebViewState,
+    continuation: () -> Unit,
+) {
+    if (state.pendingInlineRenameContinuation != null) {
+        KardLeafLog.d(MIND_MAP_GESTURE_TRACE_TAG, "rename-commit request skipped pending=true")
+        return
+    }
+    if (state.released || !state.pageReady) {
+        KardLeafLog.d(
+            MIND_MAP_GESTURE_TRACE_TAG,
+            "rename-commit immediate released=${state.released} pageReady=${state.pageReady}",
+        )
+        continuation()
+        return
+    }
+    state.pendingInlineRenameContinuation = continuation
+    KardLeafLog.d(
+        MIND_MAP_GESTURE_TRACE_TAG,
+        "rename-commit request evaluate pageReady=${state.pageReady} released=${state.released}",
+    )
+    webView.evaluateJavascript(
+        "(function() { " +
+            "if (!window.KardLeafMindMapCommitInlineRename) return 'missing'; " +
+            "window.KardLeafMindMapCommitInlineRename(); return 'requested'; " +
+            "})();",
+    ) { result ->
+        KardLeafLog.d(
+            MIND_MAP_GESTURE_TRACE_TAG,
+            "rename-commit evaluate-result result=$result released=${state.released} " +
+                "pending=${state.pendingInlineRenameContinuation != null}",
+        )
+        if (result == "\"missing\"" && !state.released) {
+            webView.post { completeMindMapInlineRename(state) }
+        }
+    }
+}
+
 private fun isAllowedMindMapNavigation(uri: Uri): Boolean {
     val path = uri.path.orEmpty()
     val basePath = MIND_MAP_BASE_URI.path.orEmpty()
@@ -630,12 +1096,14 @@ private fun applyPendingMindMapUpdate(
     val needsTreeUpdate = state.appliedSignature != signature
     val initialEditIndex = state.pendingInitialEditIndex
     if (!needsTreeUpdate && initialEditIndex == null) {
-        KardLeafLog.d(
-            MIND_MAP_GESTURE_TRACE_TAG,
-            "tree-update skip signatureHash=${signature.hashCode()} pageReady=${state.pageReady}",
-        )
         return
     }
+    KardLeafLog.d(
+        MIND_MAP_GESTURE_TRACE_TAG,
+        "webview-update apply tree=$needsTreeUpdate initialEdit=${initialEditIndex ?: "none"} " +
+            "pageReady=${state.pageReady} released=${state.released} " +
+            "signatureChanged=${state.appliedSignature != signature}",
+    )
     val dispatchedScript = buildString {
         if (needsTreeUpdate) append(script)
         if (initialEditIndex != null) {
@@ -647,24 +1115,43 @@ private fun applyPendingMindMapUpdate(
         state.pendingInitialEditIndex = null
         state.dispatchedInitialEditIndex = initialEditIndex
     }
-    KardLeafLog.d(
-        MIND_MAP_GESTURE_TRACE_TAG,
-        "tree-update dispatch signatureHash=${signature.hashCode()} scriptLen=${dispatchedScript.length} " +
-            "initialEdit=${initialEditIndex ?: "none"} pageReady=${state.pageReady}",
-    )
-    webView.evaluateJavascript(dispatchedScript, null)
+    if (initialEditIndex != null) {
+        webView.requestFocus(View.FOCUS_DOWN)
+    }
+    webView.evaluateJavascript(dispatchedScript) {
+        KardLeafLog.d(
+            MIND_MAP_GESTURE_TRACE_TAG,
+            "webview-update evaluate-complete initialEdit=${initialEditIndex ?: "none"} released=${state.released}",
+        )
+        if (initialEditIndex != null) {
+            webView.post {
+                if (!state.released) {
+                    webView.requestFocus(View.FOCUS_DOWN)
+                    webView.context
+                        .getSystemService(Context.INPUT_METHOD_SERVICE)
+                        ?.let { (it as? InputMethodManager)?.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT) }
+                }
+            }
+        }
+    }
     if (initialEditIndex != null) {
         onInitialEditConsumed()
-        webView.post {
-            if (!state.released) webView.requestFocus(View.FOCUS_DOWN)
-        }
     }
 }
 
 private fun exportMindMapImage(webView: WebView) {
     val context = webView.context
     val restoreScript = "window.KardLeafMindMapRestoreExport && window.KardLeafMindMapRestoreExport();"
+    KardLeafLog.d(
+        MIND_MAP_GESTURE_TRACE_TAG,
+        "export start webView=${webView.width}x${webView.height} measured=${webView.measuredWidth}x${webView.measuredHeight} " +
+            "pageScale=${webView.scale} visibility=${webView.visibility}",
+    )
     val capture = {
+        KardLeafLog.d(
+            MIND_MAP_GESTURE_TRACE_TAG,
+            "export capture webView=${webView.width}x${webView.height} measured=${webView.measuredWidth}x${webView.measuredHeight}",
+        )
         val bitmap = runCatching {
             Bitmap.createBitmap(webView.width, webView.height, Bitmap.Config.ARGB_8888)
         }.getOrNull()
@@ -715,8 +1202,9 @@ private fun exportMindMapImage(webView: WebView) {
 @Composable
 private fun rememberMindMapHtml(
     isDark: Boolean,
-): String = androidx.compose.runtime.remember(isDark) {
-    buildMindMapHtml(isDark)
+    initialThemeKey: String,
+): String = androidx.compose.runtime.remember(isDark, initialThemeKey) {
+    buildMindMapHtml(isDark, initialThemeKey)
 }
 
 @Composable
@@ -770,8 +1258,10 @@ private fun buildMindMapUpdateScript(
 
 private fun buildMindMapHtml(
     isDark: Boolean,
+    initialThemeKey: String,
 ): String {
     val dark = if (isDark) "true" else "false"
+    val themeKey = PrefsManager.MindMapTheme.fromKey(initialThemeKey).key
     return """
 <!doctype html>
 <html lang="zh-CN">
@@ -790,98 +1280,110 @@ private fun buildMindMapHtml(
   --primary: ${if (isDark) "#8ec8ff" else "#2f80ed"};
   --primary2: ${if (isDark) "#223b55" else "#dceeff"};
   --float: ${if (isDark) "rgba(24,33,42,.94)" else "rgba(255,255,255,.94)"};
+  --toolbar-icon: ${if (isDark) "#e1e5e8" else "#4b4f52"};
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text); }
-#toolbar { position: fixed; right: 12px; top: 8px; z-index: 4; display: flex; align-items: center; gap: 4px; padding: 5px; border-radius: 16px; background: var(--float); box-shadow: 0 8px 28px rgba(20, 80, 140, .16); backdrop-filter: blur(12px); }
-.toolBtn { min-width: 30px; height: 30px; padding: 0 6px; border: 0; border-radius: 10px; background: var(--primary2); color: var(--primary); font-size: 17px; font-weight: 750; }
+#actionBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(8px + var(--ime-bottom, 0px)); z-index: 6; display: flex; align-items: center; gap: 2px; max-width: calc(100vw - 8px); overflow-x: auto; padding: 3px; border-radius: 16px; background: var(--float); box-shadow: 0 10px 32px rgba(15, 48, 82, .24); backdrop-filter: blur(14px); }
+#globalActions, #nodeActions { display: flex; flex: 0 0 auto; align-items: center; gap: 0; }
+#nodeActions { gap: 2px; }
+#nodeActions:not(:empty) { margin-left: 1px; padding-left: 2px; border-left: 1px solid rgba(100, 130, 160, .28); }
+.toolBtn { min-width: 30px; height: 36px; padding: 0 6px; border: 0; border-radius: 10px; background: var(--primary2); color: var(--primary); font-size: 17px; font-weight: 750; touch-action: manipulation; }
 .toolBtn.layoutBtn { min-width: 42px; font-size: 12px; letter-spacing: .2px; }
-.toolBtn.iconBtn { width: 34px; min-width: 34px; padding: 4px; background: transparent; color: #050505; }
+.toolBtn.iconBtn { display: inline-flex; align-items: center; justify-content: center; width: 32px; min-width: 32px; padding: 3px; background: transparent; color: var(--toolbar-icon); }
 .toolBtn.iconBtn:active { background: var(--primary2); }
-.toolBtn.iconBtn.layoutBtn { width: 38px; min-width: 38px; padding: 3px; }
-.mindMapIcon { width: 28px; height: 24px; display: block; fill: none; stroke: currentColor; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.toolBtn.iconBtn.layoutBtn { width: 34px; min-width: 34px; padding: 2px; }
+.mindMapIcon { width: 28px; height: 24px; display: block; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 .mindMapIcon circle { vector-effect: non-scaling-stroke; }
 .layoutGlyph, .collapseGlyph { display: none; }
 .layoutBtn[data-mode="side"] .layoutGlyph-twoWay,
 .layoutBtn[data-mode="full"] .layoutGlyph-oneWay,
 .collapseBtn[data-action="collapse"] .collapseGlyph-collapse,
 .collapseBtn[data-action="expand"] .collapseGlyph-expand { display: block; }
-.toolBtn.historyBtn { width: 34px; min-width: 34px; padding: 0; border-radius: 10px; background: transparent; color: var(--muted); font-size: 20px; font-weight: 500; line-height: 1; }
+.toolBtn.historyBtn { display: inline-flex; align-items: center; justify-content: center; width: 32px; min-width: 32px; padding: 0; border-radius: 10px; background: transparent; color: var(--toolbar-icon); font-size: 20px; font-weight: 500; line-height: 1; }
 .historyIcon { width: 24px; height: 24px; display: block; fill: currentColor; }
 .toolBtn:disabled { opacity: .38; }
-.toolBtn.historyBtn:not(:disabled) { color: var(--text); }
+.toolBtn.historyBtn:not(:disabled) { color: var(--toolbar-icon); }
 .toolBtn.historyBtn:not(:disabled):active { background: var(--primary2); color: var(--primary); }
 #themeControl { position: relative; }
-.themeBtn { width: 34px; min-width: 34px; padding: 0; background: transparent; }
-.themeSwatch { display: inline-grid; grid-template-columns: repeat(3, 6px); gap: 2px; vertical-align: middle; }
-.themeSwatch i { width: 6px; height: 15px; display: block; border-radius: 3px; }
-#themeOptions { position: absolute; top: 38px; right: 0; display: none; min-width: 126px; padding: 5px; border: 1px solid rgba(100, 130, 160, .25); border-radius: 12px; background: var(--float); box-shadow: 0 8px 26px rgba(20, 80, 140, .2); }
+.themeBtn { display: inline-flex; align-items: center; justify-content: center; width: 34px; min-width: 34px; padding: 0; background: transparent; color: var(--toolbar-icon); }
+#actionBar .nodeAction { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 34px; min-width: 34px; height: 34px; margin: 0; padding: 5px; border: 0; border-radius: 10px; background: transparent; color: var(--toolbar-icon); touch-action: manipulation; }
+#actionBar .nodeAction:active { background: var(--primary2); color: var(--primary); }
+#actionBar .nodeAction:disabled { opacity: .34; }
+#actionBar .actionIcon { width: 20px; height: 20px; display: block; margin: 0; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.suppliedActionIcon { stroke-width: 3.6 !important; }
+#themeIcon { width: 20px; height: 20px; display: block; fill: currentColor; stroke: none; }
+#themeIcon path, #themeIcon circle { fill: currentColor; stroke: none; }
+#themeMenu, #themeMenu:active { color: ${if (isDark) "#ffffff" else "#000000"}; background: transparent; }
+.trashIcon { fill: currentColor !important; stroke: none !important; }
+#themeOptions { position: fixed; left: 0; top: 0; z-index: 1000; display: none; min-width: 126px; padding: 5px; border: 1px solid rgba(100, 130, 160, .25); border-radius: 12px; background: var(--float); box-shadow: 0 8px 26px rgba(20, 80, 140, .2); pointer-events: auto; }
 #themeOptions.open { display: grid; gap: 2px; }
 .themeOption { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font-size: 12px; text-align: left; white-space: nowrap; }
 .themeOption:active, .themeOption.active { background: var(--primary2); color: var(--primary); }
-.themeSwatch i:nth-child(1) { background: #4263eb; }
-.themeSwatch i:nth-child(2) { background: #0ca678; }
-.themeSwatch i:nth-child(3) { background: #f76707; }
-.themeOption[data-theme="xmind"] .themeSwatch i:nth-child(1) { background: #e65244; }
-.themeOption[data-theme="xmind"] .themeSwatch i:nth-child(2) { background: #eaa45e; }
-.themeOption[data-theme="xmind"] .themeSwatch i:nth-child(3) { background: #4f68f6; }
-#actionBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(8px + var(--ime-bottom, 0px)); z-index: 6; display: none; align-items: center; gap: 1px; max-width: calc(100vw - 8px); overflow-x: auto; padding: 4px; border-radius: 16px; background: var(--float); box-shadow: 0 10px 32px rgba(15, 48, 82, .24); backdrop-filter: blur(14px); }
-#actionBar button { flex: 0 0 auto; height: 36px; padding: 0 8px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font-size: 12px; font-weight: 650; white-space: nowrap; }
-#actionBar button:active { background: var(--primary2); color: var(--primary); }
 #actionBar .danger { color: ${if (isDark) "#ff9a9a" else "#c62828"}; }
 #zoomToast { position: fixed; left: 50%; bottom: calc(62px + var(--ime-bottom, 0px)); z-index: 7; display: none; transform: translateX(-50%); padding: 6px 10px; border-radius: 10px; background: rgba(0, 0, 0, .52); color: #ffffff; font-size: 12px; font-weight: 700; line-height: 1; pointer-events: none; }
 #zoomToast.visible { display: block; }
 #stage { width: 100%; height: 100%; touch-action: none; }
 svg { width: 100%; height: 100%; display: block; }
-.link { fill: none; stroke-linecap: round; }
+.link { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.2; stroke-opacity: .9; }
+.dropPreviewLink { fill: none; stroke: var(--muted); stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.2; stroke-opacity: .52; pointer-events: none; }
+.dropGhost { fill: var(--surface); fill-opacity: .72; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 6 5; pointer-events: none; }
 .node rect.body { filter: drop-shadow(0 8px 16px rgba(31, 91, 156, .13)); }
 .node { cursor: grab; }
-.node.dragging { opacity: .85; }
+.node.dragging { opacity: .78; cursor: grabbing; }
 .node text { font-size: 14px; font-weight: 650; pointer-events: none; }
 .node.root text { font-size: 15px; font-weight: 700; }
 .nodeEditor { width: 100%; height: 100%; padding: 0 14px; border: 2px solid var(--primary); border-radius: 16px; outline: none; background: transparent; font: 650 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: left; -webkit-user-select: text; user-select: text; }
 .node.root .nodeEditor { border-radius: 20px; font-size: 15px; font-weight: 700; text-align: center; }
-.halo { fill: none; stroke-width: 2.2; opacity: .95; }
+.halo { fill: none; stroke-width: 1.8; opacity: .95; }
 .nodeControl { cursor: pointer; }
 .nodeControl circle { stroke-width: 2; }
 .nodeControl text { font-size: 12px; font-weight: 750; pointer-events: none; }
 </style>
 </head>
 <body>
-<div id="toolbar">
-  <button class="toolBtn iconBtn layoutBtn" id="layoutToggle" aria-label="切换为双向布局" title="当前为单向布局，点击切换为双向布局" data-mode="side">
-    <svg class="mindMapIcon layoutGlyph layoutGlyph-oneWay" viewBox="0 0 56 32" aria-hidden="true"><g><circle cx="8" cy="16" r="3.5" fill="currentColor"/><path d="M12 16H25L35 8M25 16L35 24"/><circle cx="40" cy="8" r="3.5" fill="currentColor"/><circle cx="40" cy="24" r="3.5" fill="currentColor"/></g></svg>
-    <svg class="mindMapIcon layoutGlyph layoutGlyph-twoWay" viewBox="0 0 56 32" aria-hidden="true"><g><circle cx="28" cy="16" r="4" fill="currentColor"/><path d="M24 14L14 8M24 18L14 24M32 14L42 8M32 18L42 24"/><circle cx="10" cy="8" r="3.5" fill="currentColor"/><circle cx="10" cy="24" r="3.5" fill="currentColor"/><circle cx="46" cy="8" r="3.5" fill="currentColor"/><circle cx="46" cy="24" r="3.5" fill="currentColor"/></g></svg>
-  </button>
-  <button class="toolBtn iconBtn collapseBtn" id="collapseAll" aria-label="折叠全部" title="折叠全部节点" data-action="collapse">
-    <svg class="mindMapIcon collapseGlyph collapseGlyph-collapse" viewBox="0 0 28 32" aria-hidden="true"><path d="M9 7L19 16L9 25"/></svg>
-    <svg class="mindMapIcon collapseGlyph collapseGlyph-expand" viewBox="0 0 28 32" aria-hidden="true"><path d="M19 7L9 16L19 25"/></svg>
-  </button>
-  <button class="toolBtn historyBtn" id="undo" aria-label="撤销" title="撤销"><svg class="historyIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.5 8c-2.65 0-5.05 .99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z" /></svg></button>
-  <button class="toolBtn historyBtn" id="redo" aria-label="恢复" title="恢复"><svg class="historyIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73 .72 5.12 1.88L13 16h9V7l-3.6 3.6z" /></svg></button>
-  <div id="themeControl">
-    <button class="toolBtn themeBtn" id="themeMenu" aria-label="节点主题" title="节点主题">
-      <span class="themeSwatch" aria-hidden="true"><i></i><i></i><i></i></span>
-    </button>
-    <div id="themeOptions" aria-label="节点主题选项">
-      <button class="themeOption" data-theme="classic"><span class="themeSwatch"><i></i><i></i><i></i></span><span>经典彩色</span></button>
-      <button class="themeOption" data-theme="xmind"><span class="themeSwatch"><i></i><i></i><i></i></span><span>XMind</span></button>
-    </div>
-  </div>
-  <button class="toolBtn" id="fit" aria-label="适配视图" title="适配全图">⌂</button>
-  <button class="toolBtn layoutBtn" id="exportImage" aria-label="导出图片" title="导出思维导图图片">导出</button>
-</div>
 <div id="zoomToast" role="status" aria-live="polite"></div>
-<div id="actionBar"></div>
-<div id="stage"><svg id="svg"><g id="viewport"><g id="links"></g><g id="nodes"></g></g></svg></div>
+<div id="actionBar">
+  <div id="globalActions">
+    <button class="toolBtn iconBtn layoutBtn" id="layoutToggle" aria-label="切换为双向布局" title="当前为单向布局，点击切换为双向布局" data-mode="side">
+      <svg class="mindMapIcon layoutGlyph layoutGlyph-oneWay" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.3 12H14l3-4M14 12l3 4M17 8h3M17 16h3"/></svg>
+      <svg class="mindMapIcon layoutGlyph layoutGlyph-twoWay" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.4"/><path d="M9.6 11.2 6 8H3.5M9.6 12.8 6 16H3.5M14.4 11.2 18 8h2.5M14.4 12.8 18 16h2.5"/></svg>
+    </button>
+    <button class="toolBtn iconBtn collapseBtn" id="collapseAll" aria-label="折叠全部" title="折叠全部节点" data-action="collapse">
+      <svg class="mindMapIcon collapseGlyph collapseGlyph-collapse" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><path d="M8.5 12h7"/></svg>
+      <svg class="mindMapIcon collapseGlyph collapseGlyph-expand" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><path d="M8.5 12h7M12 8.5v7"/></svg>
+    </button>
+    <button class="toolBtn historyBtn" id="undo" aria-label="撤销" title="撤销"><svg class="historyIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.5 8c-2.65 0-5.05 .99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z" /></svg></button>
+    <button class="toolBtn historyBtn" id="redo" aria-label="恢复" title="恢复"><svg class="historyIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73 .72 5.12 1.88L13 16h9V7l-3.6 3.6z" /></svg></button>
+    <div id="themeControl">
+      <button class="toolBtn themeBtn" id="themeMenu" aria-label="节点主题" title="节点主题">
+        <svg id="themeIcon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 22C6.49 22 2 17.51 2 12S6.49 2 12 2s10 4.04 10 9c0 3.31-2.69 6-6 6h-1.77c-.28 0-.5.22-.5.5 0 .12.05.23.13.33.41.47.64 1.06.64 1.67C14.5 20.88 13.38 22 12 22ZM12 4c-4.41 0-8 3.59-8 8s3.59 8 8 8c.28 0 .5-.22.5-.5 0-.16-.08-.28-.14-.35-.41-.46-.63-1.05-.63-1.65 0-1.38 1.12-2.5 2.5-2.5H16c2.21 0 4-1.79 4-4 0-4.86-3.59-8-8-8Z"/><circle cx="6.5" cy="11.5" r="1.5"/><circle cx="9.5" cy="7.5" r="1.5"/><circle cx="14.5" cy="7.5" r="1.5"/><circle cx="17.5" cy="11.5" r="1.5"/></svg>
+      </button>
+    </div>
+    <button class="toolBtn iconBtn" id="fit" aria-label="适配视图" title="适配全图"><svg class="actionIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 11.5 12 4l8.5 7.5M5.5 10.5V20h13v-9.5M9.5 20v-5h5v5"/></svg></button>
+    <button class="toolBtn iconBtn" id="exportImage" aria-label="导出图片" title="导出思维导图图片"><svg class="actionIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v11m0-11 4 4m-4-4L8 7M5 13v6h14v-6"/></svg></button>
+  </div>
+  <div id="nodeActions">
+    <button class="nodeAction" data-action="addSibling" aria-label="添加同级节点" title="添加同级节点" disabled><svg class="actionIcon suppliedActionIcon" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 24H25.5"/><circle cx="36" cy="24" r="10"/><path d="M36 19.5V28.5M31.5 24H40.5"/></g><circle cx="7.5" cy="24" r="3.8" fill="currentColor" stroke="none"/></svg></button>
+    <button class="nodeAction" data-action="addChild" aria-label="添加子节点" title="添加子节点" disabled><svg class="actionIcon suppliedActionIcon" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9H33"/><path d="M12 9V29H24"/><circle cx="35" cy="29" r="10"/><path d="M35 24.5V33.5M30.5 29H39.5"/></g><circle cx="36.5" cy="9" r="3.8" fill="currentColor" stroke="none"/></svg></button>
+    <button class="nodeAction danger" data-action="delete" aria-label="删除节点" title="删除节点" disabled><svg class="actionIcon trashIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 9v10H8V9h8m-1.5-6h-5l-1 1H5v2h14V4h-3.5l-1-1zM18 7H6v12c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7z"/></svg></button>
+  </div>
+</div>
+<div id="themeOptions" aria-label="节点主题选项">
+  <button class="themeOption" data-theme="xmind">XMind</button>
+  <button class="themeOption" data-theme="plain">默认</button>
+</div>
+<div id="stage"><svg id="svg"><g id="viewport"><g id="links"></g><g id="dropIndicator"></g><g id="nodes"></g></g></svg></div>
 <script>
 const isDark = $dark;
+const initialThemeKey = '$themeKey';
 const svg = document.getElementById('svg');
 const viewport = document.getElementById('viewport');
 const linksLayer = document.getElementById('links');
+const dropIndicator = document.getElementById('dropIndicator');
 const nodesLayer = document.getElementById('nodes');
-const toolbar = document.getElementById('toolbar');
 const actionBar = document.getElementById('actionBar');
+const nodeActions = document.getElementById('nodeActions');
 const themeControl = document.getElementById('themeControl');
 const themeMenu = document.getElementById('themeMenu');
 const themeOptions = document.getElementById('themeOptions');
@@ -892,27 +1394,53 @@ const redoBtn = document.getElementById('redo');
 const zoomToast = document.getElementById('zoomToast');
 let zoomToastHideTimer = 0;
 const SVG_NS = 'http://www.w3.org/2000/svg';
-let nativeImeInset = 0;
-function updateImeInset() {
+let nativeImeInset = null;
+let lastImeTrace = '';
+function visualViewportImeInset() {
   const visual = window.visualViewport;
   const visualHeight = visual ? visual.height : window.innerHeight;
   const visualOffsetTop = visual ? visual.offsetTop : 0;
-  const visualInset = Math.max(0, window.innerHeight - visualHeight - visualOffsetTop);
-  const inset = Math.max(nativeImeInset, visualInset);
+  return Math.max(0, window.innerHeight - visualHeight - visualOffsetTop);
+}
+function effectiveImeInset() {
+  return nativeImeInset == null ? visualViewportImeInset() : nativeImeInset;
+}
+function traceIme(reason, appliedInset) {
+  const visual = window.visualViewport;
+  const visualHeight = visual ? visual.height : window.innerHeight;
+  const visualOffsetTop = visual ? visual.offsetTop : 0;
+  const visualInset = visualViewportImeInset();
+  const nativeValue = nativeImeInset == null ? 'null' : nativeImeInset.toFixed(1);
+  const trace = 'ime reason=' + reason +
+    ' native=' + nativeValue +
+    ' visual=' + visualInset.toFixed(1) +
+    ' effective=' + appliedInset.toFixed(1) +
+    ' inner=' + Math.round(window.innerWidth) + 'x' + Math.round(window.innerHeight) +
+    ' visualHeight=' + Math.round(visualHeight) +
+    ' visualOffsetTop=' + Math.round(visualOffsetTop);
+  if (trace !== lastImeTrace) {
+    lastImeTrace = trace;
+    traceDrag(trace);
+  }
+}
+function updateImeInset(reason) {
+  const inset = effectiveImeInset();
   document.documentElement.style.setProperty('--ime-bottom', inset + 'px');
   requestAnimationFrame(() => {
+    updateActionBar('ime-' + (reason || 'update'));
+    traceIme(reason || 'update', inset);
     if (editingKey) restoreEditingViewport();
   });
 }
 window.KardLeafMindMapSetImeBottom = value => {
   nativeImeInset = Math.max(0, Number(value) || 0);
-  updateImeInset();
+  updateImeInset('native-set');
 };
-updateImeInset();
-window.addEventListener('resize', updateImeInset);
+updateImeInset('initial');
+window.addEventListener('resize', () => updateImeInset('window-resize'));
 if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', updateImeInset);
-  window.visualViewport.addEventListener('scroll', updateImeInset);
+  window.visualViewport.addEventListener('resize', () => updateImeInset('visual-resize'));
+  window.visualViewport.addEventListener('scroll', () => updateImeInset('visual-scroll'));
 }
 function updateHistoryButtons(canUndo, canRedo) {
   undoBtn.disabled = !canUndo;
@@ -936,7 +1464,7 @@ function applyNodeTheme(key) {
   document.documentElement.style.setProperty('--bg', activeTheme.backgroundColor || (isDark ? '#101418' : '#f7fbff'));
   if (root) {
     root.color = activeTheme.rootColor;
-    root.accent = activeTheme.rootColor;
+    root.accent = activeTheme.nodeBorderColor || activeTheme.rootColor;
     root.children.forEach((child, childIndex) => {
       paintBranch(
         child,
@@ -953,40 +1481,56 @@ function applyNodeTheme(key) {
   }
   updateThemeMenu();
   themeOptions.classList.remove('open');
+  const api = window.KardLeafMindMap;
+  if (api && api.onThemeChange) api.onThemeChange(activeThemeKey);
 }
-themeMenu.onclick = event => {
+themeMenu.addEventListener('pointerup', event => {
+  event.preventDefault();
   event.stopPropagation();
-  themeOptions.classList.toggle('open');
-};
-themeOptions.addEventListener('click', event => {
+  const willOpen = !themeOptions.classList.contains('open');
+  themeOptions.classList.toggle('open', willOpen);
+  if (willOpen) positionThemeOptions();
+});
+themeOptions.addEventListener('pointerup', event => {
+  event.preventDefault();
+  event.stopPropagation();
   let option = event.target;
   while (option && option !== themeOptions && option.tagName !== 'BUTTON') option = option.parentNode;
   if (option && option !== themeOptions) applyNodeTheme(option.dataset.theme);
 });
 document.addEventListener('pointerdown', event => {
-  if (!themeControl.contains(event.target)) themeOptions.classList.remove('open');
+  if (!themeControl.contains(event.target) && !themeOptions.contains(event.target)) themeOptions.classList.remove('open');
 });
+function positionThemeOptions() {
+  if (!themeOptions.classList.contains('open')) return;
+  const button = themeMenu.getBoundingClientRect();
+  const width = themeOptions.offsetWidth;
+  const left = clamp(button.left + (button.width - width) / 2, 8, window.innerWidth - width - 8);
+  const top = Math.max(8, button.top - themeOptions.offsetHeight - 8);
+  themeOptions.style.left = Math.round(left) + 'px';
+  themeOptions.style.top = Math.round(top) + 'px';
+}
+window.addEventListener('resize', positionThemeOptions);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', positionThemeOptions);
 window.KardLeafMindMapPrepareExport = function() {
-  toolbar.style.visibility = 'hidden';
+  const bounds = visibleNodes.length ? mapBounds() : null;
+  traceDrag(
+    'export-prepare scale=' + scale.toExponential(3) +
+      ' tx=' + Math.round(tx) + ' ty=' + Math.round(ty) +
+      ' svg=' + Math.round(svg.getBoundingClientRect().width) + 'x' + Math.round(svg.getBoundingClientRect().height) +
+      ' visibleNodes=' + visibleNodes.length +
+      ' map=' + (bounds ? Math.round(bounds.width) + 'x' + Math.round(bounds.height) : 'none') +
+      ' ime=' + effectiveImeInset().toFixed(1)
+  );
   actionBar.style.visibility = 'hidden';
+  zoomToast.style.visibility = 'hidden';
 };
 window.KardLeafMindMapRestoreExport = function() {
-  toolbar.style.visibility = '';
   actionBar.style.visibility = '';
+  zoomToast.style.visibility = '';
+  traceDrag('export-restore scale=' + scale.toExponential(3) + ' tx=' + Math.round(tx) + ' ty=' + Math.round(ty));
 };
 const MIND_MAP_THEMES = {
-  classic: {
-    label: '经典彩色',
-    rootColor: isDark ? '#8ec8ff' : '#2f80ed',
-    rootTextColor: isDark ? '#10233a' : '#ffffff',
-    surfaceColor: isDark ? '#18212a' : '#ffffff',
-    textColor: isDark ? '#e5edf5' : '#17212b',
-    branchTextColor: '#ffffff',
-    fills: ['#4263eb', '#0ca678', '#f76707', '#ae3ec9', '#f08c00', '#1c7ed6', '#d6336c', '#37b24d'],
-    accents: isDark
-      ? ['#91a7ff', '#63e6be', '#ffa94d', '#e599f7', '#ffd43b', '#74c0fc', '#faa2c1', '#8ce99a']
-      : ['#4263eb', '#0ca678', '#f76707', '#ae3ec9', '#f08c00', '#1c7ed6', '#d6336c', '#37b24d'],
-  },
   xmind: {
     label: 'XMind',
     backgroundColor: isDark ? '#101418' : '#ffffff',
@@ -1012,13 +1556,8 @@ const MIND_MAP_THEMES = {
     childRadius: 7,
     childBorder: false,
     nodeShadow: 'none',
-    orthogonalLinks: true,
-    linkWidth: 3,
-    linkOpacity: 1,
-    linkLineJoin: 'round',
-    rootLinkAnchors: true,
     compactDescendants: true,
-    compactNodeMinWidth: 84,
+    compactNodeMinWidth: 72,
     compactNodeMaxWidth: 164,
     compactNodeMinHeight: 36,
     compactNodeFontSize: 12,
@@ -1026,22 +1565,43 @@ const MIND_MAP_THEMES = {
     compactNodeHorizontalPadding: 18,
     compactNodeVerticalPadding: 7,
   },
+  plain: {
+    label: '默认',
+    backgroundColor: '#ffffff',
+    rootColor: '#ffffff',
+    rootTextColor: '#424242',
+    surfaceColor: '#ffffff',
+    textColor: '#424242',
+    branchTextColor: '#424242',
+    fills: ['#ffffff'],
+    accents: ['#9e9e9e'],
+    childFills: ['#ffffff'],
+    nodeBorderColor: '#b0b0b0',
+    rootRadius: 8,
+    branchRadius: 8,
+    childRadius: 6,
+    childBorder: true,
+    nodeShadow: 'none',
+  },
 };
-let activeThemeKey = 'classic';
+let activeThemeKey = MIND_MAP_THEMES[initialThemeKey] ? initialThemeKey : 'plain';
 let activeTheme = MIND_MAP_THEMES[activeThemeKey];
-const minNodeWidth = 112;
-const maxNodeWidth = 236;
-const minRootWidth = 150;
-const maxRootWidth = 252;
+const minNodeWidth = 72;
+const maxNodeWidth = 280;
+const minRootWidth = 140;
+const maxRootWidth = 300;
 const minNodeHeight = 46;
 const textLineHeight = 18;
 const textVerticalPadding = 14;
 const horizontalGap = 28;
 const siblingGap = 14;
-const panVerticalSensitivity = 1.14;
-const dropExitSlopPx = 18;
-const longPressDelayMs = 520;
+const panHorizontalSensitivity = 1.08;
+const panVerticalSensitivity = 1.18;
+const panFlingFriction = .90;
+const panFlingMaxVelocity = 2.4;
+const longPressDelayMs = 304;
 const longPressMoveSlopPx = 9;
+const commitHoldTimeoutMs = 1200;
 const editViewportSettleMs = 900;
 const textMeasureCanvas = document.createElement('canvas');
 const textMeasureContext = textMeasureCanvas.getContext('2d');
@@ -1051,19 +1611,24 @@ let root = null;
 let nodes = [];
 let visibleNodes = [];
 let hasMindMapData = false;
-let localTreeDirty = false;
 let pendingTreeData = null;
 let layoutMode = 'side';
 let tx = 0, ty = 0, scale = 1;
 let drag = null;
+let committedDrag = null;
 let pinch = null;
-let dropTarget = null;
+let panFlingFrame = 0;
+let dropIntent = null;
+let lastDropResolution = 'not-resolved';
+let lastSiblingCandidates = 'none';
+let lastChildHits = 'none';
 let animationVersion = 0;
 let suppressTapUntil = 0;
 let lastBlankTapTime = 0;
 let selectedKey = null;
 let editingKey = null;
 let editViewport = null;
+let pendingTransformFrame = 0;
 const collapsedKeys = new Set();
 const activePointers = new Map();
 let dragTraceSequence = 0;
@@ -1074,6 +1639,39 @@ function traceDrag(message) {
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function setTransform() {
   viewport.setAttribute('transform', 'translate(' + tx + ' ' + ty + ') scale(' + scale + ')');
+}
+function scheduleTransform() {
+  if (pendingTransformFrame) return;
+  pendingTransformFrame = requestAnimationFrame(() => {
+    pendingTransformFrame = 0;
+    setTransform();
+  });
+}
+function stopPanFling() {
+  if (!panFlingFrame) return;
+  cancelAnimationFrame(panFlingFrame);
+  panFlingFrame = 0;
+}
+function startPanFling(velocityX, velocityY) {
+  if (Math.hypot(velocityX, velocityY) < .08) return;
+  stopPanFling();
+  let previousAt = performance.now();
+  function step(now) {
+    const elapsed = Math.min(32, Math.max(1, now - previousAt));
+    previousAt = now;
+    tx += velocityX * elapsed;
+    ty += velocityY * elapsed;
+    setTransform();
+    const friction = Math.pow(panFlingFriction, elapsed / 16.67);
+    velocityX *= friction;
+    velocityY *= friction;
+    if (Math.hypot(velocityX, velocityY) < .08) {
+      panFlingFrame = 0;
+    } else {
+      panFlingFrame = requestAnimationFrame(step);
+    }
+  }
+  panFlingFrame = requestAnimationFrame(step);
 }
 function showZoomToast() {
   zoomToast.textContent = Math.round(scale * 100) + '%';
@@ -1147,7 +1745,7 @@ function paintBranch(node, fill, accent, childFill, branchTextColor) {
 function buildTree(nextRoot, nextNodes) {
   rootData = nextRoot || { text: '未命名节点', line: 1, sourceOffset: 0 };
   nodesData = Array.isArray(nextNodes) ? nextNodes : [];
-  root = { key: 'root', index: -1, depth: 0, text: rootData.text, line: rootData.line, sourceOffset: rootData.sourceOffset, x: 0, y: 0, parent: null, children: [], root: true, direction: 'right', color: activeTheme.rootColor, accent: activeTheme.rootColor };
+  root = { key: 'root', index: 0, depth: 0, text: rootData.text, line: rootData.line, sourceOffset: rootData.sourceOffset, x: 0, y: 0, parent: null, children: [], root: true, direction: 'right', color: activeTheme.rootColor, accent: activeTheme.nodeBorderColor || activeTheme.rootColor };
   const stack = [root];
   const keyCounts = new Map();
   nodes = [root];
@@ -1330,36 +1928,64 @@ function sameMindMapData(nextRoot, nextNodes) {
   });
 }
 function cancelActivePointerInteraction(reason) {
-  if (drag || pinch || activePointers.size) {
-    traceDrag('interaction-reset reason=' + reason);
+  if (drag || committedDrag || pinch || activePointers.size) {
+    traceDrag(
+      'interaction-reset reason=' + reason +
+        ' dragging=' + !!drag + ' commitHeld=' + !!committedDrag +
+        ' pinching=' + !!pinch + ' activePointers=' + activePointers.size,
+    );
   }
   clearDragLongPress(drag);
-  if (drag && drag.mode === 'node' && drag.node && Number.isFinite(drag.nodeStartX) && Number.isFinite(drag.nodeStartY)) {
-    drag.node.x = drag.nodeStartX;
-    drag.node.y = drag.nodeStartY;
-  }
+  stopPanFling();
+  restoreDraggedSubtree(drag);
+  clearCommittedDrag(reason, false);
   drag = null;
   pinch = null;
-  dropTarget = null;
+  dropIntent = null;
   activePointers.clear();
   animationVersion += 1;
 }
 function applyMindMapData(nextRoot, nextNodes) {
-  if (sameMindMapData(nextRoot, nextNodes) && !localTreeDirty) return;
+  if (sameMindMapData(nextRoot, nextNodes)) return;
   if (drag || pinch || activePointers.size) {
     traceDrag('tree-refresh deferred while gesture active activePointers=' + activePointers.size + ' oldNodes=' + nodes.length + ' newNodes=' + (Array.isArray(nextNodes) ? nextNodes.length : -1));
     pendingTreeData = { root: nextRoot, nodes: Array.isArray(nextNodes) ? nextNodes.slice() : null };
     return;
   }
   pendingTreeData = null;
-  traceDrag('tree-refresh dirty=' + localTreeDirty + ' oldNodes=' + nodes.length + ' newNodes=' + (Array.isArray(nextNodes) ? nextNodes.length : -1));
+  traceDrag(
+    'tree-refresh oldNonRootNodes=' + Math.max(0, nodes.length - 1) +
+      ' newNonRootNodes=' + (Array.isArray(nextNodes) ? nextNodes.length : -1) +
+      ' commitHeld=' + !!committedDrag,
+  );
   cancelActivePointerInteraction('tree-refresh');
   const previousPositions = hasMindMapData ? capturePositions() : new Map();
+  const selectedBefore = selectedKey ? nodes.find(item => item.key === selectedKey) : null;
+  const collapsedBeforeIndices = Array.from(collapsedKeys).map(key => {
+    const item = nodes.find(candidate => candidate.key === key);
+    return item ? item.index : -1;
+  }).join(',');
   buildTree(nextRoot, nextNodes);
-  localTreeDirty = false;
   const validKeys = new Set(nodes.map(n => n.key));
   Array.from(collapsedKeys).forEach(key => { if (!validKeys.has(key)) collapsedKeys.delete(key); });
-  if (selectedKey && !validKeys.has(selectedKey)) selectedKey = null;
+  if (selectedKey && !validKeys.has(selectedKey)) {
+    selectedKey = null;
+  }
+  const selectedAfter = selectedKey ? nodes.find(item => item.key === selectedKey) : null;
+  const collapsedAfterIndices = Array.from(collapsedKeys).map(key => {
+    const item = nodes.find(candidate => candidate.key === key);
+    return item ? item.index : -1;
+  }).join(',');
+  traceDrag(
+    'tree-state keyStrategy=text-depth-occurrence' +
+      ' selectedBefore=' + (selectedBefore ? selectedBefore.index : 'none') +
+      ' selectedAfter=' + (selectedAfter ? selectedAfter.index : 'none') +
+      ' selectedBeforeTextLen=' + (selectedBefore ? selectedBefore.text.length : 'none') +
+      ' selectedAfterTextLen=' + (selectedAfter ? selectedAfter.text.length : 'none') +
+      ' collapsedBefore=' + collapsedBeforeIndices +
+      ' collapsedAfter=' + collapsedAfterIndices +
+      ' collapsedCount=' + collapsedKeys.size,
+  );
   updateActionBar();
   updateCollapseAllButton();
   if (!hasMindMapData) {
@@ -1389,153 +2015,215 @@ function isDescendantOf(node, ancestor) {
   }
   return false;
 }
-function updateSubtreeDepth(node, depth) {
-  node.depth = depth;
-  node.children.forEach(child => updateSubtreeDepth(child, depth + 1));
+function pointInsideNode(node, point) {
+  if (!node || !point) return false;
+  return point.x >= node.x && point.x <= node.x + nodeVisualWidth(node) &&
+    point.y >= node.y && point.y <= node.y + nodeVisualHeight(node);
 }
-function canReparent(movingNode, targetNode) {
-  if (!movingNode || movingNode.root || !targetNode) return false;
-  if (movingNode === targetNode || isDescendantOf(targetNode, movingNode)) return false;
-  if (targetNode === movingNode.parent) return false;
-  return true;
+function visibleSubtreeBounds(node) {
+  let top = node.y;
+  let bottom = node.y + nodeVisualHeight(node);
+  effChildren(node).forEach(child => {
+    const childBounds = visibleSubtreeBounds(child);
+    top = Math.min(top, childBounds.top);
+    bottom = Math.max(bottom, childBounds.bottom);
+  });
+  return { top, bottom };
 }
-function dropGeometry(movingNode, targetNode, pointerWorld, extraScreenPx) {
-  const mw = nodeVisualWidth(movingNode);
-  const mh = nodeVisualHeight(movingNode);
-  const extraWorld = (extraScreenPx || 0) / Math.max(scale, .01);
-  const marginX = Math.max(42, mw * .28) + extraWorld;
-  const marginY = Math.max(34, mh * .45) + extraWorld;
-  const w = nodeVisualWidth(targetNode);
-  const h = nodeVisualHeight(targetNode);
-  const bodyLeft = targetNode.x;
-  const bodyTop = targetNode.y;
-  const bodyRight = bodyLeft + w;
-  const bodyBottom = bodyTop + h;
-  const movingRight = movingNode.x + mw;
-  const movingBottom = movingNode.y + mh;
-  const overlapWidth = Math.max(0, Math.min(movingRight, bodyRight) - Math.max(movingNode.x, bodyLeft));
-  const overlapHeight = Math.max(0, Math.min(movingBottom, bodyBottom) - Math.max(movingNode.y, bodyTop));
-  const bodyOverlapArea = overlapWidth * overlapHeight;
-  const movingCenter = nodeCenter(movingNode);
-  const pointerBodyHit = !!pointerWorld &&
-    pointerWorld.x >= bodyLeft && pointerWorld.x <= bodyRight &&
-    pointerWorld.y >= bodyTop && pointerWorld.y <= bodyBottom;
-  const centerBodyHit = movingCenter.x >= bodyLeft && movingCenter.x <= bodyRight &&
-    movingCenter.y >= bodyTop && movingCenter.y <= bodyBottom;
-  const pointerHit = !!pointerWorld &&
-    pointerWorld.x >= targetNode.x - marginX && pointerWorld.x <= targetNode.x + w + marginX &&
-    pointerWorld.y >= targetNode.y - marginY && pointerWorld.y <= targetNode.y + h + marginY;
-  const centerHit = movingCenter.x >= targetNode.x - marginX && movingCenter.x <= targetNode.x + w + marginX &&
-    movingCenter.y >= targetNode.y - marginY && movingCenter.y <= targetNode.y + h + marginY;
-  const overlap =
-    movingNode.x < targetNode.x + w + marginX && movingNode.x + mw > targetNode.x - marginX &&
-    movingNode.y < targetNode.y + h + marginY && movingNode.y + mh > targetNode.y - marginY;
+function directChildrenWithout(parent, movingNode) {
+  return parent ? parent.children.filter(child => child !== movingNode) : [];
+}
+function moveIntentRejectionReason(movingNode, intent, allowNoop = false) {
+  if (!movingNode) return 'moving-missing';
+  if (movingNode.root) return 'moving-root';
+  if (!movingNode.parent) return 'moving-parent-missing';
+  if (!intent) return 'intent-missing';
+  if (!intent.parent) return 'target-parent-missing';
+  if (intent.parent === movingNode || isDescendantOf(intent.parent, movingNode)) return 'cycle';
+  const oldIndex = movingNode.parent ? movingNode.parent.children.indexOf(movingNode) : -1;
+  const childCount = directChildrenWithout(intent.parent, movingNode).length;
+  if (!Number.isInteger(intent.childIndex) || intent.childIndex < 0 || intent.childIndex > childCount) {
+    return 'child-index-out-of-range-' + intent.childIndex + '-of-' + childCount;
+  }
+  if (!allowNoop && movingNode.parent === intent.parent && oldIndex === intent.childIndex) return 'same-parent-noop';
+  return '';
+}
+function currentDropIntent(movingNode) {
+  const parent = movingNode && movingNode.parent;
+  const childIndex = parent ? parent.children.indexOf(movingNode) : -1;
+  if (childIndex < 0) return null;
   return {
-    pointerBodyHit,
-    centerBodyHit,
-    bodyOverlapArea,
-    pointerHit,
-    centerHit,
-    overlap,
-    hit: pointerHit || centerHit || overlap,
-    marginX,
-    marginY,
+    parent,
+    childIndex,
+    source: 'current',
+    direction: movingNode.direction,
+    x: movingNode.x,
+    y: movingNode.y,
   };
 }
-function findDropTargetFor(movingNode, pointerWorld) {
-  if (!movingNode || movingNode.root) return null;
-  const points = pointerWorld ? [pointerWorld, nodeCenter(movingNode)] : [nodeCenter(movingNode)];
-  let best = null;
-  let bestRank = Infinity;
-  let bestOverlapArea = -1;
-  let bestScore = Infinity;
-  visibleNodes.forEach(n => {
-    if (!canReparent(movingNode, n)) return;
-    const geometry = dropGeometry(movingNode, n, pointerWorld, 0);
-    if (!geometry.hit) return;
-    const nc = nodeCenter(n);
-    const score = Math.min.apply(null, points.map(point => {
-      if (point.x < n.x - geometry.marginX || point.x > n.x + nodeVisualWidth(n) + geometry.marginX ||
-        point.y < n.y - geometry.marginY || point.y > n.y + nodeVisualHeight(n) + geometry.marginY) return Infinity;
-      return Math.abs(point.x - nc.x) + Math.abs(point.y - nc.y);
-    }));
-    const score2 = geometry.overlap
-      ? Math.min(score, Math.abs(nodeCenter(movingNode).x - nc.x) + Math.abs(nodeCenter(movingNode).y - nc.y))
-      : score;
-    const rank = geometry.centerBodyHit
-      ? 0
-      : geometry.pointerBodyHit
-        ? 1
-        : geometry.bodyOverlapArea > 0
-          ? 2
-          : 3;
-    if (Number.isFinite(score2) && (
-      rank < bestRank ||
-      (rank === bestRank && geometry.bodyOverlapArea > bestOverlapArea) ||
-      (rank === bestRank && geometry.bodyOverlapArea === bestOverlapArea && score2 < bestScore)
-    )) {
-      best = n;
-      bestRank = rank;
-      bestOverlapArea = geometry.bodyOverlapArea;
-      bestScore = score2;
-    }
-  });
-  return best;
+function finalChildDirection(parent, childIndex, fallback) {
+  if (parent.root) return layoutMode === 'full' && childIndex % 2 === 1 ? 'left' : 'right';
+  return parent.direction || fallback;
 }
-function resolveDropTarget(movingNode, pointerWorld, currentTarget) {
-  if (!movingNode || movingNode.root) return null;
-  const preferredTarget = findDropTargetFor(movingNode, pointerWorld);
-  if (preferredTarget) return preferredTarget;
-  if (currentTarget && canReparent(movingNode, currentTarget)) {
-    const retained = dropGeometry(movingNode, currentTarget, pointerWorld, dropExitSlopPx);
-    if (retained.hit) return currentTarget;
-    traceDrag(
-      'target retention-failed moving=' + movingNode.index + ' target=' + currentTarget.index +
-        ' pointerWorldX=' + Math.round(pointerWorld.x) + ' pointerWorldY=' + Math.round(pointerWorld.y) +
-        ' centerX=' + Math.round(nodeCenter(movingNode).x) + ' centerY=' + Math.round(nodeCenter(movingNode).y) +
-        ' marginX=' + Math.round(retained.marginX) + ' marginY=' + Math.round(retained.marginY),
+function siblingDropIntent(movingNode, anchor, insertBefore) {
+  if (!anchor || !anchor.parent) return null;
+  const siblings = directChildrenWithout(anchor.parent, movingNode);
+  const anchorIndex = siblings.indexOf(anchor);
+  if (anchorIndex < 0) return null;
+  const bounds = visibleSubtreeBounds(anchor);
+  const childIndex = anchorIndex + (insertBefore ? 0 : 1);
+  const direction = finalChildDirection(anchor.parent, childIndex, anchor.direction);
+  const previous = siblings.slice(0, childIndex).reverse().find(node => node.direction === direction) || null;
+  const next = siblings.slice(childIndex).find(node => node.direction === direction) || null;
+  const previousBounds = previous ? visibleSubtreeBounds(previous) : null;
+  const nextBounds = next ? visibleSubtreeBounds(next) : null;
+  const previewY = previousBounds && nextBounds
+    ? (previousBounds.bottom + nextBounds.top - nodeVisualHeight(movingNode)) / 2
+    : nextBounds
+      ? nextBounds.top - siblingGap - nodeVisualHeight(movingNode)
+      : previousBounds
+        ? previousBounds.bottom + siblingGap
+        : insertBefore
+          ? bounds.top - siblingGap - nodeVisualHeight(movingNode)
+          : bounds.bottom + siblingGap;
+  return {
+    parent: anchor.parent,
+    childIndex,
+    source: insertBefore ? 'sibling-before' : 'sibling-after',
+    direction,
+    x: direction === anchor.direction
+      ? anchor.x
+      : direction === 'left'
+        ? anchor.parent.x - horizontalGap - nodeVisualWidth(movingNode)
+        : anchor.parent.x + nodeVisualWidth(anchor.parent) + horizontalGap,
+    y: previewY,
+  };
+}
+function resolveSiblingDropIntent(movingNode) {
+  const point = nodeCenter(movingNode);
+  const maxVerticalDistance = siblingGap + nodeVisualHeight(movingNode) / 2;
+  const candidates = visibleNodes
+    .filter(node => node !== movingNode && !node.root && node.parent && !isDescendantOf(node, movingNode))
+    .filter(node => pointInSiblingZoneX(node, point, movingNode))
+    .map(node => {
+      const bounds = { top: node.y, bottom: node.y + nodeVisualHeight(node) };
+      const verticalDistance = point.y < bounds.top
+        ? bounds.top - point.y
+        : point.y > bounds.bottom
+          ? point.y - bounds.bottom
+          : 0;
+      return { node, bounds, verticalDistance };
+    })
+    .filter(candidate => candidate.verticalDistance <= maxVerticalDistance)
+    .sort((a, b) =>
+      a.verticalDistance - b.verticalDistance ||
+      Math.abs(point.x - nodeCenter(a.node).x) - Math.abs(point.x - nodeCenter(b.node).x) ||
+      b.node.depth - a.node.depth
     );
+  lastSiblingCandidates = candidates.length
+    ? candidates.slice(0, 8).map(candidate =>
+        candidate.node.index + ':parent-' + candidate.node.parent.index + ':' +
+          'body-' + Math.round(candidate.bounds.top) + '-' + Math.round(candidate.bounds.bottom) +
+          ':distance-' + Math.round(candidate.verticalDistance)
+      ).join(',') + (candidates.length > 8 ? ',more' : '')
+    : 'none';
+  const anchor = candidates.length ? candidates[0].node : null;
+  return anchor ? siblingDropIntent(movingNode, anchor, point.y < nodeCenter(anchor).y) : null;
+}
+function pointInChildZone(node, point, movingNode) {
+  const direction = node.root
+    ? (layoutMode === 'full' && point.x < nodeCenter(node).x ? 'left' : 'right')
+    : node.direction;
+  const reach = horizontalGap + nodeVisualWidth(movingNode);
+  const centerX = nodeCenter(node).x;
+  const edge = direction === 'left' ? node.x : node.x + nodeVisualWidth(node);
+  const insideX = direction === 'left'
+    ? point.x <= centerX && point.x >= edge - reach
+    : point.x >= centerX && point.x <= edge + reach;
+  return insideX && point.y >= node.y && point.y <= node.y + nodeVisualHeight(node);
+}
+function pointInSiblingZoneX(node, point, movingNode) {
+  const direction = node.root ? 'right' : node.direction;
+  const reach = horizontalGap + nodeVisualWidth(movingNode);
+  const centerX = nodeCenter(node).x;
+  return direction === 'left'
+    ? point.x >= centerX && point.x <= node.x + nodeVisualWidth(node) + reach
+    : point.x <= centerX && point.x >= node.x - reach;
+}
+function childDropIntent(movingNode, parent, source) {
+  const children = directChildrenWithout(parent, movingNode);
+  const direction = finalChildDirection(parent, children.length, movingNode.direction);
+  const sameDirectionChildren = children.filter(child => child.direction === direction);
+  const lastChild = sameDirectionChildren[sameDirectionChildren.length - 1] || null;
+  return {
+    parent,
+    childIndex: children.length,
+    source,
+    direction,
+    x: direction === 'left'
+      ? parent.x - horizontalGap - nodeVisualWidth(movingNode)
+      : parent.x + nodeVisualWidth(parent) + horizontalGap,
+    y: lastChild
+      ? visibleSubtreeBounds(lastChild).bottom + siblingGap
+      : parent.y + (nodeVisualHeight(parent) - nodeVisualHeight(movingNode)) / 2,
+  };
+}
+function resolveChildDropIntent(movingNode) {
+  const point = nodeCenter(movingNode);
+  const hits = visibleNodes
+    .filter(node => node !== movingNode && !isDescendantOf(node, movingNode))
+    .map(node => {
+      const body = pointInsideNode(node, point);
+      const childZone = pointInChildZone(node, point, movingNode);
+      return {
+        node,
+        body: body && childZone,
+        childSide: !body && childZone,
+      };
+    })
+    .filter(hit => hit.body || hit.childSide)
+    .sort((a, b) => Number(b.body) - Number(a.body) || b.node.depth - a.node.depth);
+  lastChildHits = hits.length
+    ? hits.slice(0, 8).map(hit =>
+        hit.node.index + ':' + (hit.body ? 'body' : 'side') + ':parent-' +
+          (hit.node.parent ? hit.node.parent.index : 'none') + ':y-' +
+          Math.round(hit.node.y) + '-' + Math.round(hit.node.y + nodeVisualHeight(hit.node))
+      ).join(',') + (hits.length > 8 ? ',more' : '')
+    : 'none';
+  const hit = hits[0];
+  return hit ? childDropIntent(movingNode, hit.node, hit.body ? 'node-body-child' : 'node-child-side') : null;
+}
+function resolveDropIntent(movingNode, allowNoop = false) {
+  if (!movingNode || movingNode.root) {
+    lastDropResolution = 'priority=none rejection=' + moveIntentRejectionReason(movingNode, null, allowNoop);
+    return null;
   }
-  return findDropTargetFor(movingNode, pointerWorld);
+  const childIntent = resolveChildDropIntent(movingNode);
+  const siblingIntent = resolveSiblingDropIntent(movingNode);
+  const childRejection = moveIntentRejectionReason(movingNode, childIntent, allowNoop);
+  const siblingRejection = moveIntentRejectionReason(movingNode, siblingIntent, allowNoop);
+  let selectedIntent = null;
+  let priority = 'none';
+  if (childIntent && childIntent.source === 'node-body-child' && !childRejection) {
+    selectedIntent = childIntent;
+    priority = 'node-body-child';
+  } else if (!siblingRejection) {
+    selectedIntent = siblingIntent;
+    priority = 'sibling-anchor';
+  } else if (!childRejection) {
+    selectedIntent = childIntent;
+    priority = 'node-child-side';
+  }
+  lastDropResolution =
+    'priority=' + priority +
+      ' siblingCandidates=[' + lastSiblingCandidates + ']' +
+      ' childHits=[' + lastChildHits + ']' +
+      ' siblingRejection=' + (siblingRejection || 'none') +
+      ' childRejection=' + (childRejection || 'none');
+  return selectedIntent;
 }
-function rejectedTargetDetails(movingNode, pointerWorld) {
-  if (!movingNode || movingNode.root) return null;
-  const pointer = pointerWorld || null;
-  const parts = [];
-  visibleNodes.forEach(n => {
-    if (canReparent(movingNode, n)) return;
-    const geometry = dropGeometry(movingNode, n, pointer, 0);
-    if (!geometry.hit) return;
-    let reason;
-    if (n === movingNode) reason = 'self';
-    else if (isDescendantOf(n, movingNode)) reason = 'descendant';
-    else if (n === movingNode.parent) reason = 'current-parent';
-    else reason = 'invalid';
-    parts.push(n.index + ':' + reason);
-  });
-  return parts.length ? parts.join(' ') : null;
-}
-function reparentNodeLocally(movingNode, targetNode) {
-  if (!canReparent(movingNode, targetNode)) return false;
-  const previousPositions = capturePositions();
-  collapsedKeys.delete(targetNode.key);
-  const oldParent = movingNode.parent;
-  const oldParentIndex = oldParent ? oldParent.index : -1;
-  const oldSiblings = oldParent.children;
-  const oldIndex = oldSiblings.indexOf(movingNode);
-  if (oldIndex >= 0) oldSiblings.splice(oldIndex, 1);
-  targetNode.children.push(movingNode);
-  movingNode.parent = targetNode;
-  updateSubtreeDepth(movingNode, targetNode.depth + 1);
-  localTreeDirty = true;
-  traceDrag(
-    'reparent-local gesture=' + dragTraceSequence + ' moving=' + movingNode.index + ' target=' + targetNode.index +
-      ' oldParent=' + oldParentIndex + ' oldSibling=' + oldIndex + ' newParent=' + targetNode.index +
-      ' dirty=' + localTreeDirty,
-  );
-  updateCollapseAllButton();
-  animateLayoutFrom(previousPositions, 180);
-  return true;
+function dropIntentKey(intent) {
+  return intent ? intent.parent.index + ':' + intent.childIndex + ':' + intent.source : '';
 }
 function mapBounds() {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -1554,6 +2242,7 @@ function traceViewportChange(reason, beforeScale, beforeTx, beforeTy, readableFl
   traceDrag(
     'viewport-change reason=' + reason +
       ' scaleBefore=' + beforeScale.toFixed(3) + ' scaleAfter=' + scale.toFixed(3) +
+      ' scaleRaw=' + (Number.isFinite(scale) ? scale.toExponential(3) : String(scale)) +
       ' txBefore=' + Math.round(beforeTx) + ' txAfter=' + Math.round(tx) +
       ' tyBefore=' + Math.round(beforeTy) + ' tyAfter=' + Math.round(ty) +
       ' svg=' + Math.round(rect.width) + 'x' + Math.round(rect.height) +
@@ -1636,28 +2325,15 @@ function resetView(reason) {
 function resizeMindMap(reason) { requestAnimationFrame(() => resetView(reason || 'window-resize')); }
 window.KardLeafMindMapResize = resizeMindMap;
 window.addEventListener('resize', () => resizeMindMap('window-resize'));
-function linkAnchorY(parent, child) {
-  const centerY = parent.y + nodeVisualHeight(parent) / 2;
-  if (!activeTheme.rootLinkAnchors || !parent.root || child.depth !== 1) return centerY;
-  const siblings = parent.children.filter(item => item.direction === child.direction);
-  const childIndex = siblings.indexOf(child);
-  if (childIndex < 0 || siblings.length < 2) return centerY;
-  return parent.y + nodeVisualHeight(parent) * (childIndex + 1) / (siblings.length + 1);
-}
-function pathBetween(a, b) {
-  const isLeft = b.direction === 'left';
+function pathBetween(a, b, directionOverride) {
+  const direction = directionOverride || b.direction;
+  const isLeft = direction === 'left';
   const ax = isLeft ? a.x : a.x + nodeVisualWidth(a);
   const bx = isLeft ? b.x + nodeVisualWidth(b) : b.x;
-  const ay = linkAnchorY(a, b);
+  const ay = a.y + nodeVisualHeight(a) / 2;
   const by = b.y + nodeVisualHeight(b) / 2;
-  if (activeTheme.orthogonalLinks && b.depth > 1) {
-    const trunkX = (ax + bx) / 2;
-    return 'M ' + ax + ' ' + ay + ' H ' + trunkX + ' V ' + by + ' H ' + bx;
-  }
-  const bend = Math.max(18, Math.abs(bx - ax) * .45);
-  const c1x = isLeft ? ax - bend : ax + bend;
-  const c2x = isLeft ? bx + bend : bx - bend;
-  return 'M ' + ax + ' ' + ay + ' C ' + c1x + ' ' + ay + ', ' + c2x + ' ' + by + ', ' + bx + ' ' + by;
+  const trunkX = (ax + bx) / 2;
+  return 'M ' + ax + ' ' + ay + ' H ' + trunkX + ' V ' + by + ' H ' + bx;
 }
 function createSvgElement(name) { return document.createElementNS(SVG_NS, name); }
 function descendantCount(node) {
@@ -1692,10 +2368,35 @@ function appendNodeControl(g, node, cx, cy, label, className, edgeX) {
   control.appendChild(text);
   g.appendChild(control);
 }
+function renderDropIndicator() {
+  const movingNode = drag && drag.mode === 'node' ? drag.node : null;
+  if (!movingNode || !dropIntent) return;
+  const parent = dropIntent.parent;
+  if (!parent || parent === movingNode) return;
+  const ghost = {
+    x: dropIntent.x,
+    y: dropIntent.y,
+    width: nodeVisualWidth(movingNode),
+    height: nodeVisualHeight(movingNode),
+    direction: dropIntent.direction,
+  };
+  const preview = createSvgElement('path');
+  preview.setAttribute('class', 'dropPreviewLink');
+  preview.setAttribute('d', pathBetween(parent, ghost, dropIntent.direction));
+  dropIndicator.appendChild(preview);
+  const outline = createSvgElement('rect');
+  outline.setAttribute('class', 'dropGhost');
+  outline.setAttribute('x', String(ghost.x));
+  outline.setAttribute('y', String(ghost.y));
+  outline.setAttribute('width', String(ghost.width));
+  outline.setAttribute('height', String(ghost.height));
+  outline.setAttribute('rx', String(parent.depth === 0 ? (activeTheme.branchRadius || 16) : (activeTheme.childRadius || 16)));
+  outline.setAttribute('ry', String(parent.depth === 0 ? (activeTheme.branchRadius || 16) : (activeTheme.childRadius || 16)));
+  dropIndicator.appendChild(outline);
+}
 function renderNode(n) {
   const isLeftNode = !n.root && n.direction === 'left';
   const isSelected = selectedKey === n.key;
-  const isDropTarget = dropTarget === n;
   const w = nodeVisualWidth(n);
   const h = nodeVisualHeight(n);
   const compact = isCompactNode(n);
@@ -1707,12 +2408,12 @@ function renderNode(n) {
   if (isSelected) {
     const halo = createSvgElement('rect');
     halo.setAttribute('class', 'halo');
-    halo.setAttribute('x', '-5');
-    halo.setAttribute('y', '-5');
-    halo.setAttribute('width', String(w + 10));
-    halo.setAttribute('height', String(h + 10));
-    halo.setAttribute('rx', '21');
-    halo.setAttribute('ry', '21');
+    halo.setAttribute('x', '-3');
+    halo.setAttribute('y', '-3');
+    halo.setAttribute('width', String(w + 6));
+    halo.setAttribute('height', String(h + 6));
+    halo.setAttribute('rx', '4');
+    halo.setAttribute('ry', '4');
     halo.style.stroke = n.accent;
     g.appendChild(halo);
   }
@@ -1723,7 +2424,12 @@ function renderNode(n) {
   rect.setAttribute('rx', String(n.root ? (activeTheme.rootRadius || 20) : (n.depth === 1 ? (activeTheme.branchRadius || 16) : (activeTheme.childRadius || 16))));
   rect.setAttribute('ry', String(n.root ? (activeTheme.rootRadius || 20) : (n.depth === 1 ? (activeTheme.branchRadius || 16) : (activeTheme.childRadius || 16))));
   if (activeTheme.nodeShadow) rect.style.filter = activeTheme.nodeShadow;
-  if (n.root) {
+  if (activeTheme.nodeBorderColor) {
+    rect.style.fill = activeTheme.surfaceColor;
+    rect.style.stroke = activeTheme.nodeBorderColor;
+    rect.style.strokeOpacity = isSelected ? '1' : '.9';
+    rect.style.strokeWidth = isSelected ? '2' : '1';
+  } else if (n.root) {
     rect.style.fill = activeTheme.rootColor;
     rect.style.stroke = 'none';
   } else if (n.depth === 1) {
@@ -1738,11 +2444,6 @@ function renderNode(n) {
       rect.style.strokeOpacity = isSelected ? '1' : '.55';
       rect.style.strokeWidth = isSelected ? '2' : '1.4';
     }
-  }
-  if (isDropTarget) {
-    rect.style.stroke = n.accent;
-    rect.style.strokeOpacity = '1';
-    rect.style.strokeWidth = '3';
   }
   g.appendChild(rect);
   if (editingKey === n.key) {
@@ -1809,18 +2510,22 @@ function renderNode(n) {
 function render() {
   if (!root) return;
   linksLayer.innerHTML = '';
+  dropIndicator.innerHTML = '';
   nodesLayer.innerHTML = '';
+  const draggingNode = drag && drag.mode === 'node'
+    ? drag.node
+    : committedDrag && committedDrag.node
+      ? committedDrag.node
+      : null;
   visibleNodes.forEach(n => {
-    if (n.root) return;
+    if (n.root || n === draggingNode) return;
     const p = createSvgElement('path');
     p.setAttribute('class', 'link');
     p.setAttribute('d', pathBetween(n.parent || root, n));
     p.setAttribute('stroke', n.accent);
-    p.setAttribute('stroke-width', String(activeTheme.linkWidth || (n.depth <= 1 ? 3 : 2)));
-    p.setAttribute('stroke-opacity', String(activeTheme.linkOpacity !== undefined ? activeTheme.linkOpacity : (isDark ? .82 : .75)));
-    if (activeTheme.linkLineJoin) p.style.strokeLinejoin = activeTheme.linkLineJoin;
     linksLayer.appendChild(p);
   });
+  renderDropIndicator();
   visibleNodes.forEach(renderNode);
 }
 let pendingRenderFrame = 0;
@@ -1833,11 +2538,28 @@ function scheduleRender() {
 }
 function findNodeByIndex(index) { return nodes.find(n => n.index === index); }
 function findNodeByKey(key) { return key ? nodes.find(n => n.key === key) : null; }
-function finishInlineRename(commit) {
-  if (!editingKey) return;
+function finishInlineRename(commit, notifyFinished) {
+  const api = window.KardLeafMindMap;
+  if (!editingKey) {
+    traceDrag('rename-finish skipped commit=' + !!commit + ' notify=' + !!notifyFinished + ' editing=false');
+    if (notifyFinished && api && api.onInlineRenameFinished) api.onInlineRenameFinished();
+    return false;
+  }
   const node = findNodeByKey(editingKey);
   const input = nodesLayer.querySelector('input.nodeEditor');
   const title = input ? input.value.trim() : '';
+  const changed = !!(commit && node && title && title !== node.text);
+  traceDrag(
+    'rename-finish commit=' + !!commit +
+      ' notify=' + !!notifyFinished +
+      ' node=' + (node ? node.index : 'none') +
+      ' input=' + !!input +
+      ' inputLen=' + (input ? input.value.length : -1) +
+      ' titleLen=' + title.length +
+      ' titleEndsWithHash=' + title.endsWith('#') +
+      ' changed=' + changed +
+      ' api=' + !!api,
+  );
   editingKey = null;
   if (editViewport) {
     // ponytail: 900ms covers Android IME resize; use visualViewport settling if an OEM keyboard exceeds it.
@@ -1845,14 +2567,22 @@ function finishInlineRename(commit) {
   }
   updateActionBar();
   render();
-  const api = window.KardLeafMindMap;
-  if (commit && node && title && title !== node.text && api && api.onNodeRename) {
+  if (changed && api && api.onNodeRename) {
     api.onNodeRename(node.index, title);
   }
+  if (notifyFinished && api && api.onInlineRenameFinished) api.onInlineRenameFinished();
+  return true;
 }
 function beginInlineRename(node) {
   if (!node || editingKey === node.key) return;
   if (editingKey) finishInlineRename(true);
+  traceDrag(
+    'rename-begin node=' + node.index +
+      ' depth=' + node.depth +
+      ' textLen=' + node.text.length +
+      ' selectedBefore=' + (selectedKey ? (findNodeByKey(selectedKey) ? findNodeByKey(selectedKey).index : 'stale') : 'none') +
+      ' scale=' + scale.toExponential(3),
+  );
   animationVersion += 1;
   layoutMindMap();
   selectedKey = node.key;
@@ -1870,6 +2600,7 @@ function beginInlineRename(node) {
   });
 }
 window.KardLeafMindMapBeginRename = index => beginInlineRename(findNodeByIndex(index));
+window.KardLeafMindMapCommitInlineRename = () => finishInlineRename(true, true);
 function closestByClass(target, className) {
   while (target && target !== svg) {
     if (target.classList && target.classList.contains(className)) return target;
@@ -1877,35 +2608,81 @@ function closestByClass(target, className) {
   }
   return null;
 }
-function updateActionBar() {
+let lastActionBarLayoutTrace = '';
+function traceActionBarLayout(reason) {
+  const rect = actionBar.getBoundingClientRect();
+  const style = getComputedStyle(actionBar);
+  const buttons = Array.from(nodeActions.querySelectorAll('.nodeAction')).map(button => {
+    const buttonRect = button.getBoundingClientRect();
+    return Math.round(buttonRect.width) + 'x' + Math.round(buttonRect.height) + ':' + (button.disabled ? 'disabled' : 'enabled');
+  }).join(',');
+  const state = 'actionbar-layout viewport=' + Math.round(window.innerWidth) + 'x' + Math.round(window.innerHeight) +
+    ' bar=' + Math.round(rect.width) + 'x' + Math.round(rect.height) +
+    ' barRect=' + Math.round(rect.left) + ',' + Math.round(rect.top) + ',' + Math.round(rect.right) + ',' + Math.round(rect.bottom) +
+    ' cssBottom=' + style.bottom +
+    ' barClient=' + actionBar.clientWidth + 'x' + actionBar.clientHeight +
+    ' barScroll=' + actionBar.scrollWidth + 'x' + actionBar.scrollHeight +
+    ' nodeClient=' + nodeActions.clientWidth + 'x' + nodeActions.clientHeight +
+    ' nodeScroll=' + nodeActions.scrollWidth + 'x' + nodeActions.scrollHeight +
+    ' buttons=' + buttons;
+  if (state !== lastActionBarLayoutTrace) {
+    lastActionBarLayoutTrace = state;
+    traceDrag(state + ' reason=' + reason);
+  }
+}
+function updateActionBar(reason) {
   const node = findNodeByKey(selectedKey);
-  if (!node || editingKey) {
-    actionBar.style.display = 'none';
-    actionBar.innerHTML = '';
-    return;
-  }
-  let html = '<button data-action="addChild">＋子节点</button>';
-  html += '<button data-action="rename">重命名</button>';
-  if (!node.root) {
-    html += '<button data-action="addSibling">＋同级</button>';
-    html += '<button data-action="moveUp">上移</button>';
-    html += '<button data-action="moveDown">下移</button>';
-    html += '<button data-action="jump">原文</button>';
-    html += '<button data-action="delete" class="danger">删除</button>';
-  }
-  actionBar.innerHTML = html;
+  // Legacy UI contract: keep addSibling root-enabled; runNodeAction below intentionally cross-maps the callbacks.
+  nodeActions.querySelectorAll('.nodeAction').forEach(button => {
+    const action = button.dataset.action;
+    const enabled = !!node && (action === 'addSibling' || !node.root);
+    button.disabled = !enabled;
+    button.setAttribute('aria-disabled', String(!enabled));
+  });
   actionBar.style.display = 'flex';
+  traceActionBarLayout(reason || 'state');
 }
 function selectNode(node) {
+  const previousNode = findNodeByKey(selectedKey);
   selectedKey = node ? node.key : null;
+  traceDrag(
+    'selection-change from=' + (previousNode ? previousNode.index : 'none') +
+      ' to=' + (node ? node.index : 'none') +
+      ' fromTextLen=' + (previousNode ? previousNode.text.length : 'none') +
+      ' toTextLen=' + (node ? node.text.length : 'none'),
+  );
   updateActionBar();
   render();
 }
+window.KardLeafMindMapSelectNode = index => {
+  const node = findNodeByIndex(Number(index));
+  if (!node) return;
+  let parent = node.parent;
+  let changed = false;
+  while (parent) {
+    if (collapsedKeys.delete(parent.key)) changed = true;
+    parent = parent.parent;
+  }
+  if (changed) {
+    updateCollapseAllButton();
+    layoutMindMap();
+  }
+  selectNode(node);
+  resetView('outline-select');
+};
 function toggleCollapse(node) {
   if (!node || !node.children.length) return;
   const previousPositions = capturePositions();
+  const wasCollapsed = collapsedKeys.has(node.key);
   if (collapsedKeys.has(node.key)) collapsedKeys.delete(node.key);
   else collapsedKeys.add(node.key);
+  traceDrag(
+    'collapse-toggle node=' + node.index +
+      ' depth=' + node.depth +
+      ' before=' + wasCollapsed +
+      ' after=' + collapsedKeys.has(node.key) +
+      ' collapsedCount=' + collapsedKeys.size,
+  );
   updateCollapseAllButton();
   animateLayoutFrom(previousPositions, 180);
 }
@@ -1913,39 +2690,57 @@ function runNodeAction(action) {
   const node = findNodeByKey(selectedKey);
   const api = window.KardLeafMindMap;
   if (!node || !api) return;
+  const input = nodesLayer.querySelector('input.nodeEditor');
+  traceDrag(
+    'node-action action=' + action +
+      ' node=' + node.index +
+      ' root=' + node.root +
+      ' editingBefore=' + !!editingKey +
+      ' inputLen=' + (input ? input.value.length : -1) +
+      ' selected=' + node.index +
+      ' ime=' + effectiveImeInset().toFixed(1),
+  );
+  // Keep the DOM input alive. Android applies this rename and node insertion as one
+  // editor transaction; a separate rename callback redraws the tree and hides the IME.
+  const pendingRenameNode = editingKey ? findNodeByKey(editingKey) : null;
+  const pendingRenameIndex = pendingRenameNode && input ? pendingRenameNode.index : -1;
+  const pendingRenameTitle = pendingRenameNode && input ? input.value.trim() : '';
+  // Preserve the old one-refresh path: clear the state without rendering the DOM here.
+  if (editingKey) editingKey = null;
   suppressTapUntil = Date.now() + 320;
-  if (action === 'addChild') {
+  // IMPORTANT: legacy UI contract: addSibling -> onNodeAddChild, addChild -> onNodeAddSibling.
+  // Do not swap them based on their names; verify the visible button behavior end to end first.
+  if (action === 'addSibling') {
     if (collapsedKeys.has(node.key)) {
       collapsedKeys.delete(node.key);
       updateCollapseAllButton();
     }
-    actionBar.style.display = 'none';
-    if (api.onNodeAddChild) api.onNodeAddChild(node.index, '输入文本');
+    if (api.onNodeAddChild) api.onNodeAddChild(node.index, '输入文本', pendingRenameIndex, pendingRenameTitle);
+    traceDrag('node-action callback=onNodeAddChild node=' + node.index + ' requestedAction=' + action);
     window.setTimeout(updateActionBar, 1200);
-  } else if (action === 'rename') {
-    beginInlineRename(node);
   } else if (node.root) {
+    traceDrag('node-action rejected action=' + action + ' node=' + node.index + ' reason=root');
     return;
-  } else if (action === 'addSibling') {
-    actionBar.style.display = 'none';
-    if (api.onNodeAddSibling) api.onNodeAddSibling(node.index, '输入文本');
+  } else if (action === 'addChild') {
+    if (api.onNodeAddSibling) api.onNodeAddSibling(node.index, '输入文本', pendingRenameIndex, pendingRenameTitle);
+    traceDrag('node-action callback=onNodeAddSibling node=' + node.index + ' requestedAction=' + action);
     window.setTimeout(updateActionBar, 1200);
-  } else if (action === 'moveUp') {
-    if (api.onNodeMove) api.onNodeMove(node.index, true);
-  } else if (action === 'moveDown') {
-    if (api.onNodeMove) api.onNodeMove(node.index, false);
-  } else if (action === 'jump') {
-    if (api.onNodeClick) api.onNodeClick(node.index);
   } else if (action === 'delete') {
     if (api.onNodeDelete) api.onNodeDelete(node.index);
+    traceDrag('node-action callback=onNodeDelete node=' + node.index + ' requestedAction=' + action);
   }
 }
+actionBar.addEventListener('pointerdown', e => {
+  let target = e.target;
+  while (target && target !== actionBar && target.tagName !== 'BUTTON') target = target.parentNode;
+  if (target && target !== actionBar) e.preventDefault();
+});
 actionBar.addEventListener('click', e => {
   let target = e.target;
   while (target && target !== actionBar && target.tagName !== 'BUTTON') target = target.parentNode;
   if (!target || target === actionBar) return;
   const action = target.dataset ? target.dataset.action : null;
-  if (action) runNodeAction(action);
+  if (action && target.classList.contains('nodeAction')) runNodeAction(action);
 });
 document.addEventListener('contextmenu', e => {
   e.preventDefault();
@@ -1955,6 +2750,82 @@ function clearDragLongPress(item) {
   if (!item || !item.longPressTimer) return;
   clearTimeout(item.longPressTimer);
   item.longPressTimer = 0;
+}
+function restoreDraggedSubtree(item) {
+  if (!item || !Array.isArray(item.subtreeStarts)) return;
+  item.subtreeStarts.forEach(start => {
+    start.node.x = start.x;
+    start.node.y = start.y;
+  });
+}
+function clearCommittedDrag(reason, restore) {
+  const item = committedDrag;
+  if (!item) return;
+  clearTimeout(item.commitHoldTimer);
+  if (restore) restoreDraggedSubtree(item);
+  committedDrag = null;
+  traceDrag(
+    'commit-hold end reason=' + reason + ' moving=' + (item.node ? item.node.index : 'none') +
+      ' restored=' + !!restore + ' elapsedMs=' +
+      Math.round(performance.now() - (item.commitHoldStartedAt || performance.now())),
+  );
+}
+function holdCommittedDragAtIntent(item, intent) {
+  if (!item || !item.node || !intent || !Array.isArray(item.subtreeStarts)) return;
+  const deltaX = intent.x - item.node.x;
+  const deltaY = intent.y - item.node.y;
+  item.subtreeStarts.forEach(start => {
+    start.node.x += deltaX;
+    start.node.y += deltaY;
+  });
+  item.commitHoldStartedAt = performance.now();
+  committedDrag = item;
+  item.commitHoldTimer = setTimeout(() => {
+    if (committedDrag !== item) return;
+    clearCommittedDrag('tree-refresh-timeout', true);
+    render();
+  }, commitHoldTimeoutMs);
+  traceDrag(
+    'commit-hold start moving=' + item.node.index + ' targetParent=' + intent.parent.index +
+      ' targetChildIndex=' + intent.childIndex + ' holdX=' + Math.round(item.node.x) +
+      ' holdY=' + Math.round(item.node.y) + ' subtreeNodes=' + item.subtreeStarts.length,
+  );
+}
+function activateNodeDrag(item) {
+  if (!item || item.mode !== 'press' || !item.node || item.node.root) return false;
+  clearDragLongPress(item);
+  item.mode = 'node';
+  const world = screenToWorld(item.lastX, item.lastY);
+  item.worldStartX = world.x;
+  item.worldStartY = world.y;
+  item.nodeStartX = item.node.x;
+  item.nodeStartY = item.node.y;
+  item.subtreeStarts = nodes
+    .filter(node => node === item.node || isDescendantOf(node, item.node))
+    .map(node => ({ node, x: node.x, y: node.y }));
+  animationVersion += 1;
+  const api = window.KardLeafMindMap;
+  if (api && api.onLongPress) api.onLongPress();
+  const parent = item.node.parent;
+  const bounds = visibleSubtreeBounds(item.node);
+  const oldChildIndex = parent ? parent.children.indexOf(item.node) : -1;
+  lastDropResolution = 'priority=current';
+  lastSiblingCandidates = 'none';
+  lastChildHits = 'none';
+  traceDrag(
+    'drag-start trigger=long-press gesture=' + dragTraceSequence + ' moving=' + item.node.index +
+      ' depth=' + item.node.depth + ' oldParent=' + (parent ? parent.index : 'none') +
+      ' oldChildIndex=' + oldChildIndex + ' parentChildCount=' + (parent ? parent.children.length : 0) +
+      ' subtreeNodes=' + item.subtreeStarts.length +
+      ' nodeX=' + Math.round(item.node.x) + ' nodeY=' + Math.round(item.node.y) +
+      ' nodeWidth=' + Math.round(nodeVisualWidth(item.node)) +
+      ' nodeHeight=' + Math.round(nodeVisualHeight(item.node)) +
+      ' subtreeTop=' + Math.round(bounds.top) + ' subtreeBottom=' + Math.round(bounds.bottom) +
+      ' direction=' + item.node.direction + ' scale=' + scale.toFixed(3),
+  );
+  dropIntent = currentDropIntent(item.node);
+  render();
+  return true;
 }
 function beginPinchIfNeeded() {
   if (activePointers.size < 2) return;
@@ -1967,14 +2838,11 @@ function beginPinchIfNeeded() {
   };
   clearDragLongPress(drag);
   if (drag && drag.mode === 'node' && drag.node) {
-    if (drag.moved && Number.isFinite(drag.nodeStartX) && Number.isFinite(drag.nodeStartY)) {
-      drag.node.x = drag.nodeStartX;
-      drag.node.y = drag.nodeStartY;
-    }
+    restoreDraggedSubtree(drag);
     traceDrag('pinch-cancel gesture=' + dragTraceSequence + ' node=' + drag.node.index + ' moved=' + drag.moved + ' nodeRestored=' + !!drag.moved);
   }
   drag = null;
-  dropTarget = null;
+  dropIntent = null;
   suppressTapUntil = Date.now() + 260;
   showZoomToast();
   render();
@@ -1986,7 +2854,15 @@ function updatePinch() {
   const beforeScale = scale;
   const beforeTx = tx;
   const beforeTy = ty;
-  scale = Math.min(2.35, Math.max(Number.MIN_VALUE, pinch.startScale * distance(a, b) / pinch.startDistance));
+  const rawScale = pinch.startScale * distance(a, b) / pinch.startDistance;
+  scale = Math.min(2.35, Math.max(Number.MIN_VALUE, rawScale));
+  if (!Number.isFinite(scale) || scale <= .1) {
+    traceDrag(
+      'pinch-scale-risk raw=' + (Number.isFinite(rawScale) ? rawScale.toExponential(3) : String(rawScale)) +
+        ' applied=' + (Number.isFinite(scale) ? scale.toExponential(3) : String(scale)) +
+        ' min=' + Number.MIN_VALUE + ' max=2.35',
+    );
+  }
   tx = center.x - pinch.worldCenter.x * scale;
   ty = center.y - pinch.worldCenter.y * scale;
   setTransform();
@@ -1995,9 +2871,24 @@ function updatePinch() {
 }
 svg.addEventListener('pointerdown', (e) => {
   if (closestByClass(e.target, 'nodeEditor')) return;
+  if (committedDrag) {
+    e.preventDefault();
+    traceDrag(
+      'down ignored reason=commit-held pointer=' + e.pointerId +
+        ' moving=' + (committedDrag.node ? committedDrag.node.index : 'none'),
+    );
+    return;
+  }
+  stopPanFling();
+  const tappedNodeGroup = closestByClass(e.target, 'node');
+  const tappedNode = tappedNodeGroup ? findNodeByKey(tappedNodeGroup.dataset.key) : null;
   if (editingKey) {
     finishInlineRename(true);
-    return;
+    if (tappedNode) {
+      selectNode(tappedNode);
+      e.preventDefault();
+      return;
+    }
   }
   editViewport = null;
   e.preventDefault();
@@ -2013,7 +2904,7 @@ svg.addEventListener('pointerdown', (e) => {
     beginPinchIfNeeded();
     return;
   }
-  dropTarget = null;
+  dropIntent = null;
   const toggleEl = closestByClass(e.target, 'toggle');
   if (toggleEl) {
     traceDrag('down pointer=' + e.pointerId + ' active=1 mode=collapse-toggle');
@@ -2029,7 +2920,7 @@ svg.addEventListener('pointerdown', (e) => {
     'down pointer=' + e.pointerId + ' active=1 node=' + (node ? node.index : 'none') +
       ' root=' + (node ? node.root : 'false') + ' x=' + Math.round(e.clientX) +
       ' y=' + Math.round(e.clientY) + ' scale=' + Math.round(scale * 100) +
-      ' dirty=' + localTreeDirty + ' nodes=' + nodes.length,
+      ' nodes=' + nodes.length,
   );
   drag = {
     id: e.pointerId,
@@ -2038,6 +2929,9 @@ svg.addEventListener('pointerdown', (e) => {
     startedAt: Date.now(),
     lastX: e.clientX,
     lastY: e.clientY,
+    lastMoveAt: performance.now(),
+    velocityX: 0,
+    velocityY: 0,
     moved: false,
     mode: node && !node.root ? 'press' : 'pan',
     node,
@@ -2048,23 +2942,14 @@ svg.addEventListener('pointerdown', (e) => {
     startTx: tx,
     startTy: ty,
     longPressTimer: 0,
+    subtreeStarts: null,
+    commitSent: false,
   };
   if (drag.mode === 'press') {
     const pressed = drag;
     pressed.longPressTimer = setTimeout(() => {
       if (drag !== pressed || pressed.moved || activePointers.size !== 1) return;
-      pressed.longPressTimer = 0;
-      pressed.mode = 'node';
-      const world = screenToWorld(pressed.lastX, pressed.lastY);
-      pressed.worldStartX = world.x;
-      pressed.worldStartY = world.y;
-      pressed.nodeStartX = pressed.node.x;
-      pressed.nodeStartY = pressed.node.y;
-      animationVersion += 1;
-      const api = window.KardLeafMindMap;
-      if (api && api.onLongPress) api.onLongPress();
-      traceDrag('long-press gesture=' + dragTraceSequence + ' node=' + pressed.node.index);
-      render();
+      activateNodeDrag(pressed);
     }, longPressDelayMs);
   }
   render();
@@ -2080,6 +2965,9 @@ svg.addEventListener('pointermove', (e) => {
   if (!drag || drag.id !== e.pointerId) return;
   const dx = e.clientX - drag.startX;
   const dy = e.clientY - drag.startY;
+  if (drag.mode === 'press' && activePointers.size === 1 && Date.now() - drag.startedAt >= longPressDelayMs) {
+    activateNodeDrag(drag);
+  }
   if (Math.hypot(dx, dy) > longPressMoveSlopPx) {
     if (!drag.moved) {
       traceDrag(
@@ -2096,6 +2984,7 @@ svg.addEventListener('pointermove', (e) => {
   if (drag.mode === 'press') {
     drag.lastX = e.clientX;
     drag.lastY = e.clientY;
+    drag.lastMoveAt = performance.now();
     return;
   }
   if (drag.mode === 'node' && drag.node && !drag.node.root) {
@@ -2106,35 +2995,55 @@ svg.addEventListener('pointermove', (e) => {
       return;
     }
     const world = screenToWorld(e.clientX, e.clientY);
-    drag.node.x = drag.nodeStartX + (world.x - drag.worldStartX);
-    drag.node.y = drag.nodeStartY + (world.y - drag.worldStartY);
-    const previousTarget = dropTarget;
-    const resolvedTarget = resolveDropTarget(drag.node, world, previousTarget);
-    if (resolvedTarget !== previousTarget) {
-      dropTarget = resolvedTarget;
-      const geometry = dropTarget
-        ? dropGeometry(drag.node, dropTarget, world, 0)
-        : (previousTarget ? dropGeometry(drag.node, previousTarget, world, dropExitSlopPx) : null);
+    const worldDx = world.x - drag.worldStartX;
+    const worldDy = world.y - drag.worldStartY;
+    drag.subtreeStarts.forEach(start => {
+      start.node.x = start.x + worldDx;
+      start.node.y = start.y + worldDy;
+    });
+    const previousIntent = dropIntent;
+    const resolvedIntent = resolveDropIntent(drag.node, true);
+    if (dropIntentKey(resolvedIntent) !== dropIntentKey(previousIntent)) {
+      dropIntent = resolvedIntent;
+      const oldParent = drag.node.parent;
+      const oldIndex = oldParent ? oldParent.children.indexOf(drag.node) : -1;
       traceDrag(
-        'target moving=' + drag.node.index + ' target=' + (dropTarget ? dropTarget.index : 'none') +
-        ' centerX=' + Math.round(nodeCenter(drag.node).x) + ' centerY=' + Math.round(nodeCenter(drag.node).y) +
+        'intent-change moving=' + drag.node.index +
+          ' source=' + (dropIntent ? dropIntent.source : 'none') +
+          ' oldParent=' + (oldParent ? oldParent.index : 'none') +
+          ' oldIndex=' + oldIndex +
+          ' targetParent=' + (dropIntent ? dropIntent.parent.index : 'none') +
+          ' targetChildIndex=' + (dropIntent ? dropIntent.childIndex : -1) +
+          ' previewX=' + (dropIntent ? Math.round(dropIntent.x) : 'none') +
+          ' previewY=' + (dropIntent ? Math.round(dropIntent.y) : 'none') +
+          ' centerX=' + Math.round(nodeCenter(drag.node).x) + ' centerY=' + Math.round(nodeCenter(drag.node).y) +
+          ' deltaX=' + Math.round(drag.node.x - drag.nodeStartX) +
+          ' deltaY=' + Math.round(drag.node.y - drag.nodeStartY) +
           ' pointerScreenX=' + Math.round(e.clientX) + ' pointerScreenY=' + Math.round(e.clientY) +
           ' pointerWorldX=' + Math.round(world.x) + ' pointerWorldY=' + Math.round(world.y) +
-          ' scale=' + scale.toFixed(3) +
-          ' pointerBodyHit=' + (geometry ? geometry.pointerBodyHit : false) +
-          ' centerBodyHit=' + (geometry ? geometry.centerBodyHit : false) +
-          ' overlapArea=' + Math.round(geometry ? geometry.bodyOverlapArea : 0) +
-          ' pointerHit=' + (geometry ? geometry.pointerHit : false) +
-          ' centerHit=' + (geometry ? geometry.centerHit : false) +
-          ' overlap=' + (geometry ? geometry.overlap : false) +
-          ' dirty=' + localTreeDirty,
+          ' scale=' + scale.toFixed(3) + ' resolver={' + lastDropResolution + '}',
       );
     }
     scheduleRender();
   } else if (drag.moved) {
-    tx = drag.startTx + dx;
+    const now = performance.now();
+    const elapsed = Math.max(1, now - drag.lastMoveAt);
+    const stepX = e.clientX - drag.lastX;
+    const stepY = e.clientY - drag.lastY;
+    drag.velocityX = clamp(
+      drag.velocityX * .65 + (stepX / elapsed * panHorizontalSensitivity) * .35,
+      -panFlingMaxVelocity,
+      panFlingMaxVelocity,
+    );
+    drag.velocityY = clamp(
+      drag.velocityY * .65 + (stepY / elapsed * panVerticalSensitivity) * .35,
+      -panFlingMaxVelocity,
+      panFlingMaxVelocity,
+    );
+    tx = drag.startTx + dx * panHorizontalSensitivity;
     ty = drag.startTy + dy * panVerticalSensitivity;
-    setTransform();
+    drag.lastMoveAt = now;
+    scheduleTransform();
   }
   drag.lastX = e.clientX;
   drag.lastY = e.clientY;
@@ -2144,10 +3053,7 @@ function finishPointer(e) {
   clearDragLongPress(drag);
   if (e.type === 'pointercancel') {
     const cancelled = drag;
-    if (cancelled && cancelled.mode === 'node' && cancelled.node && !cancelled.node.root) {
-      cancelled.node.x = cancelled.nodeStartX;
-      cancelled.node.y = cancelled.nodeStartY;
-    }
+    restoreDraggedSubtree(cancelled);
     traceDrag(
       'finish type=pointercancel pointer=' + e.pointerId + ' result=cancelled moving=' +
         (cancelled && cancelled.node ? cancelled.node.index : 'none') +
@@ -2156,7 +3062,7 @@ function finishPointer(e) {
     activePointers.clear();
     pinch = null;
     drag = null;
-    dropTarget = null;
+    dropIntent = null;
     suppressTapUntil = Date.now() + 260;
     render();
     return;
@@ -2166,7 +3072,7 @@ function finishPointer(e) {
     activePointers.clear();
     pinch = null;
     drag = null;
-    dropTarget = null;
+    dropIntent = null;
     suppressTapUntil = Date.now() + 260;
     showZoomToast();
     render();
@@ -2178,46 +3084,79 @@ function finishPointer(e) {
   }
   const item = drag;
   const finalWorld = screenToWorld(e.clientX, e.clientY);
-  const cachedTarget = dropTarget;
-  const target = item.mode === 'node' && item.moved && item.node && !item.node.root
-    ? resolveDropTarget(item.node, finalWorld, cachedTarget)
+  const intent = item.mode === 'node' && item.moved && item.node && !item.node.root
+    ? dropIntent
     : null;
-  const targetSource = target
-    ? (target === cachedTarget ? 'active' : 'release')
-    : 'none';
+  const releaseOldParent = item.node ? item.node.parent : null;
+  const releaseOldIndex = releaseOldParent && item.node ? releaseOldParent.children.indexOf(item.node) : -1;
+  const releaseRejection = !item.node
+    ? 'moving-missing'
+    : pendingTreeData
+      ? 'pending-tree-refresh'
+      : moveIntentRejectionReason(item.node, intent);
+  const releaseAllowed = !releaseRejection;
   traceDrag(
     'finish-evaluate type=' + e.type + ' gesture=' + dragTraceSequence + ' moving=' +
       (item.node ? item.node.index : 'none') + ' finalWorldX=' + Math.round(finalWorld.x) +
-      ' finalWorldY=' + Math.round(finalWorld.y) + ' cachedTarget=' + (cachedTarget ? cachedTarget.index : 'none') +
-      ' selectedTarget=' + (target ? target.index : 'none') + ' targetSource=' + targetSource +
-      ' activePointers=' + activePointers.size + ' dirty=' + localTreeDirty,
+      ' finalWorldY=' + Math.round(finalWorld.y) +
+      ' source=' + (intent ? intent.source : 'none') +
+      ' oldParent=' + (releaseOldParent ? releaseOldParent.index : 'none') +
+      ' oldIndex=' + releaseOldIndex +
+      ' targetParent=' + (intent ? intent.parent.index : 'none') +
+      ' targetChildIndex=' + (intent ? intent.childIndex : -1) +
+      ' previewX=' + (intent ? Math.round(intent.x) : 'none') +
+      ' previewY=' + (intent ? Math.round(intent.y) : 'none') +
+      ' parentChanged=' + !!(intent && releaseOldParent !== intent.parent) +
+      ' pendingTreeRefresh=' + !!pendingTreeData +
+      ' releaseAllowed=' + releaseAllowed +
+      ' rejection=' + (releaseRejection || 'none') +
+      ' intentSource=preview activePointers=' + activePointers.size +
+      ' resolver={' + lastDropResolution + '}',
   );
+  if (releaseAllowed) {
+    holdCommittedDragAtIntent(item, intent);
+  } else {
+    restoreDraggedSubtree(item);
+  }
   drag = null;
-  dropTarget = null;
+  dropIntent = null;
   if (item.mode === 'node' && item.moved && item.node && !item.node.root) {
-    if (target && reparentNodeLocally(item.node, target)) {
+    if (releaseAllowed && !item.commitSent) {
+      item.commitSent = true;
       const movingIndex = item.node.index;
-      const parentIndex = target.index;
+      const targetParentIndex = intent.parent.index;
+      const targetChildIndex = intent.childIndex;
+      collapsedKeys.delete(intent.parent.key);
+      updateCollapseAllButton();
+      render();
       traceDrag(
-        'finish type=' + e.type + ' gesture=' + dragTraceSequence + ' moving=' + movingIndex +
-          ' target=' + parentIndex + ' targetSource=' + targetSource + ' result=reparent-commit',
+        'move-request gesture=' + dragTraceSequence + ' moving=' + movingIndex +
+          ' targetParent=' + targetParentIndex + ' targetChildIndex=' + targetChildIndex +
+          ' source=' + intent.source,
       );
-      if (window.KardLeafMindMap && window.KardLeafMindMap.onNodeReparent) {
-        window.KardLeafMindMap.onNodeReparent(movingIndex, parentIndex, dragTraceSequence);
+      if (window.KardLeafMindMap && window.KardLeafMindMap.onNodeMove) {
+        window.KardLeafMindMap.onNodeMove(
+          movingIndex,
+          targetParentIndex,
+          targetChildIndex,
+          dragTraceSequence,
+        );
       }
       suppressTapUntil = Date.now() + 320;
       return;
     }
     traceDrag(
-      'finish type=' + e.type + ' gesture=' + dragTraceSequence + ' moving=' + item.node.index + ' target=' +
-        (target ? target.index : 'none') + ' targetSource=' + targetSource + ' result=' +
-        (target ? 'reparent-rejected' : 'no-drop-target') +
-        (target ? '' : ' rejected=' + (rejectedTargetDetails(item.node, finalWorld) || 'none')),
+      'finish type=' + e.type + ' gesture=' + dragTraceSequence + ' moving=' + item.node.index +
+        ' source=' + (intent ? intent.source : 'none') +
+        ' releaseAllowed=' + releaseAllowed + ' rejection=' + (releaseRejection || 'none') +
+        ' result=' + (intent ? 'move-rejected' : 'no-drop-intent') +
+        ' resolver={' + lastDropResolution + '}',
     );
-    item.node.x = item.nodeStartX;
-    item.node.y = item.nodeStartY;
     render();
     return;
+  }
+  if (item.mode === 'pan' && item.moved) {
+    startPanFling(item.velocityX, item.velocityY);
   }
   if (!item.moved && item.mode !== 'node') {
     if (item.node && !item.node.root) {
@@ -2255,9 +3194,11 @@ function finishPointer(e) {
 svg.addEventListener('pointerup', (e) => { finishPointer(e); flushPendingTreeData(); });
 svg.addEventListener('pointercancel', (e) => { finishPointer(e); flushPendingTreeData(); });
 undoBtn.onclick = () => {
+  if (editingKey) finishInlineRename(true);
   if (window.KardLeafMindMap && window.KardLeafMindMap.onUndo) window.KardLeafMindMap.onUndo();
 };
 redoBtn.onclick = () => {
+  if (editingKey) finishInlineRename(true);
   if (window.KardLeafMindMap && window.KardLeafMindMap.onRedo) window.KardLeafMindMap.onRedo();
 };
 document.getElementById('exportImage').onclick = () => {
@@ -2282,6 +3223,8 @@ layoutToggle.onclick = toggleLayoutMode;
 updateThemeMenu();
 updateLayoutButton();
 updateCollapseAllButton();
+traceActionBarLayout('script-ready');
+traceDrag('scale-config min=' + Number.MIN_VALUE + ' max=2.35');
 </script>
 </body>
 </html>

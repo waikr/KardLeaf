@@ -11,9 +11,11 @@ import com.kangle.kardleaf.data.repository.MetadataManager
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.repository.RoomNoteRepository
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.KardLeafLogTags
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -42,6 +44,31 @@ data class SavedTaskBatch(
     val children: List<TaskEntity>,
 )
 
+enum class TaskSaveFailureReason {
+    MissingManagedFile,
+    DuplicateTaskId,
+    EditConflict,
+    InvalidParent,
+    ParentCycle,
+    InvalidSubtask,
+    FileWrite,
+    PermissionDenied,
+    IoError,
+    CacheUpdate,
+    Unknown,
+}
+
+data class TaskSaveFailure(
+    val reason: TaskSaveFailureReason,
+    val message: String,
+)
+
+sealed interface TaskSaveResult {
+    data class Success(val batch: SavedTaskBatch) : TaskSaveResult
+
+    data class Failure(val failure: TaskSaveFailure) : TaskSaveResult
+}
+
 class TaskMarkdownStore(
     private val context: Context,
     private val noteRepository: RoomNoteRepository,
@@ -54,6 +81,23 @@ class TaskMarkdownStore(
         val duplicateTaskIdConflict: DuplicateTaskIdConflict? = null,
         val missingManagedFile: MissingTaskMarkdownFile? = null,
     )
+
+    private fun SynchronizeResult.toTaskSaveFailure(): TaskSaveFailure =
+        when {
+            duplicateTaskIdConflict != null ->
+                TaskSaveFailure(
+                    TaskSaveFailureReason.DuplicateTaskId,
+                    "任务清单中存在重复 ID（${duplicateTaskIdConflict.id}），请先解决冲突",
+                )
+            missingManagedFile != null ->
+                TaskSaveFailure(
+                    TaskSaveFailureReason.MissingManagedFile,
+                    "任务清单文件不存在，请先恢复或创建：${missingManagedFile.path}",
+                )
+            current != null && !current.content.contains(MANAGED_MARKER) ->
+                TaskSaveFailure(TaskSaveFailureReason.FileWrite, "任务清单不是 KardLeaf 管理文件，未覆盖原文件")
+            else -> TaskSaveFailure(TaskSaveFailureReason.Unknown, "任务清单同步失败，请检查文件后重试")
+        }
 
     suspend fun synchronize(): TaskMarkdownSyncResult =
         writeMutex.withLock {
@@ -258,26 +302,92 @@ class TaskMarkdownStore(
         original: TaskEntity?,
         candidate: TaskEntity,
         parentTaskId: Long? = null,
-        parentTaskSelectionChanged: Boolean = false,
-    ): TaskEntity? = saveTaskBatch(original, candidate, parentTaskId, parentTaskSelectionChanged)?.task
+    ): TaskEntity? = saveTaskBatch(original, candidate, parentTaskId)?.task
 
     suspend fun saveTaskBatch(
         original: TaskEntity?,
         candidate: TaskEntity,
         parentTaskId: Long? = null,
-        parentTaskSelectionChanged: Boolean = false,
         childTaskTexts: List<String> = emptyList(),
+        updatedSubtasks: List<TaskEntity> = emptyList(),
     ): SavedTaskBatch? =
+        (saveTaskBatchResult(
+            original = original,
+            candidate = candidate,
+            parentTaskId = parentTaskId,
+            childTaskTexts = childTaskTexts,
+            updatedSubtasks = updatedSubtasks,
+        ) as? TaskSaveResult.Success)?.batch
+
+    suspend fun saveTaskBatchResult(
+        original: TaskEntity?,
+        candidate: TaskEntity,
+        parentTaskId: Long? = null,
+        childTaskTexts: List<String> = emptyList(),
+        updatedSubtasks: List<TaskEntity> = emptyList(),
+    ): TaskSaveResult =
         writeMutex.withLock {
+            val operationId = nextOperationId()
+            val startedAt = SystemClock.elapsedRealtime()
+            KardLeafLog.d(
+                KardLeafLogTags.TASK_SAVE,
+                "batch start op=$operationId taskId=${original?.id ?: candidate.id} originalId=${original?.id ?: 0} " +
+                    "titleLen=${candidate.taskText.length} notesLen=${candidate.notes.length} " +
+                    "childInputs=${childTaskTexts.size} nonBlankChildren=${childTaskTexts.count(String::isNotBlank)} " +
+                    "updatedSubtasks=${updatedSubtasks.size}",
+            )
             val sync = synchronizeLocked()
-            if (!sync.success) return@withLock null
+            if (!sync.success) {
+                KardLeafLog.w(
+                    KardLeafLogTags.TASK_SAVE,
+                    "batch stop op=$operationId stage=synchronize success=false elapsed=${SystemClock.elapsedRealtime() - startedAt}ms",
+                )
+                return@withLock TaskSaveResult.Failure(sync.toTaskSaveFailure())
+            }
             val currentTasks = taskDao.getAllTasksSnapshot()
             val currentOriginal = original?.let { value -> currentTasks.firstOrNull { it.id == value.id } }
             if (original != null &&
                 (currentOriginal == null || currentOriginal.copy(manualOrder = original.manualOrder) != original)
             ) {
                 KardLeafLog.w(LOG_TAG, "reject stale task edit taskId=${original.id}")
-                return@withLock null
+                KardLeafLog.w(KardLeafLogTags.TASK_SAVE, "batch stop op=$operationId stage=stale-task taskId=${original.id}")
+                return@withLock TaskSaveResult.Failure(
+                    TaskSaveFailure(TaskSaveFailureReason.EditConflict, "任务已被外部修改，请重新打开后再保存"),
+                )
+            }
+            val descendantIds = original?.let { TaskHierarchy.descendants(currentTasks, setOf(it.id)) }.orEmpty()
+            if (updatedSubtasks.any { it.id !in descendantIds } ||
+                updatedSubtasks.map { it.id }.distinct().size != updatedSubtasks.size
+            ) {
+                KardLeafLog.w(LOG_TAG, "reject invalid subtask edit taskId=${original?.id ?: 0}")
+                KardLeafLog.w(
+                    KardLeafLogTags.TASK_SAVE,
+                    "batch stop op=$operationId stage=invalid-subtasks taskId=${original?.id ?: 0}",
+                )
+                return@withLock TaskSaveResult.Failure(
+                    TaskSaveFailure(TaskSaveFailureReason.InvalidSubtask, "子任务已变化，请重新打开后再保存"),
+                )
+            }
+            val editedSubtasks = updatedSubtasks.mapNotNull { candidateSubtask ->
+                val currentSubtask = currentTasks.firstOrNull { it.id == candidateSubtask.id }
+                    ?: return@mapNotNull null
+                candidateSubtask.taskText.trim().takeIf(String::isNotBlank)?.let { text ->
+                    currentSubtask.copy(
+                        taskText = text,
+                        notes = candidateSubtask.notes.trim(),
+                        updatedAt = candidateSubtask.updatedAt,
+                    )
+                }
+            }
+            if (editedSubtasks.size != updatedSubtasks.size) {
+                KardLeafLog.w(LOG_TAG, "reject missing subtask edit taskId=${original?.id ?: 0}")
+                KardLeafLog.w(
+                    KardLeafLogTags.TASK_SAVE,
+                    "batch stop op=$operationId stage=missing-subtask taskId=${original?.id ?: 0}",
+                )
+                return@withLock TaskSaveResult.Failure(
+                    TaskSaveFailure(TaskSaveFailureReason.InvalidSubtask, "子任务已不存在，请重新打开后再保存"),
+                )
             }
             val groups = taskDao.getAllGroupsSnapshot()
             val nextId = taskDao.getMaxTaskId() + 1L
@@ -286,7 +396,7 @@ class TaskMarkdownStore(
             val taskId = original?.id ?: nextId
             val requestedParentId =
                 when {
-                    parentTaskSelectionChanged || original == null -> parentTaskId
+                    original == null -> parentTaskId
                     original.groupId != candidate.groupId -> null
                     else -> original.parentTaskId
                 }
@@ -307,13 +417,19 @@ class TaskMarkdownStore(
                     LOG_TAG,
                     "reject invalid task parent taskId=${task.id} parentId=$requestedParentId groupId=${task.groupId}",
                 )
-                return@withLock null
+                KardLeafLog.w(KardLeafLogTags.TASK_SAVE, "batch stop op=$operationId stage=invalid-parent taskId=${task.id}")
+                return@withLock TaskSaveResult.Failure(
+                    TaskSaveFailure(TaskSaveFailureReason.InvalidParent, "任务层级关系无效，请重新打开后再试"),
+                )
             }
             if (validParentId != null) {
                 val parentIds = currentTasks.associate { it.id to it.parentTaskId }
                 if (TaskHierarchy.createsCycle(parentIds, task.id, validParentId)) {
                     KardLeafLog.w(LOG_TAG, "reject task parent cycle taskId=${task.id} parentId=$validParentId")
-                    return@withLock null
+                    KardLeafLog.w(KardLeafLogTags.TASK_SAVE, "batch stop op=$operationId stage=parent-cycle taskId=${task.id}")
+                    return@withLock TaskSaveResult.Failure(
+                        TaskSaveFailure(TaskSaveFailureReason.ParentCycle, "任务层级关系会形成循环，请重新打开后再试"),
+                    )
                 }
             }
             val savedTask = task.copy(parentTaskId = validParentId)
@@ -338,11 +454,31 @@ class TaskMarkdownStore(
                 } else {
                     emptyList()
                 }
-            val changedTasks = listOf(savedTask) + movedDescendants + children
+            val changedTasks = listOf(savedTask) + editedSubtasks + movedDescendants + children
             val nextTasks = currentTasks.filterNot { current -> changedTasks.any { it.id == current.id } } + changedTasks
-            if (!persist(nextTasks, groups, sync.current)) return@withLock null
-            if (!updateCacheAfterMarkdown("save") { taskDao.upsertTasks(changedTasks) }) return@withLock null
-            SavedTaskBatch(savedTask, children)
+            KardLeafLog.d(
+                KardLeafLogTags.TASK_SAVE,
+                "batch markdown start op=$operationId taskId=${savedTask.id} changedTasks=${changedTasks.size} " +
+                    "children=${children.size}",
+            )
+            val persistFailure = persistWithFailure(nextTasks, groups, sync.current)
+            if (persistFailure != null) {
+                KardLeafLog.w(KardLeafLogTags.TASK_SAVE, "batch stop op=$operationId stage=markdown success=false taskId=${savedTask.id}")
+                return@withLock TaskSaveResult.Failure(persistFailure)
+            }
+            KardLeafLog.d(KardLeafLogTags.TASK_SAVE, "batch markdown success op=$operationId taskId=${savedTask.id}")
+            if (!updateCacheAfterMarkdown("save") { taskDao.upsertTasks(changedTasks) }) {
+                KardLeafLog.w(KardLeafLogTags.TASK_SAVE, "batch stop op=$operationId stage=room success=false taskId=${savedTask.id}")
+                return@withLock TaskSaveResult.Failure(
+                    TaskSaveFailure(TaskSaveFailureReason.CacheUpdate, "任务文件已写入，但任务缓存更新失败，请重新打开任务页"),
+                )
+            }
+            KardLeafLog.i(
+                KardLeafLogTags.TASK_SAVE,
+                "batch success op=$operationId taskId=${savedTask.id} children=${children.size} " +
+                    "elapsed=${SystemClock.elapsedRealtime() - startedAt}ms",
+            )
+            TaskSaveResult.Success(SavedTaskBatch(savedTask, children))
         }
 
     suspend fun moveTasksToTrash(tasksToTrash: List<TaskEntity>): Boolean =
@@ -822,18 +958,24 @@ class TaskMarkdownStore(
     private suspend fun persist(
         tasks: List<TaskEntity>,
         groups: List<TaskGroupEntity>,
-    ): Boolean = persist(tasks, groups, findManagedNote(currentManagedNotePath()))
+    ): Boolean = persistWithFailure(tasks, groups, findManagedNote(currentManagedNotePath())) == null
 
     private suspend fun persist(
         tasks: List<TaskEntity>,
         groups: List<TaskGroupEntity>,
         currentOverride: Note?,
-    ): Boolean {
+    ): Boolean = persistWithFailure(tasks, groups, currentOverride) == null
+
+    private suspend fun persistWithFailure(
+        tasks: List<TaskEntity>,
+        groups: List<TaskGroupEntity>,
+        currentOverride: Note?,
+    ): TaskSaveFailure? {
         val managedPath = currentManagedNotePath()
         val current = currentOverride
         if (current != null && !current.content.contains(MANAGED_MARKER)) {
             KardLeafLog.e(LOG_TAG, "refusing to overwrite unmanaged note path=$managedPath")
-            return false
+            return TaskSaveFailure(TaskSaveFailureReason.FileWrite, "任务清单不是 KardLeaf 管理文件，未覆盖原文件")
         }
         val previousItems =
             current?.let {
@@ -855,7 +997,7 @@ class TaskMarkdownStore(
             (current != null && (latest == null || latest.content != current.content))
         ) {
             KardLeafLog.w(LOG_TAG, "task Markdown changed before save path=$managedPath")
-            return false
+            return TaskSaveFailure(TaskSaveFailureReason.EditConflict, "任务清单已被外部修改，请重新打开后再保存")
         }
         val now = Date()
         val note =
@@ -867,12 +1009,21 @@ class TaskMarkdownStore(
                 createdAt = now,
                 color = 0xFFFFFFFF,
             )
-        val savedPath = noteRepository.saveNoteFromQuickEditor(note, current?.file, saveHistory = false)
+        val savedPath =
+            try {
+                noteRepository.saveNoteFromQuickEditor(note, current?.file, saveHistory = false)
+            } catch (error: SecurityException) {
+                KardLeafLog.e(LOG_TAG, "task markdown permission denied path=$managedPath", error)
+                return TaskSaveFailure(TaskSaveFailureReason.PermissionDenied, "没有权限写入任务清单，请检查笔记库权限")
+            } catch (error: IOException) {
+                KardLeafLog.e(LOG_TAG, "task markdown IO failed path=$managedPath", error)
+                return TaskSaveFailure(TaskSaveFailureReason.IoError, "任务清单读写失败，请检查存储空间后重试")
+            }
         if (savedPath != managedPath) {
             KardLeafLog.e(LOG_TAG, "task markdown save failed path=$managedPath")
-            return false
+            return TaskSaveFailure(TaskSaveFailureReason.FileWrite, "任务清单写入失败，请检查笔记库权限后重试")
         }
-        return true
+        return null
     }
 
     private suspend fun migrateLegacyManagedNoteIfNeeded(): Boolean {

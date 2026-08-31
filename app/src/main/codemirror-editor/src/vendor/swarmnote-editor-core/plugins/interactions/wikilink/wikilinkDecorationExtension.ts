@@ -18,6 +18,7 @@ import {
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view';
+import { checkUpdateAction } from '../../../core/pluginUpdateHelper';
 
 const WIKILINK_REGEX = /\[\[([^\[\]\n]+)\]\]/g;
 
@@ -129,7 +130,7 @@ export function createWikilinkDecorationExtension(): Extension {
         this.decorations = buildDecorations(view);
       }
       update(u: ViewUpdate) {
-        if (u.docChanged || u.viewportChanged || u.selectionSet) {
+        if (checkUpdateAction(u) === 'rebuild') {
           this.decorations = buildDecorations(u.view);
         }
       }

@@ -15,7 +15,6 @@ data class TaskEditorResult(
     val reminderRing: Boolean = true,
     val reminderVibrate: Boolean = true,
     val parentTaskId: Long? = null,
-    val parentTaskSelectionChanged: Boolean = false,
     val childTaskTexts: List<String> = emptyList(),
 )
 

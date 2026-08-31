@@ -37,6 +37,7 @@ import {
 import { Decoration, type DecorationSet, EditorView, WidgetType } from '@codemirror/view';
 import { editorEventCallback, EditorEventType, type TableContextMenuActions } from '../../events';
 import { renderInlineMarkdown } from '../../utils/renderInlineMarkdown';
+import { renderedTableCellOffsetToSource } from './tableCaret';
 
 // KaTeX 在表格单元格首次包含内联数学公式时懒加载；
 // CSS 已由 `renderBlockMath.ts` 全局导入。
@@ -409,9 +410,28 @@ function iconButton(
  * 在 widget 重建期间保留焦点位置，确保编辑体验流畅。
  *
  * **键：** 表格起始位置
- * **值：** { row: 行索引, col: 列索引 }
+ * **值：** 目标单元格与排队来源，用于定位极低概率的意外表格聚焦。
  */
-const pendingTableFocus = new Map<number, { row: number; col: number }>();
+const pendingTableFocus = new Map<number, {
+  row: number;
+  col: number;
+  source: string;
+  queuedAt: number;
+}>();
+
+function queueTableFocus(
+  view: EditorView,
+  tableFrom: number,
+  row: number,
+  col: number,
+  source: string,
+) {
+  pendingTableFocus.set(tableFrom, { row, col, source, queuedAt: performance.now() });
+  console.log(
+    `[KardLeafCM6TableTrace] focus queued source=${source} table=${tableFrom} row=${row} col=${col} ` +
+      `top=${view.scrollDOM.scrollTop.toFixed(1)}`,
+  );
+}
 
 // ─── 可编辑表格 Widget ──────────────────────────────────────
 
@@ -482,10 +502,7 @@ class EditableTableWidget extends WidgetType {
     };
     const commandPending = editorDom.kardleafPendingTableFocus;
     if (commandPending?.tableFrom === this.tableFrom) {
-      pendingTableFocus.set(this.tableFrom, {
-        row: commandPending.row,
-        col: commandPending.col,
-      });
+      queueTableFocus(view, this.tableFrom, commandPending.row, commandPending.col, 'insert-command');
       delete editorDom.kardleafPendingTableFocus;
     }
 
@@ -493,6 +510,11 @@ class EditableTableWidget extends WidgetType {
     const pending = pendingTableFocus.get(this.tableFrom);
     if (pending) {
       pendingTableFocus.delete(this.tableFrom);
+      console.log(
+        `[KardLeafCM6TableTrace] focus scheduled source=${pending.source} table=${this.tableFrom} ` +
+          `row=${pending.row} col=${pending.col} age=${Math.round(performance.now() - pending.queuedAt)}ms ` +
+          `top=${view.scrollDOM.scrollTop.toFixed(1)}`,
+      );
       requestAnimationFrame(() => {
         // 找到目标行（-1 表示表头）
         const targetRow =
@@ -505,7 +527,14 @@ class EditableTableWidget extends WidgetType {
           'th[contenteditable], td[contenteditable]',
         );
         const target = cells[pending.col];
-        if (target) focusCellEnd(target);  // 聚焦到单元格末尾
+        if (target) {
+          console.log(
+            `[KardLeafCM6TableTrace] focus applied source=${pending.source} table=${this.tableFrom} ` +
+              `row=${pending.row} col=${pending.col} age=${Math.round(performance.now() - pending.queuedAt)}ms ` +
+              `connected=${container.isConnected} top=${view.scrollDOM.scrollTop.toFixed(1)}`,
+          );
+          focusCellEnd(target);  // 聚焦到单元格末尾
+        }
       });
     }
 
@@ -694,6 +723,34 @@ class EditableTableWidget extends WidgetType {
     });
 
     let editing = false;
+    let selectionSyncFrame = 0;
+    let pendingCaretPoint: { x: number; y: number } | null = null;
+
+    const rowIndex = () => tag === 'th' ? -1 : Number(cell.parentElement?.dataset.rowIdx ?? -1);
+    const scheduleSelectionSync = (point?: { x: number; y: number }) => {
+      if (point) pendingCaretPoint = point;
+      if (selectionSyncFrame) return;
+      selectionSyncFrame = requestAnimationFrame(() => {
+        selectionSyncFrame = 0;
+        const caretPoint = pendingCaretPoint;
+        pendingCaretPoint = null;
+        if (caretPoint) {
+          const range = document.caretRangeFromPoint(caretPoint.x, caretPoint.y);
+          if (range && cell.contains(range.startContainer)) {
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+          }
+        }
+        this.syncCellSelection(view, cell, rowIndex(), colIdx);
+      });
+    };
+    const handleSelectionChange = () => {
+      const selection = window.getSelection();
+      if (selection && cell.contains(selection.anchorNode) && cell.contains(selection.focusNode)) {
+        scheduleSelectionSync();
+      }
+    };
 
     const commitIfChanged = () => {
       const nextValue = cell.textContent ?? '';
@@ -726,10 +783,20 @@ class EditableTableWidget extends WidgetType {
       }
       const rect = cell.getBoundingClientRect();
       emitTableMenu(rect.left + rect.width / 2, rect.bottom);
+      document.addEventListener('selectionchange', handleSelectionChange);
+      scheduleSelectionSync();
+    });
+
+    cell.addEventListener('pointerup', (event) => {
+      scheduleSelectionSync({ x: event.clientX, y: event.clientY });
     });
 
     cell.addEventListener('blur', (e) => {
       e.stopPropagation();
+      if (selectionSyncFrame) cancelAnimationFrame(selectionSyncFrame);
+      selectionSyncFrame = 0;
+      pendingCaretPoint = null;
+      document.removeEventListener('selectionchange', handleSelectionChange);
       commitIfChanged();
       editing = false;
       cell.innerHTML = renderInlineMarkdown(cell.dataset.raw ?? '');
@@ -763,6 +830,42 @@ class EditableTableWidget extends WidgetType {
     return cell;
   }
 
+  private syncCellSelection(
+    view: EditorView,
+    cell: HTMLElement,
+    rowIdx: number,
+    colIdx: number,
+  ) {
+    const domSelection = window.getSelection();
+    if (
+      !domSelection ||
+      !cell.contains(domSelection.anchorNode) ||
+      !cell.contains(domSelection.focusNode)
+    ) return;
+
+    const cellIndex = rowIdx < 0
+      ? colIdx
+      : (rowIdx + 1) * this.data.headers.length + colIdx;
+    const sourceRange = tableCellSourceRange(view.state, this.tableFrom, this.tableTo, cellIndex);
+    if (!sourceRange) return;
+    const source = view.state.doc.sliceString(sourceRange.from, sourceRange.to);
+    const anchorOffset = domTextOffset(cell, domSelection.anchorNode, domSelection.anchorOffset);
+    const headOffset = domTextOffset(cell, domSelection.focusNode, domSelection.focusOffset);
+    if (anchorOffset === null || headOffset === null) return;
+
+    const anchor = sourceRange.from + renderedTableCellOffsetToSource(source, anchorOffset);
+    const head = sourceRange.from + renderedTableCellOffsetToSource(source, headOffset);
+    const current = view.state.selection.main;
+    if (current.anchor !== anchor || current.head !== head) {
+      view.dispatch({ selection: { anchor, head } });
+    }
+    window.dispatchEvent(new Event('kardleaf-user-caret'));
+    console.log(
+      `[KardLeafCM6TableTrace] selection row=${rowIdx} col=${colIdx} header=${rowIdx < 0} ` +
+        `dom=${anchorOffset}:${headOffset} source=${anchor}:${head}`,
+    );
+  }
+
   private moveToSameColumnNextRow(
     view: EditorView,
     currentCell: HTMLElement,
@@ -777,7 +880,7 @@ class EditableTableWidget extends WidgetType {
     if (nextRowIdx < this.data.rows.length) {
       if (hasDraftChange) {
         currentCell.dataset.raw = nextValue;
-        pendingTableFocus.set(this.tableFrom, { row: nextRowIdx, col: colIdx });
+        queueTableFocus(view, this.tableFrom, nextRowIdx, colIdx, 'enter-next-row-draft');
         this.dispatchTableChange(
           view,
           this.withActiveCellDraft(currentCell, currentRowIdx, colIdx, true),
@@ -793,7 +896,7 @@ class EditableTableWidget extends WidgetType {
     }
 
     const source = this.withActiveCellDraft(currentCell, currentRowIdx, colIdx, true);
-    pendingTableFocus.set(this.tableFrom, { row: source.rows.length, col: colIdx });
+    queueTableFocus(view, this.tableFrom, source.rows.length, colIdx, 'enter-add-row');
     this.addRowAt(view, currentRowIdx, 'below', source);
   }
 
@@ -808,10 +911,7 @@ class EditableTableWidget extends WidgetType {
     if (idx === -1) return;
 
     if (direction === 1 && idx === cells.length - 1) {
-      pendingTableFocus.set(this.tableFrom, {
-        row: this.data.rows.length,
-        col: 0,
-      });
+      queueTableFocus(view, this.tableFrom, this.data.rows.length, 0, 'tab-add-row');
       this.addRowAt(view, this.data.rows.length, 'below');
       return;
     }
@@ -840,32 +940,35 @@ class EditableTableWidget extends WidgetType {
     return {
       addRowAt: (rowIdx, position) => {
         const insertAt = position === 'above' ? Math.max(0, rowIdx) : rowIdx + 1;
-        pendingTableFocus.set(this.tableFrom, { row: insertAt, col: activeColIdx });
+        queueTableFocus(view, this.tableFrom, insertAt, activeColIdx, 'toolbar-add-row');
         this.addRowAt(view, rowIdx, position, dataWithDraft());
       },
       deleteRow: (rowIdx) => {
         if (rowIdx < 0 || rowIdx >= this.data.rows.length) return;
         const source = dataWithDraft();
         const nextRow = source.rows.length > 1 ? Math.min(rowIdx, source.rows.length - 2) : -1;
-        pendingTableFocus.set(this.tableFrom, { row: nextRow, col: activeColIdx });
+        queueTableFocus(view, this.tableFrom, nextRow, activeColIdx, 'toolbar-delete-row');
         this.deleteRow(view, rowIdx, source);
       },
       addColumnAt: (colIdx, position) => {
         const insertAt = position === 'left' ? colIdx : colIdx + 1;
-        pendingTableFocus.set(this.tableFrom, { row: activeRowIdx, col: insertAt });
+        queueTableFocus(view, this.tableFrom, activeRowIdx, insertAt, 'toolbar-add-column');
         this.addColumnAt(view, colIdx, position, dataWithDraft());
       },
       deleteColumn: (colIdx) => {
         if (this.data.headers.length <= 1 || colIdx < 0 || colIdx >= this.data.headers.length) return;
         const source = dataWithDraft();
-        pendingTableFocus.set(this.tableFrom, {
-          row: activeRowIdx,
-          col: Math.min(colIdx, source.headers.length - 2),
-        });
+        queueTableFocus(
+          view,
+          this.tableFrom,
+          activeRowIdx,
+          Math.min(colIdx, source.headers.length - 2),
+          'toolbar-delete-column',
+        );
         this.deleteColumn(view, colIdx, source);
       },
       setAlignment: (colIdx, alignment) => {
-        pendingTableFocus.set(this.tableFrom, { row: activeRowIdx, col: activeColIdx });
+        queueTableFocus(view, this.tableFrom, activeRowIdx, activeColIdx, 'toolbar-alignment');
         this.setAlignment(view, colIdx, alignment, dataWithDraft());
       },
       toggleSource: () => this.toggleSource(view, dataWithDraft()),
@@ -909,6 +1012,22 @@ class EditableTableWidget extends WidgetType {
 
   private dispatchTableChange(view: EditorView, newData: TableData) {
     const markdown = serializeMarkdownTable(newData);
+    const active = document.activeElement;
+    const activeTable = active instanceof HTMLElement
+      ? active.closest<HTMLElement>('.cm-table-widget')
+      : null;
+    if (
+      active instanceof HTMLElement &&
+      active.matches('th[contenteditable],td[contenteditable]') &&
+      activeTable?.dataset.tableFrom === String(this.tableFrom)
+    ) {
+      console.log(
+        `[KardLeafCM6TableTrace] focus handoff table=${this.tableFrom} ` +
+          `active=${active.tagName.toLowerCase()}:${active.parentElement?.dataset.rowIdx ?? 'header'}:${active.dataset.colIdx ?? '?'} ` +
+          `top=${view.scrollDOM.scrollTop.toFixed(1)}`,
+      );
+      view.contentDOM.focus({ preventScroll: true });
+    }
     view.dispatch({
       changes: { from: this.tableFrom, to: this.tableTo, insert: markdown },
     });
@@ -1031,6 +1150,38 @@ function focusCellEnd(target: HTMLElement) {
   target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
+function domTextOffset(cell: HTMLElement, node: Node | null, offset: number) {
+  if (!node || !cell.contains(node)) return null;
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    range.setEnd(node, offset);
+    return range.toString().length;
+  } catch {
+    return null;
+  }
+}
+
+function tableCellSourceRange(
+  state: EditorState,
+  tableFrom: number,
+  tableTo: number,
+  targetIndex: number,
+) {
+  let cellIndex = 0;
+  let result: { from: number; to: number } | null = null;
+  syntaxTree(state).iterate({
+    from: tableFrom,
+    to: tableTo,
+    enter(node) {
+      if (node.name !== 'TableCell' || result) return;
+      if (cellIndex === targetIndex) result = { from: node.from, to: node.to };
+      cellIndex += 1;
+    },
+  });
+  return result;
+}
+
 function clearTableSelection(widgetEl: HTMLElement) {
   widgetEl
     .querySelectorAll<HTMLElement>('.cm-table-row-selected, .cm-table-col-selected')
@@ -1145,7 +1296,10 @@ const tableField = StateField.define<DecorationSet>({
     }
     return deco;
   },
-  provide: (f) => EditorView.decorations.from(f),
+  provide: (f) => [
+    EditorView.decorations.from(f),
+    EditorView.atomicRanges.of((view) => view.state.field(f)),
+  ],
 });
 
 // ─── Theme ──────────────────────────────────────────────────────

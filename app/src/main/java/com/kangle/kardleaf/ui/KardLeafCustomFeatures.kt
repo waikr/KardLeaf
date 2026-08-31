@@ -25,6 +25,7 @@ object KardLeafCustomFeatures {
     const val DefaultUnnamedNoteFileNameTemplate = ""
     val DefaultOpenNoteMode = OpenNoteMode.EDIT
     const val DefaultEditDoubleTapPreview = false
+    val DefaultCustomSymbols = listOf("→", "←", "↑", "↓", "✓", "✗", "★", "☆", "•", "…", "—", "※")
 
     fun editorKernelIcon(kernel: PrefsManager.EditorKernel): ImageVector = when (kernel) {
         PrefsManager.EditorKernel.AUTO -> Icons.Outlined.Settings
@@ -53,6 +54,9 @@ object KardLeafCustomFeatures {
     private const val KeyOpenNoteMode = "open_note_mode"
     private const val KeyEditDoubleTapPreview = "edit_double_tap_preview"
     private const val KeyToolbarOrder = "toolbar_order"
+    private const val KeyCustomSymbols = "custom_symbols"
+    private const val MaxCustomSymbols = 24
+    private const val MaxCustomSymbolChars = 32
     private const val MaxExternalNoteTitleChars = 120
     private const val MaxExternalNoteFolderChars = 240
     private const val MaxExternalNoteContentChars = 50_000
@@ -72,7 +76,9 @@ object KardLeafCustomFeatures {
         REDO("恢复"),
         IMAGE("图片"),
         DRAWING("绘图"),
-        HEADING("一级标题"),
+        DATETIME("时间日期"),
+        SYMBOLS("自定义符号"),
+        HEADING("标题"),
         HEADING2("二级标题"),
         HEADING3("三级标题"),
         RULE("分割线"),
@@ -100,13 +106,13 @@ object KardLeafCustomFeatures {
             ToolbarItem.REDO,
             ToolbarItem.IMAGE,
             ToolbarItem.DRAWING,
+            ToolbarItem.DATETIME,
+            ToolbarItem.SYMBOLS,
             ToolbarItem.HEADING,
-            ToolbarItem.HEADING2,
-            ToolbarItem.HEADING3,
-            ToolbarItem.PREVIEW,
-            ToolbarItem.RULE,
             ToolbarItem.BOLD,
             ToolbarItem.ITALIC,
+            ToolbarItem.PREVIEW,
+            ToolbarItem.RULE,
             ToolbarItem.UNDERLINE,
             ToolbarItem.STRIKE,
             ToolbarItem.LINK,
@@ -304,7 +310,15 @@ object KardLeafCustomFeatures {
                 ?.mapNotNull { name -> runCatching { ToolbarItem.valueOf(name) }.getOrNull() }
                 .orEmpty()
 
-        return (configured + DefaultToolbarOrder).distinct()
+        return (configured + DefaultToolbarOrder)
+            .map { item ->
+                when (item) {
+                    ToolbarItem.HEADING2,
+                    ToolbarItem.HEADING3 -> ToolbarItem.HEADING
+                    else -> item
+                }
+            }
+            .distinct()
     }
 
     fun saveToolbarOrder(
@@ -314,9 +328,47 @@ object KardLeafCustomFeatures {
         context
             .getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
             .edit()
-            .putString(KeyToolbarOrder, order.distinct().joinToString(",") { it.name })
+            .putString(
+                KeyToolbarOrder,
+                order
+                    .map { item ->
+                        when (item) {
+                            ToolbarItem.HEADING2,
+                            ToolbarItem.HEADING3 -> ToolbarItem.HEADING
+                            else -> item
+                        }
+                    }
+                    .distinct()
+                    .joinToString(",") { it.name },
+            )
             .apply()
     }
+
+    fun getCustomSymbols(context: Context): List<String> {
+        val stored = context
+            .getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
+            .getString(KeyCustomSymbols, null)
+        return stored?.let(::normalizeCustomSymbols) ?: DefaultCustomSymbols
+    }
+
+    fun saveCustomSymbols(
+        context: Context,
+        symbols: List<String>,
+    ) {
+        context
+            .getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KeyCustomSymbols, normalizeCustomSymbols(symbols.joinToString("\n")).joinToString("\n"))
+            .apply()
+    }
+
+    fun normalizeCustomSymbols(raw: String): List<String> =
+        raw.lineSequence()
+            .map { it.trim().take(MaxCustomSymbolChars) }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(MaxCustomSymbols)
+            .toList()
 
     fun formatUnnamedNoteTitle(
         context: Context,

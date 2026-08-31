@@ -1,5 +1,6 @@
 package com.kangle.kardleaf.ui
 
+import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -42,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,7 +59,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.RowScope
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
+
+private const val FILE_TREE_TRACE_TAG = "KardLeafFileTree"
 @Composable
 internal fun drawerItemColors() =
     NavigationDrawerItemDefaults.colors(
@@ -82,9 +87,12 @@ internal fun ThemedDrawerItem(
     content: (@Composable RowScope.() -> Unit)? = null,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    iconTint: Color? = null,
 ) {
     val context = LocalContext.current
     val prefsManager = remember(context) { PrefsManager(context) }
+    val currentOnClick = rememberUpdatedState(onClick)
+    val currentOnLongClick = rememberUpdatedState(onLongClick)
     val drawerStyle = prefsManager.getDrawerStyle()
     val themeStyle = LocalKardLeafThemeStyle.current
     val isModern = themeStyle != PrefsManager.AppThemeStyle.CLASSIC
@@ -107,22 +115,36 @@ internal fun ThemedDrawerItem(
                             onClick = onClick,
                         )
                     } else {
-                        Modifier.pointerInput(onClick, onLongClick) {
+                        Modifier.pointerInput(Unit) {
                             detectTapGestures(
-                                onTap = { onClick() },
-                                onLongPress = onLongClick,
+                                onPress = {
+                                    val pressStart = SystemClock.uptimeMillis()
+                                    KardLeafLog.d(
+                                        FILE_TREE_TRACE_TAG,
+                                        "note pressStart labelHash=${label.hashCode()} " +
+                                            "theme=$themeStyle t=$pressStart",
+                                    )
+                                    val released = tryAwaitRelease()
+                                    KardLeafLog.d(
+                                        FILE_TREE_TRACE_TAG,
+                                        "note pressEnd labelHash=${label.hashCode()} " +
+                                            "released=$released elapsed=${SystemClock.uptimeMillis() - pressStart}",
+                                    )
+                                },
+                                onTap = { currentOnClick.value() },
+                                onLongPress = { offset -> currentOnLongClick.value?.invoke(offset) },
                             )
                         }
                     },
                 )
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             icon?.let {
                 Icon(
                     imageVector = it,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = iconTint ?: MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(end = 12.dp),
                 )
             }
@@ -133,7 +155,19 @@ internal fun ThemedDrawerItem(
     if (!isModern) {
         NavigationDrawerItem(
             label = { Text(label) },
-            icon = icon?.let { imageVector -> { Icon(imageVector, contentDescription = null) } },
+            icon = icon?.let { imageVector ->
+                {
+                    Icon(
+                        imageVector,
+                        contentDescription = null,
+                        tint = iconTint ?: if (selected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            },
             selected = selected,
             onClick = onClick,
             modifier = modifier.padding(horizontal = 12.dp).then(if (compact) Modifier.height(40.dp) else Modifier),
@@ -165,11 +199,11 @@ internal fun ThemedDrawerItem(
     }
     val showIconBox = drawerStyle != PrefsManager.DrawerStyle.MINIMAL_TEXT
     val itemVerticalPadding = when (drawerStyle) {
-        PrefsManager.DrawerStyle.MINIMAL_TEXT -> 8.dp
-        PrefsManager.DrawerStyle.GROUPED_CARD -> 8.dp
-        else -> if (isDracula) 9.dp else 10.dp
+        PrefsManager.DrawerStyle.MINIMAL_TEXT -> 6.dp
+        PrefsManager.DrawerStyle.GROUPED_CARD -> 6.dp
+        else -> if (isDracula) 7.dp else 8.dp
     }
-    val effectiveItemVerticalPadding = if (compact) 4.dp else itemVerticalPadding
+    val effectiveItemVerticalPadding = if (compact) 3.dp else itemVerticalPadding
     val itemHorizontalPadding = when (drawerStyle) {
         PrefsManager.DrawerStyle.MINIMAL_TEXT -> 10.dp
         PrefsManager.DrawerStyle.GROUPED_CARD -> 10.dp
@@ -214,7 +248,7 @@ internal fun ThemedDrawerItem(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = if (compact) 1.dp else if (drawerStyle == PrefsManager.DrawerStyle.MINIMAL_TEXT) 2.dp else 4.dp)
+            .padding(horizontal = 12.dp, vertical = if (compact) 1.dp else if (drawerStyle == PrefsManager.DrawerStyle.MINIMAL_TEXT) 2.dp else 3.dp)
             .graphicsLayer {
                 scaleX = pressedScale
                 scaleY = pressedScale
@@ -230,10 +264,24 @@ internal fun ThemedDrawerItem(
                         onClick = onClick,
                     )
                 } else {
-                    Modifier.pointerInput(onClick, onLongClick) {
+                    Modifier.pointerInput(Unit) {
                         detectTapGestures(
-                            onTap = { onClick() },
-                            onLongPress = onLongClick,
+                            onPress = {
+                                val pressStart = SystemClock.uptimeMillis()
+                                KardLeafLog.d(
+                                    FILE_TREE_TRACE_TAG,
+                                    "note pressStart labelHash=${label.hashCode()} " +
+                                        "theme=$themeStyle t=$pressStart",
+                                )
+                                val released = tryAwaitRelease()
+                                KardLeafLog.d(
+                                    FILE_TREE_TRACE_TAG,
+                                    "note pressEnd labelHash=${label.hashCode()} " +
+                                        "released=$released elapsed=${SystemClock.uptimeMillis() - pressStart}",
+                                )
+                            },
+                            onTap = { currentOnClick.value() },
+                            onLongPress = { offset -> currentOnLongClick.value?.invoke(offset) },
                         )
                     }
                 },
@@ -263,7 +311,7 @@ internal fun ThemedDrawerItem(
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = if (isCleanList && drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) {
+                        tint = iconTint ?: if (isCleanList && drawerStyle == PrefsManager.DrawerStyle.DATA_CARD) {
                             if (cleanListFeatureIconStyle == PrefsManager.CleanListFeatureIconStyle.MODERN) {
                                 cleanListDrawerIconColor(label)
                             } else {
@@ -281,7 +329,7 @@ internal fun ThemedDrawerItem(
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = iconTint ?: if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(21.dp),
                 )
             }
@@ -396,9 +444,10 @@ internal fun DrawerEntry(
         )
         PrefsManager.DrawerItemId.RELATIONSHIP_GRAPH -> ThemedDrawerItem(
             label = label,
-            icon = Icons.Outlined.AccountTree,
+            icon = Icons.Outlined.Hub,
             selected = currentScreen is MainViewModel.Screen.RelationshipGraph,
             onClick = { onScreenSelect(MainViewModel.Screen.RelationshipGraph) },
+            iconTint = Color(0xFF3B82F6),
         )
         PrefsManager.DrawerItemId.ARCHIVE -> ThemedDrawerItem(
             label = label,
@@ -411,6 +460,7 @@ internal fun DrawerEntry(
             icon = Icons.Outlined.DeleteOutline,
             selected = currentScreen is MainViewModel.Screen.Dashboard && currentFilter is MainViewModel.NoteFilter.Trash,
             onClick = { onDashboardFilterSelect(MainViewModel.NoteFilter.Trash) },
+            iconTint = Color(0xFFEF4444),
         )
         PrefsManager.DrawerItemId.PRIVACY -> ThemedDrawerItem(
             label = label,

@@ -65,6 +65,9 @@ interface NoteRemarkDao {
     @Query("DELETE FROM note_remarks WHERE noteId = :noteId")
     suspend fun deleteByNoteId(noteId: String)
 
+    @Query("DELETE FROM note_remarks")
+    suspend fun deleteAll()
+
     @Query("UPDATE note_remarks SET noteId = :newNoteId WHERE noteId = :oldNoteId")
     suspend fun replaceNoteId(
         oldNoteId: String,

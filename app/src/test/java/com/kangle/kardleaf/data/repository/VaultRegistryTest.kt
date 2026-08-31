@@ -27,4 +27,20 @@ class VaultRegistryTest {
             ).isEmpty(),
         )
     }
+
+    @Test
+    fun keepsVaultRegistryJsonNamesStableAndReadsLegacyObfuscatedNames() {
+        val vault = VaultInfo("content://notes/tree/vault", "Vault", DEFAULT_VAULT_DATABASE_NAME)
+
+        assertEquals(
+            "[{\"uri\":\"content://notes/tree/vault\",\"displayName\":\"Vault\",\"databaseName\":\"kardleaf_database\"}]",
+            VaultRegistryCodec.encode(listOf(vault)),
+        )
+        assertEquals(
+            listOf(vault),
+            VaultRegistryCodec.decode(
+                "[{\"a\":\"content://notes/tree/vault\",\"b\":\"Vault\",\"c\":\"kardleaf_database\"}]",
+            ),
+        )
+    }
 }

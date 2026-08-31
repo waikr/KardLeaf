@@ -57,6 +57,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import com.kangle.kardleaf.data.utils.KardLeafContentLimits
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import com.vladsch.flexmark.html2md.converter.FlexmarkHtmlConverter
 import java.io.File
 import java.io.FileOutputStream
@@ -285,7 +286,7 @@ private class WebPageMarkdownImporter(
                 content = content,
                 folder = targetFolder,
                 forceRootFolder = targetFolder.isBlank(),
-                sourceType = "web",
+                sourceType = NoteFormatUtils.SOURCE_TYPE_WEB_ONLINE,
                 sourceUrl = pageUrl.toString(),
             )
         }
@@ -358,6 +359,9 @@ private class WebPageMarkdownImporter(
     ): LocalizedArticle {
         val document = Jsoup.parseBodyFragment(articleHtml, pageUrl.toString())
         document.outputSettings().prettyPrint(false)
+        document.select("a[href]").forEach { link ->
+            link.absUrl("href").toHttpUrlOrNull()?.let { link.attr("href", it.toString()) }
+        }
 
         val imagesByUrl = LinkedHashMap<HttpUrl, MutableList<Element>>()
         document.select("img").forEach { image ->
@@ -772,11 +776,11 @@ fun WebClipImportDialog(
         onDismissRequest = {
             if (!isImporting) onDismiss()
         },
-        title = { Text("网页转 Markdown") },
+        title = { Text("在线阅读网页") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    text = "快速导入公开网页；需要登录或正文提取不完整时，可切换到网页登录导入。",
+                    text = "提取网页正文后会直接在笔记 Preview 中只读显示；此时不下载图片，需要编辑时再离线保存。",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Row(
@@ -784,12 +788,12 @@ fun WebClipImportDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("默认下载网页图片")
+                        Text("离线时下载网页图片")
                         Text(
                             text = if (downloadImages) {
-                                "图片会保存到本地图片目录"
+                                "点击“离线并编辑”时保存到本地图片目录"
                             } else {
-                                "保留网络链接，可在笔记更多选项中稍后下载"
+                                "离线时保留网络图片链接"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -842,7 +846,7 @@ fun WebClipImportDialog(
                                 importer.importFromUrl(
                                     input = url,
                                     targetFolder = targetFolder,
-                                    downloadImages = downloadImages,
+                                    downloadImages = false,
                                     importImage = importImage,
                                     onImageProgress = ::updateImageProgress,
                                 )
@@ -868,7 +872,7 @@ fun WebClipImportDialog(
                         strokeWidth = 2.dp,
                     )
                 } else {
-                    Text("快速导入")
+                    Text("在线阅读")
                 }
             }
         },
@@ -887,7 +891,7 @@ fun WebClipImportDialog(
                         }
                     },
                 ) {
-                    Text("网页登录导入")
+                    Text("网页登录")
                 }
                 TextButton(
                     enabled = !isImporting,
@@ -979,7 +983,7 @@ private fun WebClipBrowserDialog(
                             pageUrl = parsedUrl,
                             html = html,
                             targetFolder = targetFolder,
-                            downloadImages = downloadImages,
+                            downloadImages = false,
                             importImage = importImage,
                             allowShortContent = true,
                             onImageProgress = ::updateImageProgress,
@@ -1075,7 +1079,7 @@ private fun WebClipBrowserDialog(
                                 strokeWidth = 2.dp,
                             )
                         } else {
-                            Text("保存为笔记")
+                            Text("在线阅读")
                         }
                     }
                     TextButton(
@@ -1142,7 +1146,7 @@ private fun WebClipBrowserDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "默认下载网页图片",
+                        text = "离线时下载网页图片",
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1289,7 +1293,7 @@ internal suspend fun localizeRemoteMarkdownImages(
         onImageProgress = onImageProgress,
     )
 
-private fun webClipDownloadImagesByDefault(context: Context): Boolean =
+internal fun webClipDownloadImagesByDefault(context: Context): Boolean =
     context.getSharedPreferences(WEB_CLIP_PREFS_NAME, Context.MODE_PRIVATE)
         .getBoolean(PREF_DOWNLOAD_IMAGES_BY_DEFAULT, true)
 

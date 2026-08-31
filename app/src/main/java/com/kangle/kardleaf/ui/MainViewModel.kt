@@ -17,7 +17,10 @@ import com.kangle.kardleaf.data.model.NoteSearchMatch
 import com.kangle.kardleaf.data.model.NoteSearchOptions
 import com.kangle.kardleaf.data.database.NoteLinkEntity
 import com.kangle.kardleaf.data.repository.MetadataManager
+import com.kangle.kardleaf.data.repository.MergeNotesOptions
+import com.kangle.kardleaf.data.repository.MergeNotesResult
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.repository.RefreshResult
 import com.kangle.kardleaf.data.repository.RoomNoteRepository
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import com.kangle.kardleaf.data.utils.NoteTextStats
@@ -44,7 +47,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val DASHBOARD_NOTE_PREVIEW_LIMIT = 200
@@ -324,7 +326,7 @@ class MainViewModel(
     val allNotes: Flow<List<Note>> =
         combine(repository.getAllNotesWithArchive(), _hiddenFoldersVersion) { notes, _ ->
             notes.withoutHiddenFolders(hiddenFolderPaths())
-        }
+        }.distinctUntilChanged()
     val allNotesIncludingHidden: Flow<List<Note>> = repository.getAllNotesWithArchive()
     val libraryCharacterCount: StateFlow<Long?> = repository.libraryCharacterCount
 
@@ -352,6 +354,14 @@ class MainViewModel(
                         flowOf(emptyList())
                     }
                 combine(histories, noteMatches) { historyResults, noteResults ->
+                    if (request.isActive) {
+                        KardLeafLog.d(
+                            SEARCH_TRACE_TAG,
+                            "search index ready ${SearchQueryUtils.describeForLog(request.query)} options=${request.options} " +
+                                "historyRows=${historyResults.size} historyPreviewLimited=${historyResults.count { it.content.length >= DASHBOARD_NOTE_PREVIEW_LIMIT }} " +
+                                "noteRows=${noteResults.size} noteRowsWithoutOffset=${noteResults.count { it.startOffset < 0 }}",
+                        )
+                    }
                     SearchIndex(request, historyResults, noteResults.associateBy { it.noteId })
                 }
             }
@@ -369,9 +379,18 @@ class MainViewModel(
         if (!request.isActive || notes.isEmpty()) return emptyMap()
         val matches = LinkedHashMap<String, SearchMatch>(notes.size)
         val canUsePreviewFallback =
-            request.options == NoteSearchOptions() && SearchQueryUtils.isMeaningfulSearchQuery(request.query)
+            request.options == NoteSearchOptions()
+        var indexedCount = 0
+        var fallbackChecked = 0
+        var historyScopeCount = 0
+        var unpositionedCount = 0
         notes.forEach { note ->
             val indexedMatch = index.takeIf { it.request == request }?.noteMatches?.get(note.id)
+            if (indexedMatch != null) {
+                indexedCount++
+            } else if (canUsePreviewFallback) {
+                fallbackChecked++
+            }
             val match =
                 indexedMatch?.toDashboardSearchMatch()
                     ?: if (canUsePreviewFallback) {
@@ -385,9 +404,17 @@ class MainViewModel(
                         null
                     }
             if (match != null) {
+                if (match.scope == "历史版本") historyScopeCount++
+                if (match.startOffset < 0) unpositionedCount++
                 matches[note.id] = match
             }
         }
+        KardLeafLog.d(
+            SEARCH_TRACE_TAG,
+            "dashboard search result ${SearchQueryUtils.describeForLog(request.query)} options=${request.options} " +
+                "candidates=${notes.size} matched=${matches.size} indexed=$indexedCount fallbackChecked=$fallbackChecked " +
+                "historyScope=$historyScopeCount unpositioned=$unpositionedCount",
+        )
         return matches
     }
 
@@ -528,6 +555,7 @@ class MainViewModel(
                     when (effectiveSortOrder) {
                         PrefsManager.SortOrder.DATE_MODIFIED,
                         PrefsManager.SortOrder.CUSTOM -> searched.sortedBy { it.lastModified }
+                        PrefsManager.SortOrder.DATE_CREATED -> searched.sortedBy { it.createdAt }
                         PrefsManager.SortOrder.TITLE -> searched.sortedBy { it.title.lowercase() }
                     }
                 }
@@ -734,12 +762,133 @@ class MainViewModel(
     private val _isVaultSwitchRefreshing = MutableStateFlow(false)
     val isVaultSwitchRefreshing: StateFlow<Boolean> = _isVaultSwitchRefreshing.asStateFlow()
 
-    private val _homeScrollToTopEvents = MutableStateFlow(0)
-    val homeScrollToTopEvents: StateFlow<Int> = _homeScrollToTopEvents.asStateFlow()
+    private val _dashboardScrollIntent = MutableStateFlow<DashboardScrollIntent?>(null)
+    internal val dashboardScrollIntent: StateFlow<DashboardScrollIntent?> = _dashboardScrollIntent.asStateFlow()
+    private val _dashboardUserScrollVersion = MutableStateFlow(0L)
+    internal val dashboardUserScrollVersion: StateFlow<Long> = _dashboardUserScrollVersion.asStateFlow()
+    private var dashboardViewportAtTop = true
+    private var nextDashboardScrollIntentId = 0L
     private var externalRefreshJob: Job? = null
     private var openNoteRequestVersion = 0
     private var lastOpenNoteShownAtMs = 0L
     private var lastOpenNoteShownPath: String? = null
+
+    private data class DashboardViewportSnapshot(
+        val filter: NoteFilter,
+        val searchActive: Boolean,
+        val userScrollVersion: Long,
+        val atTop: Boolean,
+    )
+
+    internal fun updateDashboardViewport(
+        atTop: Boolean,
+        userScrollStarted: Boolean,
+    ) {
+        dashboardViewportAtTop = atTop
+        if (userScrollStarted) {
+            invalidateDashboardScrollIntent()
+        }
+    }
+
+    private fun invalidateDashboardScrollIntent() {
+        _dashboardUserScrollVersion.value += 1L
+        _dashboardScrollIntent.value = null
+    }
+
+    internal fun consumeDashboardScrollIntent(id: Long) {
+        if (_dashboardScrollIntent.value?.id == id) {
+            _dashboardScrollIntent.value = null
+        }
+    }
+
+    private fun requestDashboardScroll(
+        reason: DashboardScrollReason,
+        action: DashboardScrollAction,
+        targetPath: String? = null,
+        waitForEditorClose: Boolean = false,
+        requiredUserScrollVersion: Long? = null,
+    ) {
+        if (_currentScreen.value != Screen.Dashboard) return
+        val intent =
+            DashboardScrollIntent(
+                id = ++nextDashboardScrollIntentId,
+                reason = reason,
+                action = action,
+                targetFilter = _currentFilter.value,
+                targetSearchActive = isDashboardSearchActive(),
+                targetPath = targetPath,
+                waitForEditorClose = waitForEditorClose,
+                requiredUserScrollVersion = requiredUserScrollVersion,
+            )
+        _dashboardScrollIntent.value = intent
+        KardLeafLog.d(KardLeafLogTags.DASHBOARD_SCROLL, "request intent=$intent")
+    }
+
+    private fun captureDashboardViewport(): DashboardViewportSnapshot? {
+        if (_currentScreen.value != Screen.Dashboard || _isEditorOpen.value) return null
+        return DashboardViewportSnapshot(
+            filter = _currentFilter.value,
+            searchActive = isDashboardSearchActive(),
+            userScrollVersion = _dashboardUserScrollVersion.value,
+            atTop = dashboardViewportAtTop,
+        )
+    }
+
+    private fun isDashboardSearchActive(): Boolean =
+        _searchQuery.value.isNotBlank() || _searchOptions.value.hasMetadataFilters
+
+    private fun currentDashboardSort(): Pair<PrefsManager.SortOrder, PrefsManager.SortDirection> {
+        val customSortKey = customSortStorageKeyFor(_currentFilter.value)
+        val settings = customSortKey?.let(prefsManager::getFolderSortSettings)
+        val order = settings?.order ?: _sortOrder.value
+        val effectiveOrder =
+            if (customSortKey == null && order == PrefsManager.SortOrder.CUSTOM) {
+                PrefsManager.SortOrder.DATE_MODIFIED
+            } else {
+                order
+            }
+        return effectiveOrder to (settings?.direction ?: _sortDirection.value)
+    }
+
+    private fun requestDashboardTopIfSortChanged(
+        previous: Pair<PrefsManager.SortOrder, PrefsManager.SortDirection>,
+    ) {
+        if (previous == currentDashboardSort()) return
+        requestDashboardScroll(
+            reason = DashboardScrollReason.SORT_CHANGED,
+            action = DashboardScrollAction.TOP,
+            requiredUserScrollVersion = _dashboardUserScrollVersion.value,
+        )
+    }
+
+    private fun applyRefreshViewportPolicy(
+        reason: NoteRefreshReason,
+        snapshot: DashboardViewportSnapshot?,
+        result: RefreshResult,
+        forceTop: Boolean = false,
+        changedOutsideScan: Boolean = false,
+    ) {
+        val shouldKeepTop = forceTop || (snapshot?.atTop == true && (result.changed || changedOutsideScan))
+        if (!result.success || snapshot == null || !shouldKeepTop) {
+            return
+        }
+        val scrollReason =
+            when (reason) {
+                NoteRefreshReason.LOCAL -> return
+                NoteRefreshReason.USER_PULL_REFRESH -> DashboardScrollReason.USER_PULL_REFRESH
+                NoteRefreshReason.COLD_START_REFRESH -> DashboardScrollReason.COLD_START_REFRESH
+                NoteRefreshReason.VAULT_SWITCH_REFRESH -> DashboardScrollReason.VAULT_SWITCH_REFRESH
+                NoteRefreshReason.RESUME_REFRESH -> DashboardScrollReason.RESUME_REFRESH
+                NoteRefreshReason.EXTERNAL_OBSERVER -> DashboardScrollReason.EXTERNAL_OBSERVER
+                NoteRefreshReason.WEBDAV_REFRESH -> DashboardScrollReason.WEBDAV_REFRESH
+            }
+        if (snapshot.filter != _currentFilter.value || snapshot.searchActive != isDashboardSearchActive()) return
+        requestDashboardScroll(
+            reason = scrollReason,
+            action = DashboardScrollAction.TOP,
+            requiredUserScrollVersion = snapshot.userScrollVersion,
+        )
+    }
 
     suspend fun refreshLibraryCharacterCountIfDue() {
         try {
@@ -779,6 +928,7 @@ class MainViewModel(
     fun setRootFolder(
         uri: Uri,
         scanImmediately: Boolean = true,
+        scanWhenDatabaseEmpty: Boolean = true,
         onRootFolderReady: (() -> Unit)? = null,
     ) {
         val startMs = SystemClock.elapsedRealtime()
@@ -794,12 +944,19 @@ class MainViewModel(
             try {
                 kotlinx.coroutines.yield()
                 logStartupPerf("setRootFolder repository start elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
-                repository.setRootFolder(uri.toString(), scanImmediately = scanImmediately)
+                rootFolderReady = repository.setRootFolder(
+                    uriString = uri.toString(),
+                    scanImmediately = scanImmediately,
+                    scanWhenDatabaseEmpty = scanWhenDatabaseEmpty,
+                )
+                if (!rootFolderReady) {
+                    _isPermissionNeeded.value = true
+                    return@launch
+                }
                 if (scanImmediately) {
                     repository.isIndexing.first { isIndexing -> !isIndexing }
                     logStartupPerf("setRootFolder indexing done elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
                 }
-                rootFolderReady = true
                 logStartupPerf("setRootFolder repository done elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
                 cleanupExpiredTrashIfNeeded()
                 logStartupPerf("setRootFolder cleanup done elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
@@ -819,9 +976,14 @@ class MainViewModel(
         }
     }
 
-    fun refreshNotes(showVaultSwitchProgress: Boolean = false) {
+    fun refreshNotes(
+        showVaultSwitchProgress: Boolean = false,
+        reason: NoteRefreshReason = NoteRefreshReason.LOCAL,
+        forceTop: Boolean = false,
+    ) {
         val startMs = SystemClock.elapsedRealtime()
-        logStartupPerf("refreshNotes start loadingBefore=${_isLoading.value}")
+        val viewportSnapshot = captureDashboardViewport()
+        logStartupPerf("refreshNotes start reason=$reason loadingBefore=${_isLoading.value}")
         if (showVaultSwitchProgress) {
             _isVaultSwitchRefreshing.value = true
         }
@@ -830,10 +992,11 @@ class MainViewModel(
             try {
                 kotlinx.coroutines.yield()
                 logStartupPerf("refreshNotes repository start elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
-                repository.refreshNotes()
+                val result = repository.refreshNotes()
                 if (showVaultSwitchProgress) {
                     repository.isIndexing.first { isIndexing -> !isIndexing }
                 }
+                applyRefreshViewportPolicy(reason, viewportSnapshot, result, forceTop = forceTop)
                 logStartupPerf("refreshNotes repository done elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
                 cleanupExpiredTrashIfNeeded()
                 logStartupPerf("refreshNotes cleanup done elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
@@ -853,12 +1016,14 @@ class MainViewModel(
         forceContentReloadFallback: Boolean = true,
         changedUri: Uri? = null,
         changedPaths: List<String> = emptyList(),
+        reason: NoteRefreshReason = NoteRefreshReason.EXTERNAL_OBSERVER,
     ) {
         if (_isImportingLibrary.value) {
             logStartupPerf("externalVaultChanged skip library import")
             return
         }
         val startMs = SystemClock.elapsedRealtime()
+        val viewportSnapshot = captureDashboardViewport()
         logStartupPerf(
             "externalVaultChanged scheduled forceFallback=$forceContentReloadFallback changedUri=${changedUri != null} " +
                 "changedPaths=${changedPaths.size} editorOpen=${_isEditorOpen.value}",
@@ -866,7 +1031,6 @@ class MainViewModel(
         externalRefreshJob?.cancel()
         externalRefreshJob =
             viewModelScope.launch {
-                delay(100L)
                 try {
                     logStartupPerf("externalVaultChanged run elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
                     val openNotePath = _currentNote.value?.file?.path
@@ -889,8 +1053,11 @@ class MainViewModel(
                             quickOpenNote != null &&
                             quickOpenNote.content != _currentNote.value?.content
 
+                    val refreshResult: RefreshResult
                     if (conflictDetected) {
                         _externalConflict.value = quickOpenNote
+                        logStartupPerf("externalVaultChanged conflict refresh start elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
+                        refreshResult = repository.refreshNotes()
                     } else {
                         if (quickOpenNote != null && _currentNote.value?.file?.path == quickOpenNote.file.path) {
                             _currentNote.value = quickOpenNote
@@ -898,20 +1065,17 @@ class MainViewModel(
 
                         val shouldForceFullRefresh =
                             forceContentReloadFallback && quickNotes.isEmpty() && changedPaths.isEmpty()
-                        when {
+                        refreshResult = when {
                             shouldForceFullRefresh -> {
                                 logStartupPerf("externalVaultChanged fullRefresh start elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
                                 repository.refreshNotesFromExternalChange()
                             }
-                            changedPaths.isEmpty() -> {
-                                logStartupPerf("externalVaultChanged refresh start quickNotes=${quickNotes.size} elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
-                                repository.refreshNotes()
-                            }
                             else -> {
                                 logStartupPerf(
-                                    "externalVaultChanged targeted refresh done paths=${changedPaths.size} " +
+                                    "externalVaultChanged reconcile start paths=${changedPaths.size} " +
                                         "quickNotes=${quickNotes.size} elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
                                 )
+                                repository.refreshNotes()
                             }
                         }
 
@@ -925,11 +1089,12 @@ class MainViewModel(
                         }
                     }
 
-                    // 无论是否冲突，都要刷新笔记列表索引
-                    if (conflictDetected) {
-                        logStartupPerf("externalVaultChanged conflict refresh start elapsed=${SystemClock.elapsedRealtime() - startMs}ms")
-                        repository.refreshNotes()
-                    }
+                    applyRefreshViewportPolicy(
+                        reason = reason,
+                        snapshot = viewportSnapshot,
+                        result = refreshResult,
+                        changedOutsideScan = quickNotes.isNotEmpty(),
+                    )
                     logStartupPerf("externalVaultChanged done elapsed=${SystemClock.elapsedRealtime() - startMs}ms conflict=$conflictDetected")
                 } catch (e: Exception) {
                     KardLeafLog.e("MainViewModel", "Failed to refresh notes after external change", e)
@@ -1088,12 +1253,16 @@ class MainViewModel(
         query: String,
         openSession: EditorOpenSession? = null,
     ) {
-        val preferredStart = dashboardSearchMatches.value
+        val dashboardMatchState = dashboardSearchMatches.value
             .takeIf { it.query == query }
-            ?.matchesByNoteId
-            ?.get(note.id)
-            ?.startOffset
-            ?: -1
+        val dashboardMatch = dashboardMatchState?.matchesByNoteId?.get(note.id)
+        val preferredStart = dashboardMatch?.startOffset ?: -1
+        KardLeafLog.d(
+            SEARCH_TRACE_TAG,
+            "dashboard jump request ${SearchQueryUtils.describeForLog(query)} " +
+                "options=${dashboardMatchState?.options ?: _searchOptions.value} scope=${dashboardMatch?.scope ?: "none"} " +
+                "preferredStart=$preferredStart",
+        )
         prepareEditorSearchJump(note, query, preferredStart)
         openNote(note, openSession)
     }
@@ -1111,6 +1280,11 @@ class MainViewModel(
                 noteId = note.id,
                 query = trimmedQuery,
                 preferredStart = preferredStart,
+            )
+            KardLeafLog.d(
+                SEARCH_TRACE_TAG,
+                "dashboard jump queued ${SearchQueryUtils.describeForLog(trimmedQuery)} " +
+                    "preferredStart=$preferredStart requestId=$editorSearchJumpRequestId",
             )
         }
     }
@@ -1611,9 +1785,27 @@ class MainViewModel(
         if (_currentFilter.value == filter) {
             return
         }
+        invalidateDashboardScrollIntent()
         _customSortDragModeEnabled.value = false
         _currentFilter.value = filter
         persistLastFilter(filter)
+    }
+
+    fun revealNoteInParentFolder(note: Note) {
+        val parentPath = dashboardParentFolderPath(note.file.path)
+        val targetFilter = if (parentPath.isBlank()) NoteFilter.All else NoteFilter.Label(parentPath)
+        KardLeafLog.d(
+            KardLeafLogTags.DASHBOARD_SCROLL,
+            "file tree reveal path=${note.file.path} parent=$parentPath filter=$targetFilter",
+        )
+        clearSearch()
+        navigateTo(Screen.Dashboard)
+        setFilter(targetFilter)
+        requestDashboardScroll(
+            reason = DashboardScrollReason.FILE_TREE_REVEAL,
+            action = DashboardScrollAction.REVEAL_PATH,
+            targetPath = note.file.path,
+        )
     }
 
     fun setCustomSortDragModeEnabled(enabled: Boolean) {
@@ -1633,6 +1825,7 @@ class MainViewModel(
             CUSTOM_SORT_FLASH_TAG,
             "showAllInFolder current=$current path=$path alreadyRecursive=$alreadyRecursive to=$newFilter",
         )
+        invalidateDashboardScrollIntent()
         _customSortDragModeEnabled.value = false
         _currentFilter.value = newFilter
         // 持久化为普通 LABEL（不带 recursive），重启恢复精确模式
@@ -1648,21 +1841,28 @@ class MainViewModel(
             CUSTOM_SORT_FLASH_TAG,
             "navigateUpFolder path=$path parent=$parent to=$nextFilter",
         )
+        invalidateDashboardScrollIntent()
         _customSortDragModeEnabled.value = false
         _currentFilter.value = nextFilter
-        _homeScrollToTopEvents.value += 1
         return true
     }
 
-    fun createLabel(name: String) {
-        if (name.isBlank()) return
+    fun createLabel(
+        name: String,
+        onDone: (Boolean) -> Unit = {},
+    ) {
+        if (name.isBlank()) {
+            onDone(false)
+            return
+        }
         viewModelScope.launch {
-            val success = repository.createLabel(name)
+            val success = runCatching { repository.createLabel(name) }.getOrDefault(false)
             if (success) {
                 val current = _tempLabels.value.toMutableSet()
                 current.add(name)
                 _tempLabels.value = current
             }
+            onDone(success)
         }
     }
 
@@ -1732,9 +1932,13 @@ class MainViewModel(
     fun renameNote(
         note: Note,
         title: String,
+        onDone: (String?) -> Unit = {},
     ) {
         val trimmed = title.trim()
-        if (trimmed.isBlank()) return
+        if (trimmed.isBlank()) {
+            onDone(null)
+            return
+        }
         val queuedAt = SystemClock.elapsedRealtime()
         KardLeafLog.d(
             FILE_TREE_TRACE_TAG,
@@ -1747,30 +1951,54 @@ class MainViewModel(
                 "rename note vm start pathHash=${note.file.path.hashCode()} " +
                     "queueElapsed=${repositoryStartedAt - queuedAt}ms",
             )
-            val savedPath = repository.saveNoteFromQuickEditor(
-                note = note.copy(title = trimmed),
-                oldFile = note.file,
-                saveHistory = false,
-            )
+            val savedPath = runCatching { repository.renameNoteFile(note.file.path, trimmed) }.getOrDefault("")
+            if (savedPath.isNotBlank()) {
+                val oldNotePath = normalizeNotePath(note.file.path)
+                val newNotePath = normalizeNotePath(savedPath)
+                _selectedNotes.update { paths ->
+                    paths.mapTo(linkedSetOf()) { path -> if (normalizeNotePath(path) == oldNotePath) newNotePath else path }
+                }
+                _currentNote.update { current ->
+                    if (current != null && normalizeNotePath(current.file.path) == oldNotePath) {
+                        current.copy(file = java.io.File(newNotePath), title = java.io.File(newNotePath).nameWithoutExtension)
+                    } else {
+                        current
+                    }
+                }
+            }
             KardLeafLog.d(
                 FILE_TREE_TRACE_TAG,
                 "rename note vm done pathHash=${note.file.path.hashCode()} success=${savedPath.isNotBlank()} " +
                     "repositoryElapsed=${SystemClock.elapsedRealtime() - repositoryStartedAt}ms " +
                     "totalElapsed=${SystemClock.elapsedRealtime() - queuedAt}ms",
             )
+            onDone(savedPath.ifBlank { null })
         }
     }
 
     fun moveNote(
         note: Note,
         targetFolder: String,
+        onDone: (String?) -> Unit = {},
     ) {
         viewModelScope.launch {
             val normalizedTarget = normalizeFolderPath(targetFolder)
-            if (normalizedTarget.isNotBlank()) {
-                _tempLabels.update { it + normalizedTarget }
+            val savedPath = runCatching { repository.moveNoteFile(note.file.path, normalizedTarget) }.getOrDefault("")
+            if (savedPath.isNotBlank()) {
+                val oldNotePath = normalizeNotePath(note.file.path)
+                val newNotePath = normalizeNotePath(savedPath)
+                _selectedNotes.update { paths ->
+                    paths.mapTo(linkedSetOf()) { path -> if (normalizeNotePath(path) == oldNotePath) newNotePath else path }
+                }
+                _currentNote.update { current ->
+                    if (current != null && normalizeNotePath(current.file.path) == oldNotePath) {
+                        current.copy(file = java.io.File(newNotePath))
+                    } else {
+                        current
+                    }
+                }
             }
-            repository.moveNotesWithResult(listOf(note), normalizedTarget)
+            onDone(savedPath.ifBlank { null })
         }
     }
 
@@ -1796,6 +2024,7 @@ class MainViewModel(
         note: Note,
         oldFile: java.io.File? = null,
         saveHistory: Boolean = false,
+        onResult: (Boolean) -> Unit = {},
     ) {
         viewModelScope.launch {
             try {
@@ -1867,13 +2096,23 @@ class MainViewModel(
                             "saveNote outer trigger prepend folder=${finalNote.folder} path=${finalNote.file.path}",
                         )
                         prependNewNoteToFolderCustomOrder(finalNote.folder, finalNote.file.path)
-                        _homeScrollToTopEvents.value += 1
+                        if (!isDashboardSearchActive() && noteWillBeVisibleInCurrentFilter(finalNote)) {
+                            requestDashboardScroll(
+                                reason = DashboardScrollReason.NOTE_CREATED,
+                                action = DashboardScrollAction.REVEAL_PATH,
+                                targetPath = finalNote.file.path,
+                                waitForEditorClose = true,
+                            )
+                        }
                     } else {
                         KardLeafLog.d(
                             CUSTOM_SORT_TRACE_TAG,
                             "saveNote outer skip prepend wasNewNote=false folder=${finalNote.folder} path=${finalNote.file.path}",
                         )
                     }
+                    onResult(true)
+                } else {
+                    onResult(false)
                 }
             } catch (e: Exception) {
                 KardLeafLog.e(
@@ -1883,6 +2122,7 @@ class MainViewModel(
                     e,
                 )
                 KardLeafLog.e("MainViewModel", "Failed to save note", e)
+                onResult(false)
             }
         }
     }
@@ -1927,6 +2167,7 @@ class MainViewModel(
     }
 
     fun setSortOrder(order: PrefsManager.SortOrder) {
+        val previousSort = currentDashboardSort()
         val currentFilter = _currentFilter.value
         val folderFilter = currentFilter as? NoteFilter.Label
         val customSortKey = customSortStorageKeyFor(currentFilter)
@@ -1939,6 +2180,7 @@ class MainViewModel(
         )
         if (order == PrefsManager.SortOrder.CUSTOM && customSortKey != null) {
             enableCurrentFolderCustomSort(emptyList())
+            return
         } else if (isAllNotesFilter && customSortKey != null && order != PrefsManager.SortOrder.CUSTOM) {
             _customSortDragModeEnabled.value = false
             prefsManager.clearFolderSortSettings(customSortKey)
@@ -1956,9 +2198,11 @@ class MainViewModel(
             _sortOrder.value = order
             prefsManager.saveSortOrder(order)
         }
+        requestDashboardTopIfSortChanged(previousSort)
     }
 
     fun enableCurrentFolderCustomSort(initialPaths: Collection<String>) {
+        val previousSort = currentDashboardSort()
         val currentFilter = _currentFilter.value
         val customSortKey = customSortStorageKeyFor(currentFilter) ?: return
         val customSortName = customSortLogNameFor(currentFilter, customSortKey)
@@ -1979,6 +2223,7 @@ class MainViewModel(
             CUSTOM_SORT_TRACE_TAG,
             "enableCurrentFolderCustomSort saved target=$customSortName settingsAfter=$next orderAfter=${customSortPathSummary(prefsManager.getFolderCustomOrder(customSortKey))} folderSortVersion=${_folderSortVersion.value}",
         )
+        requestDashboardTopIfSortChanged(previousSort)
     }
 
     fun saveCurrentFolderCustomSortOrder(paths: Collection<String>) {
@@ -2002,6 +2247,7 @@ class MainViewModel(
     }
 
     fun applyCustomSortGlobally() {
+        val previousSort = currentDashboardSort()
         KardLeafLog.d(
             CUSTOM_SORT_TRACE_TAG,
             "applyCustomSortGlobally enter globalOrder=${_sortOrder.value} globalDirection=${_sortDirection.value} filter=${_currentFilter.value}",
@@ -2013,6 +2259,7 @@ class MainViewModel(
             CUSTOM_SORT_TRACE_TAG,
             "applyCustomSortGlobally saved globalOrder=${_sortOrder.value} folderSortVersion=${_folderSortVersion.value}",
         )
+        requestDashboardTopIfSortChanged(previousSort)
     }
 
     fun getFolderSortSettings(folder: String): PrefsManager.FolderSortSettings? {
@@ -2057,6 +2304,7 @@ class MainViewModel(
     }
 
     fun setSortDirection(direction: PrefsManager.SortDirection) {
+        val previousSort = currentDashboardSort()
         val currentFilter = _currentFilter.value
         val customSortKey = customSortStorageKeyFor(currentFilter)
         val customSortSettings = customSortKey?.let { prefsManager.getFolderSortSettings(it) }
@@ -2067,9 +2315,11 @@ class MainViewModel(
             _sortDirection.value = direction
             prefsManager.saveSortDirection(direction)
         }
+        requestDashboardTopIfSortChanged(previousSort)
     }
 
     fun setCurrentFolderSortOverrideEnabled(enabled: Boolean) {
+        val previousSort = currentDashboardSort()
         val folder = (_currentFilter.value as? NoteFilter.Label)?.name ?: return
         if (enabled) {
             val current = prefsManager.getFolderSortSettings(folder)
@@ -2081,6 +2331,7 @@ class MainViewModel(
             prefsManager.clearFolderSortSettings(folder)
         }
         _folderSortVersion.value += 1
+        requestDashboardTopIfSortChanged(previousSort)
     }
 
     fun setViewMode(mode: PrefsManager.ViewMode) {
@@ -2115,34 +2366,42 @@ class MainViewModel(
 
     fun onSearchQueryChanged(query: String) {
         KardLeafLog.d(SEARCH_TRACE_TAG, "ui query changed ${SearchQueryUtils.describeForLog(query)}")
+        invalidateDashboardScrollIntent()
         _searchQuery.value = query
     }
 
     fun setSearchMatchCase(enabled: Boolean) {
+        invalidateDashboardScrollIntent()
         _searchOptions.update { it.copy(matchCase = enabled) }
     }
 
     fun setSearchUseRegex(enabled: Boolean) {
+        invalidateDashboardScrollIntent()
         _searchOptions.update { it.copy(useRegex = enabled) }
     }
 
     fun setSearchMatchTitle(enabled: Boolean) {
+        invalidateDashboardScrollIntent()
         _searchOptions.update { if (enabled || it.matchContent) it.copy(matchTitle = enabled) else it }
     }
 
     fun setSearchMatchContent(enabled: Boolean) {
+        invalidateDashboardScrollIntent()
         _searchOptions.update { if (enabled || it.matchTitle) it.copy(matchContent = enabled) else it }
     }
 
     fun setSearchTag(tag: String?) {
+        invalidateDashboardScrollIntent()
         _searchOptions.update { it.copy(tag = tag) }
     }
 
     fun setSearchFolder(folder: String?) {
+        invalidateDashboardScrollIntent()
         _searchOptions.update { it.copy(folder = folder) }
     }
 
     fun resetSearchFilters() {
+        invalidateDashboardScrollIntent()
         _searchOptions.value = NoteSearchOptions()
     }
 
@@ -2166,6 +2425,34 @@ class MainViewModel(
 
     fun clearSelection() {
         _selectedNotes.value = emptySet()
+    }
+
+    fun mergeSelectedNotes(
+        selectedSnapshot: List<Note> = emptyList(),
+        options: MergeNotesOptions = MergeNotesOptions(),
+        onDone: (MergeNotesResult) -> Unit = {},
+    ) {
+        val selectedIds = (selectedSnapshot.map { it.file.path } + _selectedNotes.value.toList()).distinct()
+        if (selectedIds.size < 2) {
+            val sourceCount = (selectedIds.size - 1).coerceAtLeast(0)
+            onDone(MergeNotesResult(sourceCount = sourceCount, failedSourceCount = sourceCount))
+            return
+        }
+        clearSelection()
+        viewModelScope.launch {
+            val result = try {
+                repository.mergeNotes(selectedIds, options)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                KardLeafLog.e("KardLeafMerge", "mergeSelectedNotes failed", error)
+                MergeNotesResult(
+                    sourceCount = selectedIds.size - 1,
+                    failedSourceCount = selectedIds.size - 1,
+                )
+            }
+            onDone(result)
+        }
     }
 
     fun deleteSelectedNotes(
@@ -2249,8 +2536,7 @@ class MainViewModel(
             val moves = repository.moveNotesWithResult(notesToMove, targetFolder)
             if (moves.isNotEmpty()) {
                 pendingNoteUndo = PendingNoteUndo.MoveBack(moves)
-                _homeScrollToTopEvents.value += 1
-                runCatching { repository.refreshNotesFromExternalChange() }
+                runCatching { repository.refreshNotes() }
             }
         }
     }
@@ -2273,6 +2559,7 @@ class MainViewModel(
                 .map { it.title }
                 .toMutableSet()
             var copiedCount = 0
+            var firstCopiedNote: Note? = null
             val copiedPathPairs = mutableListOf<Pair<String, String>>()
             val folderNotesBeforeCopy = allNotesList.filter { note ->
                 normalizeFolderPath(note.folder) == normalizedTargetFolder && !note.isArchived && !note.isTrashed
@@ -2296,6 +2583,15 @@ class MainViewModel(
                 )
                 if (savedPath.isNotEmpty()) {
                     copiedCount += 1
+                    if (firstCopiedNote == null) {
+                        firstCopiedNote = sourceNote.copy(
+                            file = java.io.File(savedPath),
+                            title = java.io.File(savedPath).nameWithoutExtension,
+                            isArchived = false,
+                            isTrashed = false,
+                            deletedAt = null,
+                        )
+                    }
                     copiedPathPairs += normalizeNotePath(note.file.path) to normalizeNotePath(savedPath)
                 }
             }
@@ -2313,40 +2609,40 @@ class MainViewModel(
                 current.add(normalizedTargetFolder)
                 _tempLabels.value = current
             }
-            if (copiedCount > 0 && shouldScrollHomeToTopAfterDuplicate(normalizedTargetFolder)) {
-                _homeScrollToTopEvents.value += 1
+            firstCopiedNote?.takeIf { !isDashboardSearchActive() && noteWillBeVisibleInCurrentFilter(it) }?.let { copiedNote ->
+                requestDashboardScroll(
+                    reason = DashboardScrollReason.NOTE_DUPLICATED,
+                    action = DashboardScrollAction.REVEAL_PATH,
+                    targetPath = copiedNote.file.path,
+                )
             }
             onDone(copiedCount)
         }
     }
 
-    private fun shouldScrollHomeToTopAfterDuplicate(targetFolder: String): Boolean {
+    private fun noteWillBeVisibleInCurrentFilter(note: Note): Boolean {
         val filter = _currentFilter.value
-        val copyWillBeVisible = when (filter) {
+        if (filter !is NoteFilter.Trash && filter !is NoteFilter.QuickNotes && isHiddenFolderPath(note.folder)) {
+            return false
+        }
+        return when (filter) {
             NoteFilter.All,
-            NoteFilter.Recent -> true
-            NoteFilter.Favorites -> true
-            is NoteFilter.Random -> true
-            NoteFilter.QuickNotes -> targetFolder == PrefsManager.DEFAULT_QUICK_NOTE_FOLDER_NAME
+            NoteFilter.Recent -> !note.isArchived && !note.isTrashed
+            NoteFilter.Favorites -> note.isFavorite && !note.isArchived && !note.isTrashed
+            is NoteFilter.Random -> !note.isArchived && !note.isTrashed
+            NoteFilter.QuickNotes ->
+                note.folder == PrefsManager.DEFAULT_QUICK_NOTE_FOLDER_NAME ||
+                    note.folder == PrefsManager.LEGACY_DRAFT_FOLDER_NAME
             is NoteFilter.Label -> {
                 val folder = normalizeFolderPath(filter.name)
-                targetFolder == folder || (filter.recursive && targetFolder.startsWith("$folder/"))
+                val noteFolder = normalizeFolderPath(note.folder)
+                !note.isArchived && !note.isTrashed &&
+                    (noteFolder == folder || (filter.recursive && noteFolder.startsWith("$folder/")))
             }
-            NoteFilter.Archive,
-            NoteFilter.Trash -> false
-            is NoteFilter.YamlTag -> false
+            NoteFilter.Archive -> note.isArchived && !note.isTrashed
+            NoteFilter.Trash -> note.isTrashed
+            is NoteFilter.YamlTag -> filter.name in note.tags && !note.isArchived && !note.isTrashed
         }
-        if (!copyWillBeVisible) return false
-        if (filter is NoteFilter.Recent) return true
-
-        val folderSettings = (filter as? NoteFilter.Label)
-            ?.takeIf { !it.recursive }
-            ?.name
-            ?.let { prefsManager.getFolderSortSettings(it) }
-        val effectiveSortOrder = folderSettings?.order ?: _sortOrder.value
-        val effectiveSortDirection = folderSettings?.direction ?: _sortDirection.value
-        return effectiveSortOrder == PrefsManager.SortOrder.DATE_MODIFIED &&
-            effectiveSortDirection == PrefsManager.SortDirection.DESCENDING
     }
 
     private fun buildDuplicateNoteTitle(
@@ -2518,22 +2814,44 @@ class MainViewModel(
 
     fun addTagsToSelectedNotes(
         tags: Collection<String>,
-        onDone: () -> Unit = {},
+        onDone: (successCount: Int, failedCount: Int) -> Unit = { _, _ -> },
     ) {
         val selectedIds = _selectedNotes.value.toList()
         val normalizedTags = NoteFormatUtils.normalizeTags(tags)
         if (selectedIds.isEmpty() || normalizedTags.isEmpty()) return
+        clearSelection()
         viewModelScope.launch {
-            val notesByPath = allNotes.first().associateBy { it.file.path }
+            val notesByPath = allNotesIncludingHidden.first().associateBy { it.file.path }
+            var successCount = 0
+            var failedCount = 0
             selectedIds.forEach { noteId ->
                 val note = notesByPath[noteId]
-                val mergedTags = NoteFormatUtils.normalizeTags((note?.tags.orEmpty()) + normalizedTags)
-                KardLeafLog.d(YAML_TAG_TRACE_TAG, "addTagsToSelectedNotes noteId=$noteId currentTags=${note?.tags.orEmpty()} inputTags=$normalizedTags mergedTags=$mergedTags")
-                repository.updateNoteTags(noteId, mergedTags)
+                if (note == null) {
+                    failedCount++
+                    return@forEach
+                }
+                val mergedTags = NoteFormatUtils.normalizeTags(note.tags + normalizedTags)
+                KardLeafLog.d(YAML_TAG_TRACE_TAG, "addTagsToSelectedNotes noteId=$noteId currentTags=${note.tags} inputTags=$normalizedTags mergedTags=$mergedTags")
+                val updated = try {
+                    repository.updateNoteTags(noteId, mergedTags)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    KardLeafLog.e(YAML_TAG_TRACE_TAG, "addTagsToSelectedNotes failed noteId=$noteId", error)
+                    false
+                }
+                if (updated) successCount++ else failedCount++
             }
-            clearSelection()
-            repository.refreshNotes()
-            onDone()
+            if (successCount > 0) {
+                try {
+                    repository.refreshNotes()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    KardLeafLog.e(YAML_TAG_TRACE_TAG, "addTagsToSelectedNotes refresh failed", error)
+                }
+            }
+            onDone(successCount, failedCount)
         }
     }
 
@@ -2571,10 +2889,24 @@ class MainViewModel(
     suspend fun getNoteForProperties(noteId: String): Note? =
         editorViewModel.getNoteForProperties(noteId)
 
+    fun updateNoteTimestamps(
+        noteId: String,
+        createdAtMs: Long,
+        updatedAtMs: Long,
+        onComplete: (Note?) -> Unit = {},
+    ) = editorViewModel.updateNoteTimestamps(noteId, createdAtMs, updatedAtMs) { updated ->
+        if (updated != null && _currentNote.value?.id == noteId) {
+            _currentNote.value = updated
+        }
+        onComplete(updated)
+    }
+
     suspend fun getFullNoteForShare(noteId: String): Note? =
         editorViewModel.getFullNoteForShare(noteId)
 
     suspend fun getFullNotesForShare(notes: List<Note>): List<Note>? = editorViewModel.getFullNotesForShare(notes)
+
+    suspend fun getFullNotesForGallery(notes: List<Note>): List<Note> = editorViewModel.getFullNotesForGallery(notes)
 
     suspend fun getNoteTextStatsForProperties(noteId: String): NoteTextStats =
         editorViewModel.getNoteTextStatsForProperties(noteId)
@@ -2628,15 +2960,47 @@ class MainViewModel(
     // region 隐私空间
     val privacyNotes = privacyViewModel.notes
 
-    fun savePrivacyNote(id: Long, title: String, content: String, onDone: () -> Unit = {}) {
+    internal fun hasPrivacyVault(onResult: (Boolean) -> Unit) = privacyViewModel.hasVault(onResult)
+
+    internal fun initializePrivacyVault(
+        password: String,
+        onResult: (Result<Unit>) -> Unit,
+    ) = privacyViewModel.initialize(password, onResult)
+
+    internal fun unlockPrivacyVault(
+        password: String,
+        onResult: (Result<Unit>) -> Unit,
+    ) = privacyViewModel.unlock(password, onResult)
+
+    internal fun preparePrivacyBiometricUnlock(
+        onResult: (Result<com.kangle.kardleaf.data.repository.note.NotePrivacyStore.BiometricUnlockRequest?>) -> Unit,
+    ) = privacyViewModel.prepareBiometricUnlock(onResult)
+
+    internal fun unlockPrivacyVaultWithBiometric(
+        request: com.kangle.kardleaf.data.repository.note.NotePrivacyStore.BiometricUnlockRequest,
+        onResult: (Result<Unit>) -> Unit,
+    ) = privacyViewModel.unlockWithBiometric(request, onResult)
+
+    internal fun lockPrivacyVault() = privacyViewModel.lock()
+
+    suspend fun changePrivacyVaultPassword(
+        currentPassword: String,
+        newPassword: String,
+    ): Result<Unit> = runCatching { repository.changePrivacyVaultPassword(currentPassword, newPassword) }
+
+    suspend fun removePrivacyVaultPassword(currentPassword: String): Result<Unit> =
+        runCatching { repository.removePrivacyVaultPassword(currentPassword) }
+
+    fun savePrivacyNote(
+        id: Long,
+        title: String,
+        content: String,
+        onDone: (Result<Long>) -> Unit = {},
+    ) {
         privacyViewModel.save(id, title, content, onDone)
     }
 
-    fun savePrivacyNoteAndReturnId(id: Long, title: String, content: String, onSaved: (Long) -> Unit = {}) {
-        privacyViewModel.saveAndReturnId(id, title, content, onSaved)
-    }
-
-    fun deletePrivacyNote(id: Long) = privacyViewModel.delete(id)
+    fun deletePrivacyNote(id: Long, onDone: (Result<Unit>) -> Unit = {}) = privacyViewModel.delete(id, onDone)
 
     fun exportPrivacyNotes(onSuccess: (String) -> Unit, onError: (String) -> Unit) =
         privacyViewModel.export(onSuccess, onError)
@@ -2675,7 +3039,7 @@ class MainViewModel(
                 "rename folder vm start oldHash=${oldPath.hashCode()} newHash=${newPath.hashCode()} " +
                     "queueElapsed=${repositoryStartedAt - queuedAt}ms",
             )
-            val success = repository.renameLabel(oldPath, newPath)
+            val success = runCatching { repository.renameLabel(oldPath, newPath) }.getOrDefault(false)
             if (success) {
                 val current = _tempLabels.value.toMutableSet()
                 val oldPrefix = "$oldPath/"
@@ -2688,6 +3052,15 @@ class MainViewModel(
                         }
                     }.toSet()
                 _tempLabels.value = renamedTempLabels
+                _selectedNotes.update { paths ->
+                    paths.mapTo(linkedSetOf()) { path -> remapTreePath(path, oldPath, newPath) }
+                }
+                _currentNote.update { current ->
+                    current?.let { note ->
+                        val renamedPath = remapTreePath(normalizeNotePath(note.file.path), oldPath, newPath)
+                        if (renamedPath == normalizeNotePath(note.file.path)) note else note.copy(file = java.io.File(renamedPath))
+                    }
+                }
 
                 val filter = _currentFilter.value
                 if (filter is NoteFilter.Label) {
@@ -2704,7 +3077,7 @@ class MainViewModel(
                 }
                 onSuccess()
             } else {
-                onError("Folder rename failed")
+                onError("文件夹重命名或移动失败")
             }
             KardLeafLog.d(
                 FILE_TREE_TRACE_TAG,
@@ -2714,6 +3087,13 @@ class MainViewModel(
             )
         }
     }
+
+    private fun remapTreePath(path: String, oldPath: String, newPath: String): String =
+        when {
+            path == oldPath -> newPath
+            path.startsWith("$oldPath/") -> newPath + path.removePrefix(oldPath)
+            else -> path
+        }
 
     fun toggleFavoriteSelectedNotes() {
         val selectedIds = _selectedNotes.value.toList()

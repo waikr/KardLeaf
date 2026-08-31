@@ -120,7 +120,7 @@ export function createEditor(
     collapseOnSelectionFacet.of(true),
     mouseSelectingExtension,
     scrollMarginsCompartment.of(EditorView.scrollMargins.of(() => ({ bottom: 0 }))),
-    contentPaddingCompartment.of(EditorView.contentAttributes.of({ style: 'padding-bottom: 0px' })),
+    contentPaddingCompartment.of(EditorView.contentAttributes.of({ style: 'padding-bottom: 32px' })),
     history(),
     drawSelection(),
     dropCursor(),

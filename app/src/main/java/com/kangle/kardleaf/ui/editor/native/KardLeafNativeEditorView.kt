@@ -475,12 +475,21 @@ class KardLeafEditorController {
         selection: TextRange? = null,
     ) {
         val attached = currentEditorView()
+        KardLeafLog.d(
+            EDITOR_UNDO_TAG,
+            "controller replaceAll path=${if (attached != null) "attached" else "external"} " +
+                "newTextLen=${newText.length} selection=${selection?.start ?: -1}..${selection?.end ?: -1}",
+        )
         if (attached != null) {
             attached.replaceContent(newText, selection)
             cachedSelection = attached.getContentSelection()
         } else {
             cachedContent = newText
             cachedSelection = selection ?: TextRange(newText.length, newText.length)
+            KardLeafLog.d(
+                EDITOR_UNDO_TAG,
+                "controller replaceAll external fullDocumentUpdate controllerHistory=none",
+            )
             notifyExternalContentUpdater()
         }
     }

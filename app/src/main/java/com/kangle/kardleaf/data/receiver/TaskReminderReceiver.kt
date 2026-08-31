@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.core.app.NotificationManagerCompat
 import com.kangle.kardleaf.BuildConfig
 import com.kangle.kardleaf.data.database.AppDatabase
+import com.kangle.kardleaf.data.database.TaskEntity
 import com.kangle.kardleaf.data.task.TaskReminderScheduler
 import com.kangle.kardleaf.data.task.TaskReminderService
 import com.kangle.kardleaf.data.utils.KardLeafLog
@@ -37,6 +38,20 @@ class TaskReminderReceiver : BroadcastReceiver() {
         }
         if (taskId <= 0L) {
             KardLeafLog.w(TASK_REMINDER_LOG_TAG, "receiver skip invalidTaskId=$taskId")
+            return
+        }
+
+        if (intent.getBooleanExtra(TaskReminderScheduler.EXTRA_TEST_REMINDER, false)) {
+            val now = System.currentTimeMillis()
+            val task = TaskEntity(
+                id = taskId,
+                taskText = intent.getStringExtra(TaskReminderScheduler.EXTRA_TASK_TEXT).orEmpty(),
+                reminderAt = now,
+                createdAt = now,
+                updatedAt = now,
+            )
+            KardLeafLog.i(TASK_REMINDER_LOG_TAG, "receiver fired test id=$taskId")
+            TaskReminderScheduler(context).deliverReminder(task)
             return
         }
 

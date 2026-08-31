@@ -27,12 +27,18 @@ internal class NoteHistoryStore(
     fun searchPreview(query: String): Flow<List<NoteHistory>> {
         val safeQuery = query.trim()
         KardLeafLog.d(SEARCH_TRACE_TAG, "history request ${SearchQueryUtils.describeForLog(query)}")
-        if (!SearchQueryUtils.isMeaningfulSearchQuery(safeQuery)) {
-            KardLeafLog.d(SEARCH_TRACE_TAG, "history skip reason=notMeaningful ${SearchQueryUtils.describeForLog(query)}")
+        if (safeQuery.isBlank()) {
+            KardLeafLog.d(SEARCH_TRACE_TAG, "history skip reason=blankQuery ${SearchQueryUtils.describeForLog(query)}")
             return flowOf(emptyList())
         }
-        return dao.searchHistoryPreview(safeQuery, SEARCH_RESULT_LIMIT).map { histories ->
-            KardLeafLog.d(SEARCH_TRACE_TAG, "history result queryLen=${safeQuery.length} count=${histories.size}")
+        return dao.searchHistoryPreview(SearchQueryUtils.escapeLikePattern(safeQuery), SEARCH_RESULT_LIMIT).map { histories ->
+            val previewLimited = histories.count { it.content.length >= PREVIEW_CHAR_LIMIT }
+            KardLeafLog.d(
+                SEARCH_TRACE_TAG,
+                "history result queryLen=${safeQuery.length} count=${histories.size} limit=$SEARCH_RESULT_LIMIT " +
+                    "previewLimit=$PREVIEW_CHAR_LIMIT previewLimited=$previewLimited " +
+                    "maxReturnedContentLen=${histories.maxOfOrNull { it.content.length } ?: 0}",
+            )
             histories.map { it.toNoteHistory() }
         }
     }

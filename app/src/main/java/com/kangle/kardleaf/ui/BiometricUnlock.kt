@@ -5,6 +5,7 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import javax.crypto.Cipher
 
 fun isBiometricUnlockAvailable(context: Context): Boolean =
     BiometricManager.from(context).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
@@ -59,4 +60,48 @@ fun showBiometricUnlockPrompt(
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .build()
     prompt.authenticate(promptInfo)
+}
+
+fun showBiometricCryptoUnlockPrompt(
+    context: Context,
+    title: String,
+    subtitle: String,
+    cipher: Cipher,
+    onSuccess: (Cipher) -> Unit,
+    onError: (String) -> Unit = {},
+) {
+    val activity = context as? FragmentActivity
+    if (activity == null || !isBiometricUnlockAvailable(context)) {
+        onError("当前设备未检测到可用指纹")
+        return
+    }
+    val prompt = BiometricPrompt(
+        activity,
+        ContextCompat.getMainExecutor(context),
+        object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                result.cryptoObject?.cipher?.let(onSuccess) ?: onError("指纹快捷密钥不可用")
+            }
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                if (errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON &&
+                    errorCode != BiometricPrompt.ERROR_USER_CANCELED &&
+                    errorCode != BiometricPrompt.ERROR_CANCELED
+                ) {
+                    onError(errString.toString())
+                }
+            }
+
+            override fun onAuthenticationFailed() {
+                onError("指纹验证失败")
+            }
+        },
+    )
+    val promptInfo = BiometricPrompt.PromptInfo.Builder()
+        .setTitle(title)
+        .setSubtitle(subtitle)
+        .setNegativeButtonText("使用密码")
+        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        .build()
+    prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))
 }

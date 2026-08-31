@@ -2,6 +2,7 @@
 
 import com.kangle.kardleaf.data.utils.EditorOpenSession
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.SearchQueryUtils
 import com.kangle.kardleaf.ui.editor.*
 import com.kangle.kardleaf.ui.editor.api.EditorFastScrollMetrics
 import com.kangle.kardleaf.ui.editor.codemirror.CodeMirrorWebViewScrollController
@@ -45,11 +46,13 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -158,7 +161,9 @@ import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import com.kangle.kardleaf.data.utils.NoteTextStats
 import java.io.File
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -215,6 +220,16 @@ private const val DIRECT_EDIT_MAX_CHARS = 600_000
 private const val WEBVIEW_PREVIEW_MAX_CHARS = 300_000
 private const val USER_PERF_LARGE_NOTE_MIN_CHARS = 50_000
 private const val LARGE_TEXT_PREVIEW_CHUNK_CHARS = 300
+private val EDITOR_DATE_TIME_FORMATS = listOf(
+    "yyyy-MM-dd HH:mm:ss",
+    "yyyy-MM-dd HH:mm",
+    "yyyy-MM-dd",
+    "yyyy/MM/dd HH:mm",
+    "yyyy年MM月dd日 HH:mm",
+    "yyyy年MM月dd日",
+    "MM月dd日 HH:mm",
+    "HH:mm:ss",
+)
 
 private fun KardLeafAiAction.localizedTitle(): String =
     when (this) {
@@ -313,6 +328,22 @@ private fun findMarkdownSectionRange(content: String, cursor: Int): KardLeafAiTe
     return KardLeafAiTextRange(headingStart, content.length)
 }
 
+private fun findMarkdownHeadingSectionRange(
+    content: String,
+    heading: MarkdownHeading,
+): KardLeafAiTextRange? {
+    val headings = extractMarkdownHeadings(content)
+    val headingIndex = headings.indexOfFirst { it.startOffset == heading.startOffset }
+    if (headingIndex < 0) return null
+    val current = headings[headingIndex]
+    val start = content.lastIndexOf('\n', (current.startOffset - 1).coerceAtLeast(0)) + 1
+    val nextHeading = headings.drop(headingIndex + 1).firstOrNull { it.level <= current.level }
+    val end = nextHeading?.let {
+        content.lastIndexOf('\n', (it.startOffset - 1).coerceAtLeast(0)) + 1
+    } ?: content.length
+    return KardLeafAiTextRange(start, end)
+}
+
 private fun findAiTextRange(snapshot: KardLeafEditorSnapshot, scope: KardLeafAiTextScope): KardLeafAiTextRange {
     val content = snapshot.content
     val selectionStart = minOf(snapshot.selection.start, snapshot.selection.end).coerceIn(0, content.length)
@@ -387,7 +418,7 @@ fun EditorScreen(
     privacyInitialTitle: String? = null,
     privacyInitialContent: String? = null,
     privacyDocumentKey: String? = null,
-    onSavePrivacyNote: ((Long, String, String, (Long) -> Unit) -> Unit)? = null,
+    onSavePrivacyNote: ((Long, String, String, (Result<Long>) -> Unit) -> Unit)? = null,
     onDeletePrivacyNote: (() -> Unit)? = null,
     onPickImage: (((Uri) -> Unit) -> Unit)? = null,
     openDrawingPadOnStart: Boolean = false,
@@ -495,10 +526,14 @@ fun EditorScreen(
     val externalDraftIdentityKey = remember(externalDraft) { System.identityHashCode(externalDraft) }
     val externalDraftFolderKey = externalDraft?.folder?.takeIf { it.isNotBlank() } ?: initialLabel
     val editorDocumentKey = privacyDocumentKey ?: currentNote?.id ?: "external:$externalDraftIdentityKey:$externalDraftFolderKey"
+    val isOnlineWebNote =
+        (currentNote?.sourceType ?: externalDraft?.sourceType)
+            .equals(NoteFormatUtils.SOURCE_TYPE_WEB_ONLINE, ignoreCase = true)
     val mindMapStateKey: Any = editorOpenSession?.sessionId ?: editorDocumentKey
     val isMindMapNoteFromFile = currentNote?.noteType.equals(NoteFormatUtils.NOTE_TYPE_MINDMAP, ignoreCase = true)
     var mindMapModeActivated by remember(editorDocumentKey) { mutableStateOf(false) }
     var mindMapDisplayTitle by remember(editorDocumentKey) { mutableStateOf("") }
+    var mindMapTitleOverride by remember(editorDocumentKey) { mutableStateOf<String?>(null) }
     val isMindMapNote = isMindMapNoteFromFile || mindMapModeActivated
     var lastValidEditorDisplayTitle by remember { mutableStateOf("") }
     val isEmptyExternalTitleState =
@@ -529,7 +564,7 @@ fun EditorScreen(
         null
     }
     var switchedEditorSnapshot by remember(editorDocumentKey) { mutableStateOf<KardLeafEditorSnapshot?>(null) }
-    val editorSurfaceTitle = switchedEditorSnapshot?.title ?: displayInitialTitle
+    val editorSurfaceTitle = switchedEditorSnapshot?.title ?: mindMapTitleOverride ?: displayInitialTitle
     val editorSurfaceContent = switchedEditorSnapshot?.content ?: initialContent
     val editorSurfaceSelection = switchedEditorSnapshot?.selection ?: defaultEditOpenSelection
     val editorContentLength = remember(editorDocumentKey, editorSurfaceContent.length) {
@@ -610,10 +645,10 @@ fun EditorScreen(
     val showsLargePlainTextPreview = usesLargePlainTextPreview || largePlainPreviewSnapshot != null
     val keepsModeSurfacesAlive = usesQuillpadStyleEditor || usesCodeMirrorLikeEditor
     var editorSurfaceCreated by remember(editorDocumentKey) {
-        mutableStateOf(defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT)
+        mutableStateOf(!isOnlineWebNote && defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT)
     }
     var previewSurfaceCreated by remember(editorDocumentKey) {
-        mutableStateOf(defaultOpenNoteMode != KardLeafCustomFeatures.OpenNoteMode.EDIT)
+        mutableStateOf(isOnlineWebNote || defaultOpenNoteMode != KardLeafCustomFeatures.OpenNoteMode.EDIT)
     }
     val usesOpeningEditShell =
         (isOpeningNoteContent || isShowingPartialLargeNote) &&
@@ -652,15 +687,23 @@ fun EditorScreen(
         isOpeningNoteContent,
         isShowingPartialLargeNote,
         usesOpeningEditShell,
+        isOnlineWebNote,
     ) {
         mutableStateOf(
-            usesOpeningEditShell ||
-                (!isOpeningNoteContent &&
-                    !blocksDirectEditForLargeNote &&
-                    !defersAutoEditForLargeNote &&
-                    (isNewPrivacyNote ||
-                        (!isPrivacyEditor && currentNote == null) ||
-                        defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT)),
+            !isOnlineWebNote &&
+                (
+                    usesOpeningEditShell ||
+                        (
+                            !isOpeningNoteContent &&
+                                !blocksDirectEditForLargeNote &&
+                                !defersAutoEditForLargeNote &&
+                                (
+                                    isNewPrivacyNote ||
+                                        (!isPrivacyEditor && currentNote == null) ||
+                                        defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT
+                                )
+                        )
+                ),
         )
     }
     var editEnterTraceStartMs by remember(editorDocumentKey) { mutableStateOf(0L) }
@@ -817,18 +860,25 @@ fun EditorScreen(
     var showCreateLabelDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var lastMoreMenuDismissAt by remember { mutableStateOf(0L) }
+    var showKernelMenu by remember { mutableStateOf(false) }
     var showHistoryDialog by remember { mutableStateOf(false) }
     var showNoteInfoDialog by remember { mutableStateOf(false) }
     var showHeadingMenu by remember { mutableStateOf(false) }
     var lastHeadingMenuDismissAt by remember { mutableStateOf(0L) }
     var showMathMenu by remember { mutableStateOf(false) }
     var lastMathMenuDismissAt by remember { mutableStateOf(0L) }
+    var showDateTimeMenu by remember { mutableStateOf(false) }
+    var lastDateTimeMenuDismissAt by remember { mutableStateOf(0L) }
+    var showCustomSymbolsMenu by remember { mutableStateOf(false) }
     var showNoteSearch by remember { mutableStateOf(false) }
     var showDrawingPad by remember { mutableStateOf(false) }
     var isDownloadingWebImages by remember(editorDocumentKey) { mutableStateOf(false) }
     var showDownloadWebImagesAction by remember(editorDocumentKey) { mutableStateOf(false) }
     var showWebClipImportDialog by remember(editorDocumentKey) { mutableStateOf(false) }
     var webImageProgress by remember(editorDocumentKey) { mutableStateOf<WebClipImageProgress?>(null) }
+    var showOfflineWebEditDialog by remember { mutableStateOf(false) }
+    var isOffliningOnlineWeb by remember { mutableStateOf(false) }
+    var pendingOfflineWebEdit by remember { mutableStateOf(false) }
     var editingDrawingReference by remember(editorDocumentKey) { mutableStateOf<String?>(null) }
     var editingDrawingSource by remember(editorDocumentKey) { mutableStateOf<String?>(null) }
     var previewImageTargets by remember(editorDocumentKey) { mutableStateOf(emptyList<KardLeafImageClickTarget>()) }
@@ -894,12 +944,14 @@ fun EditorScreen(
     val latestNoteSidePanelOffsetPx by rememberUpdatedState(noteSidePanelOffsetPx)
     var isKeyboardVisible by remember { mutableStateOf(false) }
     var outlineHeadings by remember { mutableStateOf<List<MarkdownHeading>>(emptyList()) }
+    var selectedOutlineHeadingStartOffset by remember(editorDocumentKey) { mutableStateOf<Int?>(null) }
     var showMindMap by remember(mindMapStateKey) { mutableStateOf(false) }
     var mindMapAutoOpenHandled by remember(mindMapStateKey) { mutableStateOf(false) }
     var mindMapDocument by remember(mindMapStateKey) { mutableStateOf<MindMapDocument?>(null) }
     var mindMapUnavailableTitle by remember(mindMapStateKey) { mutableStateOf<String?>(null) }
     var mindMapUnavailableMessage by remember(mindMapStateKey) { mutableStateOf<String?>(null) }
-    var mindMapInitialEditIndex by remember(mindMapStateKey) { mutableStateOf<Int?>(null) }
+    var mindMapHistorySyncPending by remember(mindMapStateKey) { mutableStateOf(false) }
+    var mindMapInitialEditIndex by remember { mutableStateOf<Int?>(null) }
     var shouldShowBottomToolbar by remember { mutableStateOf(false) }
     var editorFocusRequestToken by remember(editorDocumentKey) { mutableStateOf(0) }
     var hasRequestedNewNoteKeyboard by remember(editorDocumentKey) { mutableStateOf(false) }
@@ -1386,6 +1438,7 @@ fun EditorScreen(
         noteTypeOverride: String? = null,
     ): Note {
         val snapshotTitleForSave = when {
+            showMindMap && mindMapTitleOverride != null -> mindMapTitleOverride.orEmpty()
             hideQuickNoteTitleInEditor && snapshot.title.isBlank() -> currentNote?.title.orEmpty()
             hideInitialTitleInEditor && snapshot.title.isBlank() -> rawInitialTitle
             else -> snapshot.title
@@ -1492,11 +1545,16 @@ fun EditorScreen(
                         privacyTitle != privacyInitialTitle.orEmpty().ifBlank { "未命名" } ||
                         snapshot.content != privacyInitialContent.orEmpty()
                     if (isChanged) {
-                        onSavePrivacyNote?.invoke(effectivePrivacyNoteId, privacyTitle, snapshot.content) { savedId ->
-                            effectivePrivacyNoteId = savedId
+                        onSavePrivacyNote?.invoke(effectivePrivacyNoteId, privacyTitle, snapshot.content) { result ->
+                            result.onSuccess { savedId ->
+                                effectivePrivacyNoteId = savedId
+                                privacyEditorDirty = false
+                                if (showToast) context.showToast(localizedText("已保存", "Saved"))
+                            }.onFailure { error ->
+                                privacyEditorDirty = true
+                                context.showToast(error.message ?: localizedText("隐私笔记保存失败", "Failed to save protected note"))
+                            }
                         }
-                        privacyEditorDirty = false
-                        if (showToast) context.showToast(localizedText("已保存", "Saved"))
                         KardLeafLog.d(
                             EDITOR_TRACE_TAG,
                             "savePrivacyNote dispatched key=$editorDocumentKey id=$effectivePrivacyNoteId elapsed=${SystemClock.elapsedRealtime() - startMs}ms",
@@ -1750,6 +1808,7 @@ fun EditorScreen(
 
     fun switchEditorKernel(targetKernel: PrefsManager.EditorKernel) {
         showMoreMenu = false
+        showKernelMenu = false
         showLabelMenu = false
         showHeadingMenu = false
         showMathMenu = false
@@ -1791,11 +1850,29 @@ fun EditorScreen(
     }
 
     fun refreshMindMapFromEditor() {
-        if (!showMindMap) return
+        if (!showMindMap || mindMapHistorySyncPending) return
         prepareMarkdownMindMap(editorController.getText()).also { result ->
             mindMapDocument = result.document
             mindMapUnavailableTitle = result.unavailableTitle
             mindMapUnavailableMessage = result.unavailableMessage
+        }
+    }
+
+    fun refreshMindMapAfterHistory() {
+        if (!showMindMap) return
+        mindMapHistorySyncPending = true
+        val requested = editorController.requestExternalSnapshot { snapshot ->
+            mindMapHistorySyncPending = false
+            prepareMarkdownMindMap(snapshot.content).also { result ->
+                mindMapDocument = result.document
+                mindMapUnavailableTitle = result.unavailableTitle
+                mindMapUnavailableMessage = result.unavailableMessage
+            }
+            syncUndoRedoState()
+        }
+        if (!requested) {
+            mindMapHistorySyncPending = false
+            refreshMindMapFromEditor()
         }
     }
 
@@ -2129,17 +2206,76 @@ fun EditorScreen(
         result: MindMapEditResult?,
         refreshPreview: Boolean = true,
     ): Boolean {
-        if (result == null || result.content == snapshot.content) return false
+        val previousDocument = prepareMarkdownMindMap(snapshot.content).document
+        val resultContent = result?.content
+        val resultHasCrLf = resultContent?.contains("\r\n") == true
+        val resultHasBareLf = resultContent?.replace("\r\n", "")?.contains('\n') == true
+        KardLeafLog.d(
+            MIND_MAP_GESTURE_TRACE_TAG,
+            "edit-apply start result=${result != null} changed=${resultContent != null && resultContent != snapshot.content} " +
+                "oldLen=${snapshot.content.length} oldHash=${snapshot.content.hashCode()} " +
+                "newLen=${resultContent?.length ?: -1} newHash=${resultContent?.hashCode() ?: 0} " +
+                "newHasCrLf=$resultHasCrLf newHasBareLf=$resultHasBareLf " +
+                "newMixedLineEndings=${resultHasCrLf && resultHasBareLf} " +
+                "selection=${result?.selection?.start ?: -1}..${result?.selection?.end ?: -1} " +
+                "nodeTitleLen=${result?.nodeTitle?.length ?: -1} nodeTitleEndsWithHash=${result?.nodeTitle?.endsWith('#') == true}",
+        )
+        if (result == null || result.content == snapshot.content) {
+            previousDocument?.let {
+                mindMapDocument = it
+                mindMapUnavailableTitle = null
+                mindMapUnavailableMessage = null
+            }
+            KardLeafLog.d(MIND_MAP_GESTURE_TRACE_TAG, "edit-apply skipped reason=${if (result == null) "no-result" else "unchanged"}")
+            return false
+        }
+        val prepared = prepareMarkdownMindMap(result.content)
+        if (prepared.document == null) {
+            KardLeafLog.d(
+                MIND_MAP_GESTURE_TRACE_TAG,
+                "edit-apply rejected reason=invalid-document message=${prepared.unavailableMessage}",
+            )
+            if (previousDocument != null) {
+                mindMapDocument = previousDocument
+                mindMapUnavailableTitle = null
+                mindMapUnavailableMessage = null
+            } else {
+                mindMapDocument = null
+                mindMapUnavailableTitle = prepared.unavailableTitle
+                mindMapUnavailableMessage = prepared.unavailableMessage
+            }
+            return false
+        }
         editorController.setSelection(0, snapshot.content.length)
         editorController.replaceSelection(result.content)
+        if (editorController.getText() != result.content) {
+            KardLeafLog.e(
+                MIND_MAP_GESTURE_TRACE_TAG,
+                "edit-apply rollback reason=editor-content-mismatch " +
+                    "expectedLen=${result.content.length} actualLen=${editorController.getText().length} " +
+                    "expectedHash=${result.content.hashCode()} actualHash=${editorController.getText().hashCode()}",
+            )
+            if (previousDocument != null) {
+                editorController.replaceAll(snapshot.content, snapshot.selection)
+                mindMapDocument = previousDocument
+                mindMapUnavailableTitle = null
+                mindMapUnavailableMessage = null
+                syncUndoRedoState()
+            }
+            return false
+        }
         editorController.setSelection(result.selection.start, result.selection.end)
         syncUndoRedoState()
-        prepareMarkdownMindMap(result.content).also { prepared ->
-            mindMapDocument = prepared.document
-            mindMapUnavailableTitle = prepared.unavailableTitle
-            mindMapUnavailableMessage = prepared.unavailableMessage
-        }
+        mindMapDocument = prepared.document
+        mindMapUnavailableTitle = prepared.unavailableTitle
+        mindMapUnavailableMessage = prepared.unavailableMessage
         markEditorDirty()
+        KardLeafLog.d(
+            MIND_MAP_GESTURE_TRACE_TAG,
+            "edit-apply applied nodes=${prepared.document?.nodes?.size ?: 0} controllerLen=${editorController.getText().length} " +
+                "controllerHash=${editorController.getText().hashCode()} editorDirty=${viewModel.editorDirty.value} " +
+                "refreshPreview=$refreshPreview",
+        )
         if (refreshPreview && !showMindMap && !isEditing) {
             renderPreviewSnapshot(snapshot.copy(content = result.content, selection = result.selection))
         }
@@ -2343,7 +2479,7 @@ fun EditorScreen(
     fun undoContent() {
         if (!canUndo && !editorController.canUndo()) return
         editorController.undo()
-        refreshMindMapFromEditor()
+        refreshMindMapAfterHistory()
         syncUndoRedoState()
         markEditorDirty()
     }
@@ -2351,7 +2487,7 @@ fun EditorScreen(
     fun redoContent() {
         if (!canRedo && !editorController.canRedo()) return
         editorController.redo()
-        refreshMindMapFromEditor()
+        refreshMindMapAfterHistory()
         syncUndoRedoState()
         markEditorDirty()
     }
@@ -2379,6 +2515,9 @@ fun EditorScreen(
         noteReplaceFocused = false
         noteSearchRequestToken++
         editorController.clearSearchHighlights()
+        if (usesCodeMirrorLikeEditor) {
+            editorController.executeCommand("clearSearchState", "close")
+        }
         if (searchHadFocus) {
             focusManager.clearFocus(force = true)
             keyboardController?.hide()
@@ -2412,6 +2551,9 @@ fun EditorScreen(
         } else {
             editorController.clearSearchHighlights()
             0
+        }
+        if (usesCodeMirrorLikeEditor && (summary.currentStart < 0 || summary.currentEnd <= summary.currentStart)) {
+            editorController.executeCommand("clearSearchState", "no-match")
         }
         KardLeafLog.d(
             EDITOR_TRACE_TAG,
@@ -2512,22 +2654,42 @@ fun EditorScreen(
             return
         }
         if (usesCodeMirrorLikeEditor) {
-            editorController.updateExternalSelection(summary.currentStart, summary.currentEnd)
-            editorController.executeCommand("selectRange", summary.currentStart, summary.currentEnd)
-            coroutineScope.launch {
-                withFrameNanos { }
-                delay(60)
-                editorController.executeCommand("selectRange", summary.currentStart, summary.currentEnd)
-                runCatching { searchFocusRequester.requestFocus() }
-            }
-            return
+            val codeMirrorStart = codeMirrorOffset(text, summary.currentStart)
+            val codeMirrorEnd = codeMirrorOffset(text, summary.currentEnd)
+            editorController.updateExternalSelection(codeMirrorStart, codeMirrorEnd)
+            editorController.executeCommand(
+                "setSearchState",
+                query,
+                noteSearchUseRegex,
+                noteSearchMatchCase,
+                summary.currentOrdinal - 1,
+                summary.count,
+            )
+            editorController.executeCommand("selectRange", codeMirrorStart, codeMirrorEnd)
+        } else {
+            editorController.setSelection(summary.currentStart, summary.currentEnd)
         }
-        editorController.setSelection(summary.currentStart, summary.currentEnd)
+        val selectionToken = noteSearchRequestToken
+        val selectionDocumentKey = editorDocumentKey
         coroutineScope.launch {
             withFrameNanos { }
             delay(60)
-            editorController.setSelection(summary.currentStart, summary.currentEnd)
-            editorController.scrollToOffset(summary.currentStart)
+            if (
+                selectionToken != noteSearchRequestToken ||
+                selectionDocumentKey != editorDocumentKey ||
+                !showNoteSearch ||
+                noteSearchQuery != query
+            ) {
+                return@launch
+            }
+            if (usesCodeMirrorLikeEditor) {
+                val codeMirrorStart = codeMirrorOffset(text, summary.currentStart)
+                val codeMirrorEnd = codeMirrorOffset(text, summary.currentEnd)
+                editorController.executeCommand("selectRange", codeMirrorStart, codeMirrorEnd)
+            } else {
+                editorController.setSelection(summary.currentStart, summary.currentEnd)
+                editorController.scrollToOffset(summary.currentStart)
+            }
             runCatching { searchFocusRequester.requestFocus() }
         }
     }
@@ -2586,16 +2748,20 @@ fun EditorScreen(
             noteSearchCurrentEnd = -1
             noteSearchCurrentOrdinal = 0
             editorController.clearSearchHighlights()
+            if (usesCodeMirrorLikeEditor) {
+                editorController.executeCommand("clearSearchState", "blank-query")
+            }
             return
         }
         runWithSearchText("search", query) { text, source ->
+            val searchStartMs = SystemClock.elapsedRealtime()
             val result = buildNoteSearchMatches(text, query, noteSearchUseRegex, noteSearchMatchCase)
             val index = result.matches.firstOrNull()?.start ?: -1
             KardLeafLog.d(
                 SEARCH_TRACE_TAG,
                 "searchInNote result queryLen=${query.length} textLen=${text.length} source=$source count=${result.matches.size} " +
-                    "firstIndex=$index firstText=${noteSearchSnippetForLog(text, index, index + query.length)} " +
-                    "error=${result.errorMessage}",
+                    "firstIndex=$index error=${result.errorMessage} " +
+                    "elapsed=${SystemClock.elapsedRealtime() - searchStartMs}ms",
             )
             selectSearchMatch(index, query, text, source)
         }
@@ -2611,6 +2777,7 @@ fun EditorScreen(
                     "current=${noteSearchCurrentStart}..${noteSearchCurrentEnd} ordinal=$noteSearchCurrentOrdinal/$noteSearchMatchCount " +
                     "editing=$isEditing largePlain=$showsLargePlainTextPreview",
             )
+            val searchStartMs = SystemClock.elapsedRealtime()
             val result = buildNoteSearchMatches(text, query, noteSearchUseRegex, noteSearchMatchCase)
             noteSearchError = result.errorMessage
             if (result.errorMessage != null || result.matches.isEmpty()) {
@@ -2628,7 +2795,7 @@ fun EditorScreen(
                 SEARCH_TRACE_TAG,
                 "moveSearchMatch result forward=$forward count=${result.matches.size} currentIndex=$currentIndex " +
                     "nextIndex=$nextIndex nextStart=${nextMatch.start} " +
-                    "nextText=${noteSearchSnippetForLog(text, nextMatch.start, nextMatch.end)} source=$source",
+                    "source=$source elapsed=${SystemClock.elapsedRealtime() - searchStartMs}ms",
             )
             selectSearchMatch(nextMatch.start, query, text, source)
         }
@@ -2708,6 +2875,7 @@ fun EditorScreen(
             return
         }
         val snapshot = editorController.getSnapshot()
+        val replaceAllStartMs = SystemClock.elapsedRealtime()
         val replacement = replaceAllNoteSearchMatches(
             text = snapshot.content,
             query = query,
@@ -2732,7 +2900,18 @@ fun EditorScreen(
             return
         }
         val cursor = snapshot.selection.start.coerceIn(0, newText.length)
+        KardLeafLog.d(
+            SEARCH_TRACE_TAG,
+            "replaceAll result queryLen=${query.length} replacementLen=${noteReplaceText.length} " +
+                "regex=$noteSearchUseRegex matchCase=$noteSearchMatchCase textLen=${snapshot.content.length} " +
+                "newTextLen=${newText.length} count=${replacement.count} " +
+                "elapsed=${SystemClock.elapsedRealtime() - replaceAllStartMs}ms",
+        )
         editorController.replaceAll(newText, TextRange(cursor, cursor))
+        KardLeafLog.d(
+            SEARCH_TRACE_TAG,
+            "replaceAll dispatched cursor=$cursor selection=${snapshot.selection.start}..${snapshot.selection.end}",
+        )
         markEditorDirty()
         updateSearchState(query, -1, newText)
         context.showToast("已替换 ${replacement.count} 处")
@@ -2741,6 +2920,7 @@ fun EditorScreen(
     fun jumpToHeading(heading: MarkdownHeading) {
         val text = editorController.getText()
         val target = heading.startOffset.coerceIn(0, text.length)
+        selectedOutlineHeadingStartOffset = heading.startOffset
         showNoteInfoDialog = false
         closeNoteSearch()
         closeNoteSidePanel()
@@ -2761,11 +2941,71 @@ fun EditorScreen(
         }
     }
 
+    fun deleteOutlineHeading(heading: MarkdownHeading) {
+        if (!isEditing) return
+        val text = editorController.getText()
+        val range = findMarkdownHeadingSectionRange(text, heading) ?: return
+        if (range.start >= range.end) return
+        editorController.setSelection(range.start, range.end)
+        editorController.replaceSelection("")
+        markEditorDirty()
+        outlineHeadings = extractMarkdownHeadings(editorController.getText())
+        selectedOutlineHeadingStartOffset = null
+        context.showToast("已删除段落")
+    }
+
+    fun renameOutlineHeading(heading: MarkdownHeading, newText: String) {
+        if (!isEditing) return
+        val text = editorController.getText()
+        val renamed = renameMarkdownHeading(text, heading, newText) ?: return
+        if (renamed == text) {
+            context.showToast("标题名称没有变化")
+            return
+        }
+        editorController.replaceAll(renamed, TextRange(heading.startOffset))
+        markEditorDirty()
+        outlineHeadings = extractMarkdownHeadings(renamed)
+        selectedOutlineHeadingStartOffset = heading.startOffset
+        context.showToast("已重命名标题")
+    }
+
+    fun moveOutlineHeadingToPosition(
+        heading: MarkdownHeading,
+        target: MarkdownHeading,
+        placeAfterTarget: Boolean,
+    ): Boolean {
+        if (!isEditing) return false
+        val result = moveMarkdownHeadingSectionToPosition(
+            content = editorController.getText(),
+            heading = heading,
+            target = target,
+            placeAfterTarget = placeAfterTarget,
+        ) ?: return false
+        editorController.replaceAll(result.content, TextRange(result.newStartOffset))
+        markEditorDirty()
+        outlineHeadings = extractMarkdownHeadings(result.content)
+        selectedOutlineHeadingStartOffset = result.newStartOffset
+        context.showToast("已移动标题")
+        return true
+    }
+
     LaunchedEffect(pendingEditorSearchJump, editorDocumentKey, initialContent, isOpeningNoteContent) {
         val jump = pendingEditorSearchJump ?: return@LaunchedEffect
-        if (isPrivacyEditor || currentNote?.id != jump.noteId || jump.query.isBlank() || initialContent.isBlank()) {
+        val sameNote = currentNote?.id == jump.noteId
+        if (isPrivacyEditor || !sameNote || jump.query.isBlank()) {
+            viewModel.consumeEditorSearchJump(jump.requestId)
             return@LaunchedEffect
         }
+        if (initialContent.isBlank()) {
+            if (!isOpeningNoteContent) viewModel.consumeEditorSearchJump(jump.requestId)
+            return@LaunchedEffect
+        }
+        KardLeafLog.d(
+            SEARCH_TRACE_TAG,
+            "dashboard jump apply ${SearchQueryUtils.describeForLog(jump.query)} " +
+                "preferredStart=${jump.preferredStart} textLen=${initialContent.length} " +
+                "appliedRegex=false appliedMatchCase=false",
+        )
         val jumpMatches = buildNoteSearchMatches(
             text = initialContent,
             query = jump.query,
@@ -2773,16 +3013,19 @@ fun EditorScreen(
             matchCase = false,
         ).matches
         val preferredMatch = jumpMatches.firstOrNull { it.start == jump.preferredStart }
-        if (jump.preferredStart >= 0 && preferredMatch == null && isOpeningNoteContent) {
+        if (isOpeningNoteContent) {
             return@LaunchedEffect
         }
         val matchIndex = preferredMatch?.start
             ?: jumpMatches.firstOrNull()?.start
             ?: -1
+        KardLeafLog.d(
+            SEARCH_TRACE_TAG,
+            "dashboard jump matches count=${jumpMatches.size} first=${jumpMatches.firstOrNull()?.start ?: -1} " +
+                "preferredFound=${preferredMatch != null} selected=$matchIndex opening=$isOpeningNoteContent",
+        )
         if (matchIndex < 0) {
-            if (!isOpeningNoteContent) {
-                viewModel.consumeEditorSearchJump(jump.requestId)
-            }
+            viewModel.consumeEditorSearchJump(jump.requestId)
             return@LaunchedEffect
         }
         suppressNextSearchKeyboardRequest = !showNoteSearch
@@ -2793,8 +3036,9 @@ fun EditorScreen(
         viewModel.consumeEditorSearchJump(jump.requestId)
     }
 
-    LaunchedEffect(noteSearchQuery, noteSearchUseRegex, noteSearchMatchCase) {
+    LaunchedEffect(editorDocumentKey, noteSearchQuery, noteSearchUseRegex, noteSearchMatchCase, initialContent) {
         if (showNoteSearch) {
+            withFrameNanos { }
             searchInNote(noteSearchQuery)
         }
     }
@@ -2809,6 +3053,9 @@ fun EditorScreen(
             noteSearchFocused = false
             noteReplaceFocused = false
             editorController.clearSearchHighlights()
+            if (usesCodeMirrorLikeEditor) {
+                editorController.executeCommand("clearSearchState", "search-hidden")
+            }
         }
     }
 
@@ -3429,7 +3676,7 @@ fun EditorScreen(
         context.showToast("当前笔记过大，暂时只能快速预览，避免编辑器卡死")
     }
 
-    fun enterEditMode(
+    fun enterEditModeNow(
         preservePreviewPosition: Boolean = true,
         previewMarkdownOffset: Int? = null,
         requestFocus: Boolean = false,
@@ -3583,6 +3830,125 @@ fun EditorScreen(
             }
         }
     }
+
+    fun enterEditMode(
+        preservePreviewPosition: Boolean = true,
+        previewMarkdownOffset: Int? = null,
+        requestFocus: Boolean = false,
+    ) {
+        if (isOnlineWebNote) {
+            showOfflineWebEditDialog = true
+            return
+        }
+        enterEditModeNow(preservePreviewPosition, previewMarkdownOffset, requestFocus)
+    }
+
+    fun offlineOnlineWebAndEdit() {
+        if (isOffliningOnlineWeb) return
+        val snapshot = editorController.getSnapshot()
+        val downloadImages = webClipDownloadImagesByDefault(context)
+        showOfflineWebEditDialog = false
+        isOffliningOnlineWeb = true
+        webImageProgress = null
+        coroutineScope.launch {
+            try {
+                val localization =
+                    if (downloadImages) {
+                        localizeRemoteMarkdownImages(
+                            context = context,
+                            markdown = snapshot.content,
+                            targetFolder = folder,
+                            importImage = viewModel::importImage,
+                            onImageProgress = { progress ->
+                                withContext(Dispatchers.Main.immediate) {
+                                    webImageProgress = progress
+                                }
+                            },
+                        )
+                    } else {
+                        null
+                    }
+                val updatedSnapshot = snapshot.copy(content = localization?.markdown ?: snapshot.content)
+                val offlineNote = buildCurrentNote(updatedSnapshot).copy(sourceType = NoteFormatUtils.SOURCE_TYPE_WEB)
+                viewModel.saveNote(
+                    note = offlineNote,
+                    oldFile = currentNote?.file,
+                    saveHistory = true,
+                    onResult = { saved ->
+                        isOffliningOnlineWeb = false
+                        webImageProgress = null
+                        if (saved) {
+                            pendingOfflineWebEdit = true
+                            showDownloadWebImagesAction = NoteFormatUtils.hasRemoteMarkdownImage(updatedSnapshot.content)
+                            val remaining = localization?.failedImages ?: 0
+                            context.showToast(
+                                if (remaining > 0) {
+                                    "网页已离线，$remaining 张图片仍保留网络链接"
+                                } else {
+                                    "网页已离线，可以编辑"
+                                },
+                            )
+                        } else {
+                            context.showToast("网页离线保存失败，仍保持在线预览")
+                        }
+                    },
+                )
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                KardLeafLog.e(WEB_CLIP_LOG_TAG, "online web offline failed keyHash=${editorDocumentKey.hashCode()}", error)
+                isOffliningOnlineWeb = false
+                webImageProgress = null
+                context.showToast("网页离线失败，仍保持在线预览")
+            }
+        }
+    }
+
+    if (showOfflineWebEditDialog || isOffliningOnlineWeb) {
+        val downloadImages = webClipDownloadImagesByDefault(context)
+        val dialogTitle = if (isOffliningOnlineWeb) "正在离线网页" else "离线后编辑"
+        AlertDialog(
+            onDismissRequest = {
+                if (!isOffliningOnlineWeb) showOfflineWebEditDialog = false
+            },
+            title = { Text(dialogTitle) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        if (isOffliningOnlineWeb) {
+                            "正在保存网页内容，请稍候……"
+                        } else {
+                            "此网页需要先离线保存后才能编辑。是否离线此网页？"
+                        },
+                    )
+                    if (isOffliningOnlineWeb) {
+                        if (webImageProgress == null) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        } else {
+                            WebClipImageProgressContent(webImageProgress)
+                        }
+                    } else {
+                        Text(
+                            if (downloadImages) "将按当前默认设置下载网页图片。" else "将按当前默认设置保留网络图片链接。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                if (!isOffliningOnlineWeb) {
+                    TextButton(onClick = ::offlineOnlineWebAndEdit) { Text("离线并编辑") }
+                }
+            },
+            dismissButton = {
+                if (!isOffliningOnlineWeb) {
+                    TextButton(onClick = { showOfflineWebEditDialog = false }) { Text("取消") }
+                }
+            },
+        )
+    }
+
     LaunchedEffect(isEditing, committedModeSwitchId) {
         val switchId = committedModeSwitchId
         if (switchId <= 0) return@LaunchedEffect
@@ -3657,15 +4023,24 @@ fun EditorScreen(
     }
 
     fun openMindMap(markAsMindMap: Boolean = true) {
+        if (isOnlineWebNote) {
+            showOfflineWebEditDialog = true
+            return
+        }
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
         syncUndoRedoState()
         var currentContent = editorController.getText()
-        mindMapInitialEditIndex = null
+        if (markAsMindMap) {
+            mindMapInitialEditIndex = null
+        }
         if (currentContent.isBlank()) {
             val snapshot = editorController.getSnapshot()
             if (applyMindMapEdit(snapshot, createMindMapRoot(), refreshPreview = false)) {
                 currentContent = editorController.getText()
+                if (markAsMindMap) {
+                    mindMapInitialEditIndex = 0
+                }
             }
         }
         val result = if (currentContent.length > KardLeafContentLimits.MIND_MAP_MAX_CONTENT_CHARS) {
@@ -3677,6 +4052,7 @@ fun EditorScreen(
         mindMapUnavailableTitle = result.unavailableTitle
         mindMapUnavailableMessage = result.unavailableMessage
         mindMapDisplayTitle = editorController.getSnapshot().title
+        mindMapTitleOverride = mindMapDisplayTitle
         if (markAsMindMap && result.document != null && !isMindMapNote) {
             mindMapModeActivated = true
             saveNote(
@@ -3742,10 +4118,25 @@ fun EditorScreen(
         }
     }
 
-    LaunchedEffect(isOpeningNoteContent, currentNote?.file?.path, blocksDirectEditForLargeNote, defaultOpenNoteMode) {
-        if (!isOpeningNoteContent &&
+    LaunchedEffect(pendingOfflineWebEdit, currentNote?.sourceType, currentNote?.file?.path) {
+        if (pendingOfflineWebEdit && currentNote != null && !isOnlineWebNote) {
+            pendingOfflineWebEdit = false
+            enterEditModeNow(preservePreviewPosition = false)
+        }
+    }
+
+    LaunchedEffect(
+        isOpeningNoteContent,
+        currentNote?.file?.path,
+        blocksDirectEditForLargeNote,
+        defaultOpenNoteMode,
+        isOnlineWebNote,
+    ) {
+        if (
+            !isOpeningNoteContent &&
             !blocksDirectEditForLargeNote &&
             !isPrivacyEditor &&
+            !isOnlineWebNote &&
             currentNote != null &&
             defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT
         ) {
@@ -3847,23 +4238,28 @@ fun EditorScreen(
         closeNoteSidePanel()
     }
 
-    BackHandler(enabled = showLabelMenu || showMoreMenu || showHeadingMenu || showMathMenu) {
+    BackHandler(enabled = showLabelMenu || showMoreMenu || showKernelMenu || showHeadingMenu || showMathMenu || showDateTimeMenu || showCustomSymbolsMenu) {
         KardLeafLog.d(
             BACK_TRACE_TAG,
             "Editor menu BackHandler hit showLabelMenu=$showLabelMenu showMoreMenu=$showMoreMenu " +
-                "showHeadingMenu=$showHeadingMenu showMathMenu=$showMathMenu",
+                "showHeadingMenu=$showHeadingMenu showMathMenu=$showMathMenu " +
+                "showDateTimeMenu=$showDateTimeMenu showCustomSymbolsMenu=$showCustomSymbolsMenu",
         )
         showLabelMenu = false
         showMoreMenu = false
+        showKernelMenu = false
         showHeadingMenu = false
         showMathMenu = false
+        showDateTimeMenu = false
+        showCustomSymbolsMenu = false
     }
 
-    LaunchedEffect(showLabelMenu, showMoreMenu, showHeadingMenu, showMathMenu) {
+    LaunchedEffect(showLabelMenu, showMoreMenu, showKernelMenu, showHeadingMenu, showMathMenu, showDateTimeMenu, showCustomSymbolsMenu) {
         KardLeafLog.d(
             BACK_TRACE_TAG,
             "Editor menu state changed showLabelMenu=$showLabelMenu showMoreMenu=$showMoreMenu " +
-                "showHeadingMenu=$showHeadingMenu showMathMenu=$showMathMenu",
+                "showHeadingMenu=$showHeadingMenu showMathMenu=$showMathMenu " +
+                "showDateTimeMenu=$showDateTimeMenu showCustomSymbolsMenu=$showCustomSymbolsMenu",
         )
     }
 
@@ -3903,6 +4299,165 @@ fun EditorScreen(
             PrefsManager.AppThemeMode.LIGHT -> false
             PrefsManager.AppThemeMode.DARK -> true
         }
+
+    fun toggleHeadingMenu() {
+        val now = SystemClock.uptimeMillis()
+        val ignoreReopen = !showHeadingMenu && now - lastHeadingMenuDismissAt < MENU_REOPEN_GUARD_MS
+        KardLeafLog.d(BACK_TRACE_TAG, "Editor heading menu click toggle showHeadingMenu=$showHeadingMenu ignoreReopen=$ignoreReopen")
+        if (!ignoreReopen) {
+            showLabelMenu = false
+            showMoreMenu = false
+            showMathMenu = false
+            showDateTimeMenu = false
+            showCustomSymbolsMenu = false
+            showHeadingMenu = !showHeadingMenu
+        }
+    }
+
+    fun toggleDateTimeMenu() {
+        val now = SystemClock.uptimeMillis()
+        val ignoreReopen = !showDateTimeMenu && now - lastDateTimeMenuDismissAt < MENU_REOPEN_GUARD_MS
+        if (!ignoreReopen) {
+            showLabelMenu = false
+            showMoreMenu = false
+            showHeadingMenu = false
+            showMathMenu = false
+            showCustomSymbolsMenu = false
+            showDateTimeMenu = !showDateTimeMenu
+        }
+    }
+
+    fun toggleCustomSymbolsMenu() {
+        showLabelMenu = false
+        showMoreMenu = false
+        showHeadingMenu = false
+        showMathMenu = false
+        showDateTimeMenu = false
+        showCustomSymbolsMenu = !showCustomSymbolsMenu
+    }
+
+    @Composable
+    fun DateTimeToolbarAction() {
+        val now = remember(showDateTimeMenu) { Date() }
+        Box {
+            ToolbarIconButton(
+                text = "",
+                icon = Icons.Outlined.Alarm,
+                contentDescription = "时间日期",
+                onClick = { toggleDateTimeMenu() },
+            )
+            KardLeafDropdownMenu(
+                expanded = showDateTimeMenu,
+                onDismissRequest = {
+                    lastDateTimeMenuDismissAt = SystemClock.uptimeMillis()
+                    showDateTimeMenu = false
+                },
+                modifier = Modifier.width(240.dp),
+                forceAboveAnchor = true,
+                properties = PopupProperties(
+                    focusable = false,
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = true,
+                ),
+            ) {
+                EDITOR_DATE_TIME_FORMATS.forEach { pattern ->
+                    val formatted = SimpleDateFormat(pattern, Locale.getDefault()).format(now)
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(pattern)
+                                Text(
+                                    formatted,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        onClick = {
+                            insertAtCursor(formatted)
+                            showDateTimeMenu = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun CustomSymbolsToolbarAction() {
+        Box {
+            ToolbarIconButton(
+                text = "",
+                icon = Icons.Outlined.TextFields,
+                contentDescription = "自定义符号",
+                onClick = { toggleCustomSymbolsMenu() },
+            )
+            KardLeafDropdownMenu(
+                expanded = showCustomSymbolsMenu,
+                onDismissRequest = { showCustomSymbolsMenu = false },
+                modifier = Modifier.width(220.dp),
+                forceAboveAnchor = true,
+                properties = PopupProperties(
+                    focusable = false,
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = true,
+                ),
+            ) {
+                val symbols = KardLeafCustomFeatures.getCustomSymbols(context)
+                if (symbols.isEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("请先在设置中添加符号") },
+                        enabled = false,
+                        onClick = {},
+                    )
+                } else {
+                    symbols.forEach { symbol ->
+                        DropdownMenuItem(
+                            text = { Text(symbol) },
+                            onClick = {
+                                insertAtCursor(symbol)
+                                showCustomSymbolsMenu = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun HeadingToolbarAction() {
+        Box {
+            ToolbarIconButton(
+                text = "H",
+                bold = true,
+                contentDescription = "标题",
+                onClick = { toggleHeadingMenu() },
+            )
+            KardLeafDropdownMenu(
+                expanded = showHeadingMenu,
+                onDismissRequest = {
+                    lastHeadingMenuDismissAt = SystemClock.uptimeMillis()
+                    showHeadingMenu = false
+                },
+                properties = PopupProperties(
+                    focusable = false,
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = true,
+                ),
+            ) {
+                (1..6).forEach { level ->
+                    DropdownMenuItem(
+                        text = { Text("H$level") },
+                        onClick = {
+                            applyHeadingAtCursor(level)
+                            showHeadingMenu = false
+                        },
+                    )
+                }
+            }
+        }
+    }
 
     // Scaffold
 
@@ -4206,7 +4761,11 @@ fun EditorScreen(
                             when {
                                 isPrivacyEditor && onDeletePrivacyNote != null -> {
                                     IconButton(onClick = { onDeletePrivacyNote() }) {
-                                        Icon(Icons.Outlined.DeleteOutline, contentDescription = stringResource(R.string.delete))
+                                        Icon(
+                                            Icons.Outlined.DeleteOutline,
+                                            contentDescription = stringResource(R.string.delete),
+                                            tint = MaterialTheme.colorScheme.error,
+                                        )
                                     }
                                 }
                                 note != null && note.isTrashed -> {
@@ -4222,7 +4781,72 @@ fun EditorScreen(
                                         viewModel.deleteNote(note)
                                         leaveEditor()
                                     }) {
-                                        Icon(Icons.Outlined.DeleteOutline, contentDescription = stringResource(R.string.delete))
+                                        Icon(
+                                            Icons.Outlined.DeleteOutline,
+                                            contentDescription = stringResource(R.string.delete),
+                                            tint = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        @Composable
+                        fun DiscardAction() {
+                            DropdownMenuItem(
+                                text = { Text(localizedText("放弃", "Discard")) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Outlined.Restore,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                    )
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    leaveEditor()
+                                },
+                            )
+                        }
+
+                        @Composable
+                        fun KernelAction() {
+                            if (!isPrivacyEditor) {
+                                Box {
+                                    IconButton(onClick = {
+                                        showLabelMenu = false
+                                        showMoreMenu = false
+                                        showHeadingMenu = false
+                                        showMathMenu = false
+                                        showKernelMenu = !showKernelMenu
+                                    }) {
+                                        Icon(
+                                            Icons.Outlined.Code,
+                                            contentDescription = notePrefsManager.getEditorTopToolbarItemLabel(
+                                                PrefsManager.EditorTopToolbarItemId.KERNEL,
+                                                editorTopToolbarItemLabel(PrefsManager.EditorTopToolbarItemId.KERNEL),
+                                            ),
+                                        )
+                                    }
+                                    KardLeafDropdownMenu(
+                                        expanded = showKernelMenu,
+                                        onDismissRequest = { showKernelMenu = false },
+                                    ) {
+                                        listOf(
+                                            PrefsManager.EditorKernel.QUILLPAD_STYLE to localizedText("原生内核", "Native editor"),
+                                            PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW to "WebView",
+                                        ).forEach { (targetEditorKernel, label) ->
+                                            DropdownMenuItem(
+                                                text = { Text(label) },
+                                                trailingIcon = {
+                                                    RadioButton(
+                                                        selected = editorKernel == targetEditorKernel,
+                                                        onClick = null,
+                                                    )
+                                                },
+                                                onClick = { switchEditorKernel(targetEditorKernel) },
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -4299,6 +4923,23 @@ fun EditorScreen(
                                         )
                                     }
                                 }
+                                PrefsManager.EditorTopToolbarItemId.KERNEL -> if (!isPrivacyEditor) {
+                                    listOf(
+                                        PrefsManager.EditorKernel.QUILLPAD_STYLE to localizedText("原生内核", "Native editor"),
+                                        PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW to "WebView",
+                                    ).forEach { (targetEditorKernel, label) ->
+                                        DropdownMenuItem(
+                                            text = { Text(label) },
+                                            trailingIcon = {
+                                                RadioButton(
+                                                    selected = editorKernel == targetEditorKernel,
+                                                    onClick = null,
+                                                )
+                                            },
+                                            onClick = { switchEditorKernel(targetEditorKernel) },
+                                        )
+                                    }
+                                }
                                 PrefsManager.EditorTopToolbarItemId.HISTORY -> {
                                     val note = currentNote
                                     DropdownMenuItem(
@@ -4370,7 +5011,13 @@ fun EditorScreen(
                                     } else {
                                         DropdownMenuItem(
                                             text = { Text(stringResource(R.string.delete)) },
-                                            leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null) },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Outlined.DeleteOutline,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                )
+                                            },
                                             enabled = note != null,
                                             onClick = {
                                                 if (note != null) {
@@ -4397,6 +5044,7 @@ fun EditorScreen(
                                         KardLeafLog.d(BACK_TRACE_TAG, "Editor privacy more click toggle menu showMoreMenu=$showMoreMenu ignoreReopen=$ignoreReopen")
                                         if (!ignoreReopen) {
                                             showLabelMenu = false
+                                            showKernelMenu = false
                                             showHeadingMenu = false
                                             showMathMenu = false
                                             showMoreMenu = !showMoreMenu
@@ -4429,6 +5077,7 @@ fun EditorScreen(
                                     ) {
                                         val renderedMoreToolbarItems = editorTopToolbarMoreDisplayItems
                                             .filter { it != PrefsManager.EditorTopToolbarItemId.LABEL }
+                                            .filter { it != PrefsManager.EditorTopToolbarItemId.KERNEL }
                                             .filter { it !in editorTopToolbarNoteOperationItems }
                                             .filter { it != PrefsManager.EditorTopToolbarItemId.EDIT || !isEditing }
                                         renderedMoreToolbarItems.forEach { item ->
@@ -4437,9 +5086,16 @@ fun EditorScreen(
                                         if (renderedMoreToolbarItems.isNotEmpty()) {
                                             HorizontalDivider()
                                         }
+                                        DiscardAction()
                                         DropdownMenuItem(
                                             text = { Text(stringResource(R.string.delete)) },
-                                            leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null) },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Outlined.DeleteOutline,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                )
+                                            },
                                             onClick = {
                                                 showMoreMenu = false
                                                 onDeletePrivacyNote()
@@ -4462,6 +5118,7 @@ fun EditorScreen(
                                                     )
                                                     if (!ignoreReopen) {
                                                         showLabelMenu = false
+                                                        showKernelMenu = false
                                                         showHeadingMenu = false
                                                         showMathMenu = false
                                                         if (!showMoreMenu) {
@@ -4511,26 +5168,15 @@ fun EditorScreen(
                                             dismissOnClickOutside = true,
                                         ),
                                     ) {
-                                        listOf(
-                                            PrefsManager.EditorKernel.QUILLPAD_STYLE to localizedText("原生内核", "Native editor"),
-                                            PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW to "WebView",
-                                        ).forEach { (targetEditorKernel, label) ->
-                                            DropdownMenuItem(
-                                                text = { Text(label) },
-                                                trailingIcon = {
-                                                    RadioButton(
-                                                        selected = editorKernel == targetEditorKernel,
-                                                        onClick = null,
-                                                    )
-                                                },
-                                                onClick = { switchEditorKernel(targetEditorKernel) },
-                                            )
-                                        }
-                                        HorizontalDivider()
                                         val renderedMoreToolbarItems = editorTopToolbarMoreDisplayItems
                                             .filter { it != PrefsManager.EditorTopToolbarItemId.EDIT || !isEditing }
                                         var aiAssistantRendered = false
+                                        var discardRendered = false
                                         renderedMoreToolbarItems.forEach { item ->
+                                            if (item == PrefsManager.EditorTopToolbarItemId.DELETE) {
+                                                DiscardAction()
+                                                discardRendered = true
+                                            }
                                             EditorTopToolbarMoreItem(item)
                                             if (item == PrefsManager.EditorTopToolbarItemId.MINDMAP) {
                                                 DropdownMenuItem(
@@ -4562,12 +5208,15 @@ fun EditorScreen(
                                                 onClick = { downloadWebImages(downloadableNote) },
                                             )
                                         }
+                                        if (!discardRendered) {
+                                            DiscardAction()
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        if (isNewRegularNote) {
+                        if (isNewRegularNote && !isOnlineWebNote) {
                             WebClipAction()
                             MindMapAction()
                         }
@@ -4582,6 +5231,7 @@ fun EditorScreen(
                                 PrefsManager.EditorTopToolbarItemId.REMARKS -> if (noteSidePanelToolbarEnabled) RemarksAction()
                                 PrefsManager.EditorTopToolbarItemId.SEARCH -> SearchAction()
                                 PrefsManager.EditorTopToolbarItemId.EDIT -> EditAction()
+                                PrefsManager.EditorTopToolbarItemId.KERNEL -> KernelAction()
                                 PrefsManager.EditorTopToolbarItemId.HISTORY -> HistoryAction()
                                 PrefsManager.EditorTopToolbarItemId.PRIVACY -> PrivacyAction()
                                 PrefsManager.EditorTopToolbarItemId.ARCHIVE -> ArchiveAction()
@@ -4780,9 +5430,11 @@ fun EditorScreen(
                                         contentDescription = "绘图",
                                         onClick = { openDrawingPad() },
                                     )
-                                    KardLeafCustomFeatures.ToolbarItem.HEADING -> ToolbarIconButton(text = "H1", bold = true, onClick = { applyHeadingAtCursor(1) })
-                                    KardLeafCustomFeatures.ToolbarItem.HEADING2 -> ToolbarIconButton(text = "H2", bold = true, onClick = { applyHeadingAtCursor(2) })
-                                    KardLeafCustomFeatures.ToolbarItem.HEADING3 -> ToolbarIconButton(text = "H3", bold = true, onClick = { applyHeadingAtCursor(3) })
+                                    KardLeafCustomFeatures.ToolbarItem.DATETIME -> DateTimeToolbarAction()
+                                    KardLeafCustomFeatures.ToolbarItem.SYMBOLS -> CustomSymbolsToolbarAction()
+                                    KardLeafCustomFeatures.ToolbarItem.HEADING,
+                                    KardLeafCustomFeatures.ToolbarItem.HEADING2,
+                                    KardLeafCustomFeatures.ToolbarItem.HEADING3 -> HeadingToolbarAction()
                                     KardLeafCustomFeatures.ToolbarItem.RULE -> ToolbarIconButton(
                                         text = "",
                                         icon = Icons.Outlined.HorizontalRule,
@@ -4870,64 +5522,11 @@ fun EditorScreen(
                                             contentDescription = "绘图",
                                             onClick = { openDrawingPad() },
                                         )
-                                        KardLeafCustomFeatures.ToolbarItem.HEADING -> {
-                                            Box {
-                                                ToolbarIconButton(
-                                                    text = "H1",
-                                                    bold = true,
-                                                    onClick = { applyHeadingAtCursor(1) },
-                                                    onLongClick = {
-                                                        val now = SystemClock.uptimeMillis()
-                                                        val ignoreReopen = !showHeadingMenu && now - lastHeadingMenuDismissAt < MENU_REOPEN_GUARD_MS
-                                                        KardLeafLog.d(BACK_TRACE_TAG, "Editor heading menu longClick toggle showHeadingMenu=$showHeadingMenu ignoreReopen=$ignoreReopen")
-                                                        if (!ignoreReopen) {
-                                                            showLabelMenu = false
-                                                            showMoreMenu = false
-                                                            showMathMenu = false
-                                                            showHeadingMenu = !showHeadingMenu
-                                                        }
-                                                    },
-                                                )
-                                                KardLeafDropdownMenu(
-                                                    modifier =
-                                                        Modifier.onPreviewKeyEvent { event ->
-                                                            if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_BACK) {
-                                                                KardLeafLog.d(
-                                                                    BACK_TRACE_TAG,
-                                                                    "Editor heading popup onPreviewKeyEvent back action=${event.nativeKeyEvent.action} showHeadingMenu=$showHeadingMenu",
-                                                                )
-                                                            }
-                                                            false
-                                                        },
-                                                    expanded = showHeadingMenu,
-                                                    onDismissRequest = {
-                                                        KardLeafLog.d(BACK_TRACE_TAG, "Editor heading menu onDismissRequest showHeadingMenu=$showHeadingMenu")
-                                                        lastHeadingMenuDismissAt = SystemClock.uptimeMillis()
-                                                        showHeadingMenu = false
-                                                    },
-                                                    properties = PopupProperties(
-                                                        focusable = false,
-                                                        dismissOnBackPress = false,
-                                                        dismissOnClickOutside = true,
-                                                    ),
-                                                ) {
-                                                    listOf("H1" to "# ", "H2" to "## ", "H3" to "### ", "H4" to "#### ")
-                                                        .forEach { (label, md) ->
-                                                            DropdownMenuItem(
-                                                                text = { Text(label) },
-                                                                onClick = {
-                                                                    if (!runEditorCommand("toggleHeading", label.removePrefix("H").toIntOrNull() ?: 1)) {
-                                                                        insertAtCursor(md)
-                                                                    }
-                                                                    showHeadingMenu = false
-                                                                },
-                                                            )
-                                                        }
-                                                }
-                                            }
-                                        }
-                                        KardLeafCustomFeatures.ToolbarItem.HEADING2 -> ToolbarIconButton(text = "H2", bold = true, onClick = { applyHeadingAtCursor(2) })
-                                        KardLeafCustomFeatures.ToolbarItem.HEADING3 -> ToolbarIconButton(text = "H3", bold = true, onClick = { applyHeadingAtCursor(3) })
+                                        KardLeafCustomFeatures.ToolbarItem.DATETIME -> DateTimeToolbarAction()
+                                        KardLeafCustomFeatures.ToolbarItem.SYMBOLS -> CustomSymbolsToolbarAction()
+                                        KardLeafCustomFeatures.ToolbarItem.HEADING,
+                                        KardLeafCustomFeatures.ToolbarItem.HEADING2,
+                                        KardLeafCustomFeatures.ToolbarItem.HEADING3 -> HeadingToolbarAction()
                                         KardLeafCustomFeatures.ToolbarItem.RULE -> ToolbarIconButton(
                                             text = "",
                                             icon = Icons.Outlined.HorizontalRule,
@@ -4960,6 +5559,8 @@ fun EditorScreen(
                                                             showLabelMenu = false
                                                             showMoreMenu = false
                                                             showHeadingMenu = false
+                                                            showDateTimeMenu = false
+                                                            showCustomSymbolsMenu = false
                                                             showMathMenu = !showMathMenu
                                                         }
                                                     },
@@ -5079,7 +5680,7 @@ fun EditorScreen(
                         documentKey = editorDocumentKey,
                         controller = editorController,
                         scrollController = codeMirrorScrollController,
-                        active = isEditing,
+                        active = isEditing && !showMindMap,
                         onTitleChanged = { markEditorDirty() },
                         onContentChanged = {
                             editorContentLength.value = editorController.getContentLength()
@@ -5106,9 +5707,6 @@ fun EditorScreen(
                         isDark = isDark,
                         showTitle = showBars && !hideQuickNoteTitleInEditor,
                         livePreviewEnabled = codeMirrorLivePreviewEnabled,
-                        keyboardInsetPx = (
-                            imeInsets.getBottom(density) - navigationBarsInsets.getBottom(density)
-                        ).coerceAtLeast(0),
                         requestFocusToken = editorFocusRequestToken,
                         onFocusRequestHandled = ::handleEditorFocusRequest,
                         preferredFocusSelection = editEntrySelection,
@@ -5168,6 +5766,7 @@ fun EditorScreen(
                                 )
                             }
                         },
+                        imeAnimationTargetBottomPx = WindowInsets.imeAnimationTarget.exclude(navigationBarsInsets).getBottom(density),
                         modifier = Modifier
                             .fillMaxSize()
                             .zIndex(if (isEditing) 1f else 0f)
@@ -5182,7 +5781,7 @@ fun EditorScreen(
                         initialContent = editorSurfaceContent,
                         documentKey = editorDocumentKey,
                         controller = editorController,
-                        active = isEditing,
+                        active = isEditing && !showMindMap,
                         onTitleChanged = { markEditorDirty() },
                         onContentChanged = {
                             editorContentLength.value = editorController.getContentLength()
@@ -5363,12 +5962,8 @@ fun EditorScreen(
                         headingScrollText = previewHeadingScrollText,
                         headingScrollLevel = previewHeadingScrollLevel,
                         headingScrollToken = previewHeadingScrollToken,
-                        onDoubleTap = { offset ->
-                            enterEditMode(
-                                preservePreviewPosition = true,
-                                previewMarkdownOffset = offset,
-                                requestFocus = true,
-                            )
+                        onDoubleTap = {
+                            enterEditMode()
                         },
                         onUserInteraction = { hideNoteSearchCursor("preview touch") },
                         onScrollRatioChanged = { previewScrollRatio = it },
@@ -5455,7 +6050,7 @@ fun EditorScreen(
                         contentFontFamily = editorFontFamily,
                         previewTheme = previewThemeId,
                         onCheckboxToggled = { index, checked ->
-                            if (!isOpeningNoteContent) {
+                            if (!isOnlineWebNote && !isOpeningNoteContent) {
                                 val snapshot = editorController.getSnapshot()
                                 val newText = toggleTask(snapshot.content, index, checked)
                                 val updatedSnapshot = snapshot.copy(content = newText)
@@ -5463,8 +6058,11 @@ fun EditorScreen(
                                 renderPreviewSnapshot(updatedSnapshot)
                                 if (isPrivacyEditor) {
                                     val privacyTitle = snapshot.title.ifBlank { "未命名" }
-                                    onSavePrivacyNote?.invoke(effectivePrivacyNoteId, privacyTitle, newText) { savedId ->
-                                        effectivePrivacyNoteId = savedId
+                                    onSavePrivacyNote?.invoke(effectivePrivacyNoteId, privacyTitle, newText) { result ->
+                                        result.onSuccess { savedId -> effectivePrivacyNoteId = savedId }
+                                            .onFailure { error ->
+                                                context.showToast(error.message ?: localizedText("隐私笔记保存失败", "Failed to save protected note"))
+                                            }
                                     }
                                 } else {
                                     viewModel.saveNote(
@@ -5595,113 +6193,200 @@ fun EditorScreen(
             )
         }
         if (showMindMap) {
-            val snapshot = editorController.getSnapshot()
             MarkdownMindMapScreen(
-                displayTitle = mindMapDisplayTitle.ifBlank { snapshot.title.ifBlank { mindMapDocument?.root?.text.orEmpty() } },
+                displayTitle = mindMapDisplayTitle,
                 document = mindMapDocument,
                 isDark = isDark,
                 unavailableTitle = mindMapUnavailableTitle,
                 unavailableMessage = mindMapUnavailableMessage,
                 initialEditNodeIndex = mindMapInitialEditIndex,
                 modifier = Modifier.zIndex(9f),
-                onDismiss = { showMindMap = false },
-                onInitialEditConsumed = { mindMapInitialEditIndex = null },
-                onBackToHome = {
+                onDismiss = {
                     showMindMap = false
-                    leaveEditorAfterSaveIfNeeded("mind-map-back")
                 },
                 onOpenSource = {
                     showMindMap = false
                     enterEditMode()
                 },
-                onMindMapNodeClick = { node ->
+                onTitleChange = { title ->
+                    mindMapDisplayTitle = title
+                    mindMapTitleOverride = title
+                    editorController.updateExternalTitle(title)
+                    markEditorDirty()
+                },
+                onInitialEditConsumed = { mindMapInitialEditIndex = null },
+                onBackToHome = {
+                    leaveEditorAfterSaveIfNeeded("mind-map-back")
                     showMindMap = false
-                    val previewTitlePrefixLength =
-                        if (snapshot.title.isBlank()) 0 else "# ${snapshot.title}\n\n".length
-                    enterEditMode(
-                        previewMarkdownOffset = node.sourceOffset + previewTitlePrefixLength,
-                    )
                 },
                 onUndo = { undoContent() },
                 onRedo = { redoContent() },
                 canUndo = canUndo,
                 canRedo = canRedo,
-                onNodeReparent = { movingIndex, parentIndex, gestureSequence ->
+                onNodeMove = { movingIndex, targetParentIndex, targetChildIndex, gestureSequence ->
                     val editSnapshot = editorController.getSnapshot()
                     val document = prepareCurrentMindMap()
                     val movingNode = document?.nodes?.getOrNull(movingIndex)
-                    val parentNode = document?.nodes?.getOrNull(parentIndex)
+                    val targetParent = document?.nodes?.getOrNull(targetParentIndex)
+                    val nodes = document?.nodes.orEmpty()
+                    val oldSiblings = movingNode?.let { moving ->
+                        nodes.filter { it.parentIndex == moving.parentIndex }
+                    }.orEmpty()
+                    val oldChildIndex = oldSiblings.indexOfFirst { it.index == movingIndex }
+                    val targetChildren = targetParent?.let {
+                        nodes.filter { node ->
+                            node.parentIndex == targetParentIndex && node.index != movingIndex
+                        }
+                    }.orEmpty()
+                    val movingSubtreeEnd = movingNode?.let { moving ->
+                        (movingIndex + 1 until nodes.size)
+                            .firstOrNull { nodes[it].depth <= moving.depth }
+                            ?: nodes.size
+                    } ?: -1
+                    val preflightRejection = when {
+                        document == null -> "document-unavailable"
+                        movingNode == null -> "moving-node-missing"
+                        movingNode.depth <= 0 -> "moving-root"
+                        targetParent == null -> "target-parent-missing"
+                        targetParentIndex in movingIndex until movingSubtreeEnd -> "cycle"
+                        targetChildIndex !in 0..targetChildren.size -> "child-index-out-of-range"
+                        movingNode.parentIndex == targetParentIndex && oldChildIndex == targetChildIndex -> {
+                            "same-parent-noop"
+                        }
+                        else -> null
+                    }
                     KardLeafLog.d(
                         MIND_MAP_GESTURE_TRACE_TAG,
-                        "callback reparent start gesture=$gestureSequence movingIndex=$movingIndex parentIndex=$parentIndex " +
+                        "callback move start gesture=$gestureSequence movingIndex=$movingIndex " +
+                            "targetParentIndex=$targetParentIndex targetChildIndex=$targetChildIndex " +
                             "nodes=${document?.nodes?.size ?: 0} contentLen=${editSnapshot.content.length} " +
                             "contentHash=${editSnapshot.content.hashCode()} editorDirty=${viewModel.editorDirty.value} " +
                             "isEditing=$isEditing movingTitle=${movingNode?.text} movingDepth=${movingNode?.depth ?: -1} " +
-                            "parentTitle=${parentNode?.text} parentDepth=${parentNode?.depth ?: -1}",
+                            "movingParent=${movingNode?.parentIndex} oldChildIndex=$oldChildIndex " +
+                            "movingSubtreeEnd=$movingSubtreeEnd targetParentTitle=${targetParent?.text} " +
+                            "targetParentDepth=${targetParent?.depth ?: -1} targetChildCount=${targetChildren.size} " +
+                            "preflight=${preflightRejection ?: "accepted"}",
                     )
-                    val reparentResult = document?.let { reparentMindMapSubtree(it, movingIndex, parentIndex) }
-                    if (reparentResult == null) {
+                    val moveResult = document?.let {
+                        moveMindMapSubtreeToPosition(it, movingIndex, targetParentIndex, targetChildIndex)
+                    }
+                    if (moveResult == null) {
                         KardLeafLog.d(
                             MIND_MAP_GESTURE_TRACE_TAG,
-                            "callback reparent result=rejected gesture=$gestureSequence movingIndex=$movingIndex parentIndex=$parentIndex " +
+                            "callback move result=rejected gesture=$gestureSequence movingIndex=$movingIndex " +
+                                "targetParentIndex=$targetParentIndex targetChildIndex=$targetChildIndex " +
                                 "nodes=${document?.nodes?.size ?: 0} contentLen=${editSnapshot.content.length} " +
-                                "contentHash=${editSnapshot.content.hashCode()}",
+                                "contentHash=${editSnapshot.content.hashCode()} " +
+                                "reason=${preflightRejection ?: "mover-returned-null"} " +
+                                "movingParent=${movingNode?.parentIndex} oldChildIndex=$oldChildIndex " +
+                                "movingSubtreeEnd=$movingSubtreeEnd targetChildCount=${targetChildren.size}",
                         )
                     } else {
                         KardLeafLog.d(
                             MIND_MAP_GESTURE_TRACE_TAG,
-                            "callback reparent result=accepted gesture=$gestureSequence movingIndex=$movingIndex parentIndex=$parentIndex " +
+                            "callback move result=accepted gesture=$gestureSequence movingIndex=$movingIndex " +
+                                "targetParentIndex=$targetParentIndex targetChildIndex=$targetChildIndex " +
                                 "oldContentLen=${editSnapshot.content.length} oldContentHash=${editSnapshot.content.hashCode()} " +
-                                "newContentLen=${reparentResult.content.length} newContentHash=${reparentResult.content.hashCode()}",
+                                "newContentLen=${moveResult.content.length} newContentHash=${moveResult.content.hashCode()}",
                         )
-                        if (applyMindMapEdit(editSnapshot, reparentResult)) {
+                        if (applyMindMapEdit(editSnapshot, moveResult)) {
                             KardLeafLog.d(
                                 MIND_MAP_GESTURE_TRACE_TAG,
-                                "callback reparent editor-updated gesture=$gestureSequence " +
+                                "callback move editor-updated gesture=$gestureSequence " +
                                     "controllerContentLen=${editorController.getText().length} " +
                                     "controllerContentHash=${editorController.getText().hashCode()}",
                             )
                         }
                     }
                 },
-                onNodeAddChild = { parentIndex, childTitle ->
+                onNodeAddChild = { parentIndex, childTitle, renameIndex, renameTitle ->
                     val editSnapshot = editorController.getSnapshot()
-                    val addResult = prepareCurrentMindMap()?.let { addMindMapChild(it, parentIndex, childTitle) }
+                    KardLeafLog.d(
+                        MIND_MAP_GESTURE_TRACE_TAG,
+                        "callback add-child start parentIndex=$parentIndex titleLen=${childTitle.length} " +
+                            "titleEndsWithHash=${childTitle.endsWith('#')} contentLen=${editSnapshot.content.length} " +
+                            "contentHash=${editSnapshot.content.hashCode()} editorDirty=${viewModel.editorDirty.value}",
+                    )
+                    val addResult = prepareCurrentMindMap()?.let {
+                        addMindMapChildWithPendingRename(it, parentIndex, childTitle, renameIndex, renameTitle)
+                    }
                     if (applyMindMapEdit(editSnapshot, addResult)) {
+                        KardLeafLog.d(
+                            MIND_MAP_GESTURE_TRACE_TAG,
+                            "callback add-child accepted parentIndex=$parentIndex newIndex=${addResult?.nodeIndex}",
+                        )
                         mindMapInitialEditIndex = addResult?.nodeIndex
                         context.showToast("已在「${addResult?.contextTitle}」下添加子节点")
                     } else {
+                        KardLeafLog.d(
+                            MIND_MAP_GESTURE_TRACE_TAG,
+                            "callback add-child rejected parentIndex=$parentIndex",
+                        )
                         context.showToast("当前节点不能继续添加子节点")
                     }
                 },
-                onNodeAddSibling = { anchorIndex, siblingTitle ->
+                onNodeAddSibling = { anchorIndex, siblingTitle, renameIndex, renameTitle ->
                     val editSnapshot = editorController.getSnapshot()
-                    val addResult = prepareCurrentMindMap()?.let { addMindMapSibling(it, anchorIndex, siblingTitle) }
+                    KardLeafLog.d(
+                        MIND_MAP_GESTURE_TRACE_TAG,
+                        "callback add-sibling start anchorIndex=$anchorIndex titleLen=${siblingTitle.length} " +
+                            "titleEndsWithHash=${siblingTitle.endsWith('#')} contentLen=${editSnapshot.content.length} " +
+                            "contentHash=${editSnapshot.content.hashCode()} editorDirty=${viewModel.editorDirty.value}",
+                    )
+                    val addResult = prepareCurrentMindMap()?.let {
+                        addMindMapSiblingWithPendingRename(it, anchorIndex, siblingTitle, renameIndex, renameTitle)
+                    }
                     if (applyMindMapEdit(editSnapshot, addResult)) {
+                        KardLeafLog.d(
+                            MIND_MAP_GESTURE_TRACE_TAG,
+                            "callback add-sibling accepted anchorIndex=$anchorIndex newIndex=${addResult?.nodeIndex}",
+                        )
                         mindMapInitialEditIndex = addResult?.nodeIndex
                         context.showToast("已在「${addResult?.contextTitle}」后添加同级节点")
                     } else {
+                        KardLeafLog.d(
+                            MIND_MAP_GESTURE_TRACE_TAG,
+                            "callback add-sibling rejected anchorIndex=$anchorIndex",
+                        )
                         context.showToast("当前节点不能添加同级节点")
                     }
                 },
-                onNodeMove = { nodeIndex, moveUp ->
-                    val editSnapshot = editorController.getSnapshot()
-                    val moveResult = prepareCurrentMindMap()?.let { moveMindMapSubtree(it, nodeIndex, moveUp) }
-                    applyMindMapEdit(editSnapshot, moveResult)
-                },
                 onNodeRename = { nodeIndex, renamedTitle ->
                     val editSnapshot = editorController.getSnapshot()
+                    KardLeafLog.d(
+                        MIND_MAP_GESTURE_TRACE_TAG,
+                        "callback rename start nodeIndex=$nodeIndex titleLen=${renamedTitle.length} " +
+                            "titleEndsWithHash=${renamedTitle.endsWith('#')} contentLen=${editSnapshot.content.length} " +
+                            "contentHash=${editSnapshot.content.hashCode()} editorDirty=${viewModel.editorDirty.value}",
+                    )
                     val renameResult = prepareCurrentMindMap()?.let { renameMindMapNode(it, nodeIndex, renamedTitle) }
                     if (applyMindMapEdit(editSnapshot, renameResult)) {
+                        KardLeafLog.d(
+                            MIND_MAP_GESTURE_TRACE_TAG,
+                            "callback rename accepted nodeIndex=$nodeIndex resultTitleLen=${renameResult?.nodeTitle?.length ?: -1}",
+                        )
                         context.showToast("已重命名为「${renameResult?.nodeTitle}」")
                     } else {
+                        KardLeafLog.d(
+                            MIND_MAP_GESTURE_TRACE_TAG,
+                            "callback rename rejected nodeIndex=$nodeIndex",
+                        )
                         context.showToast("节点名称没有变化")
                     }
                 },
                 onNodeDelete = { nodeIndex ->
                     val editSnapshot = editorController.getSnapshot()
+                    KardLeafLog.d(
+                        MIND_MAP_GESTURE_TRACE_TAG,
+                        "callback delete start nodeIndex=$nodeIndex contentLen=${editSnapshot.content.length} " +
+                            "contentHash=${editSnapshot.content.hashCode()} editorDirty=${viewModel.editorDirty.value}",
+                    )
                     val deleteResult = prepareCurrentMindMap()?.let { deleteMindMapSubtree(it, nodeIndex) }
-                    applyMindMapEdit(editSnapshot, deleteResult)
+                    val applied = applyMindMapEdit(editSnapshot, deleteResult)
+                    KardLeafLog.d(
+                        MIND_MAP_GESTURE_TRACE_TAG,
+                        "callback delete ${if (applied) "accepted" else "rejected"} nodeIndex=$nodeIndex",
+                    )
                 },
             )
         }
@@ -5752,6 +6437,14 @@ fun EditorScreen(
             NoteOutlineSidePanel(
                 headings = outlineHeadings,
                 onHeadingClick = { heading -> jumpToHeading(heading) },
+                selectedHeadingStartOffset = selectedOutlineHeadingStartOffset,
+                editorEditing = isEditing,
+                onEdit = { if (!isEditing) enterEditMode() },
+                onMove = { heading, target, placeAfter ->
+                    moveOutlineHeadingToPosition(heading, target, placeAfter)
+                },
+                onRename = { heading, newText -> renameOutlineHeading(heading, newText) },
+                onDelete = { heading -> deleteOutlineHeading(heading) },
                 modifier =
                     Modifier
                         .align(Alignment.CenterStart)
@@ -5772,6 +6465,29 @@ fun EditorScreen(
                 outgoingLinks = outgoingWikilinks,
                 backlinkLinks = backlinks,
                 onLinkClick = { path -> viewModel.openNoteByPath(path) },
+                onTimeChange = { key, timestamp ->
+                    currentNote?.let { note ->
+                        val createdAtMs = if (key.equals("created", ignoreCase = true)) timestamp else note.createdAt.time
+                        val updatedAtMs = if (key.equals("updated", ignoreCase = true)) timestamp else note.updatedAt.time
+                        viewModel.updateNoteTimestamps(note.id, createdAtMs, updatedAtMs) { updated ->
+                            if (updated != null) {
+                                if (currentNote?.id == note.id) {
+                                    val displayValue = NoteFormatUtils.formatYamlDateTime(Date(timestamp))
+                                    noteFrontMatterProperties = noteFrontMatterProperties.map { property ->
+                                        if (property.key.equals(key, ignoreCase = true)) {
+                                            property.copy(values = listOf(displayValue))
+                                        } else {
+                                            property
+                                        }
+                                    }
+                                }
+                                context.showToast("时间已更新")
+                            } else {
+                                context.showToast("时间修改失败")
+                            }
+                        }
+                    }
+                },
                 remarks = noteRemarks,
                 draft = noteRemarkDraft,
                 onDraftChange = { noteRemarkDraft = it },

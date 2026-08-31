@@ -35,6 +35,11 @@ internal enum class TaskDateTarget {
     END,
 }
 
+enum class NoteTimeField {
+    CREATED,
+    UPDATED,
+}
+
 internal data class PermissionHintState(
     val notificationsEnabled: Boolean,
     val exactAlarmsEnabled: Boolean,
@@ -640,6 +645,89 @@ private fun TaskReminderTimePickerDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         },
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun NoteTimestampPickerDialog(
+    initialTimestamp: Long,
+    title: String,
+    onDismiss: () -> Unit,
+    onConfirm: (Long) -> Unit,
+) {
+    var selectedDateUtcMillis by remember(initialTimestamp) { mutableStateOf(utcDateMillis(initialTimestamp)) }
+    var selectedHour by remember(initialTimestamp) { mutableStateOf(hourOfDay(initialTimestamp)) }
+    var selectedMinute by remember(initialTimestamp) { mutableStateOf(minuteOfHour(initialTimestamp)) }
+    var showTimePicker by remember { mutableStateOf(false) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            shadowElevation = 8.dp,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+        ) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                key(selectedDateUtcMillis) {
+                    val datePickerState = rememberDatePickerState(initialSelectedDateMillis = selectedDateUtcMillis)
+                    DatePicker(
+                        state = datePickerState,
+                        title = null,
+                        headline = null,
+                        showModeToggle = false,
+                    )
+                    LaunchedEffect(selectedDateUtcMillis) {
+                        if (datePickerState.selectedDateMillis != selectedDateUtcMillis) {
+                            datePickerState.selectedDateMillis = selectedDateUtcMillis
+                        }
+                    }
+                    LaunchedEffect(datePickerState.selectedDateMillis) {
+                        datePickerState.selectedDateMillis?.let { selectedDateUtcMillis = it }
+                    }
+                }
+                TaskReminderOptionRow(
+                    icon = { Icon(Icons.Outlined.AccessTime, contentDescription = null) },
+                    title = "时间",
+                    value = formatClockTime(selectedHour, selectedMinute),
+                    onClick = { showTimePicker = true },
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    TextButton(
+                        onClick = {
+                            onConfirm(combineDateAndTime(selectedDateUtcMillis, selectedHour, selectedMinute))
+                        },
+                    ) {
+                        Text("确定")
+                    }
+                }
+            }
+        }
+    }
+
+    if (showTimePicker) {
+        TaskReminderTimePickerDialog(
+            initialHour = selectedHour,
+            initialMinute = selectedMinute,
+            onDismiss = { showTimePicker = false },
+            onConfirm = { hour, minute ->
+                selectedHour = hour
+                selectedMinute = minute
+                showTimePicker = false
+            },
+        )
+    }
 }
 
 private fun formatClockTime(

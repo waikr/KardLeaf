@@ -98,6 +98,12 @@ class KardLeafQuillpadActionBridge(
 
     internal suspend fun deleteRemark(remarkId: Long) = repository.deleteNoteRemark(remarkId)
 
+    internal suspend fun updateNoteTimestamps(
+        snapshot: KardLeafQuillpadFeatureSnapshot,
+        createdAtMs: Long,
+        updatedAtMs: Long,
+    ): Boolean = repository.updateNoteTimestamps(snapshot.path, createdAtMs, updatedAtMs) != null
+
     internal fun availableTags(): Flow<List<String>> = repository.getYamlTags()
 
     internal suspend fun updateTags(snapshot: KardLeafQuillpadFeatureSnapshot, tags: List<String>): Boolean =

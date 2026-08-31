@@ -34,7 +34,14 @@ class TaskReminderScheduler(context: Context) {
     private val appContext = context.applicationContext
     private val alarmManager = appContext.getSystemService(AlarmManager::class.java)
 
-    fun schedule(task: TaskEntity) {
+    fun schedule(task: TaskEntity) = schedule(task, testReminder = false)
+
+    fun scheduleTest(task: TaskEntity) = schedule(task, testReminder = true)
+
+    private fun schedule(
+        task: TaskEntity,
+        testReminder: Boolean,
+    ) {
         cancel(task.id)
         val triggerAt = task.reminderAt
         if (triggerAt == null) {
@@ -51,18 +58,18 @@ class TaskReminderScheduler(context: Context) {
         }
 
         createNotificationChannel(appContext)
-        val pendingIntent = reminderPendingIntent(task.id)
+        val pendingIntent = reminderPendingIntent(task, testReminder)
         val notificationsAllowed = areNotificationsEnabled(appContext)
         val exactAllowed = canScheduleExactAlarms(appContext)
         reminderTrace(
             TASK_ALARM_LOG_TAG,
-            "schedule id=${task.id} now=$now triggerAt=$triggerAt alarmType=RTC_WAKEUP " +
+            "schedule id=${task.id} test=$testReminder now=$now triggerAt=$triggerAt alarmType=RTC_WAKEUP " +
                 "requestCode=${task.id.hashCode()} flags=$REMINDER_PENDING_INTENT_FLAGS " +
                 "notificationsAllowed=$notificationsAllowed exactAllowed=$exactAllowed",
         )
         KardLeafLog.i(
             TASK_REMINDER_LOG_TAG,
-            "schedule request id=${task.id} triggerAt=$triggerAt delayMs=${triggerAt - now} notificationsAllowed=$notificationsAllowed exactAllowed=$exactAllowed",
+            "schedule request id=${task.id} test=$testReminder triggerAt=$triggerAt delayMs=${triggerAt - now} notificationsAllowed=$notificationsAllowed exactAllowed=$exactAllowed",
         )
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
@@ -81,7 +88,7 @@ class TaskReminderScheduler(context: Context) {
     }
 
     fun cancel(taskId: Long) {
-        alarmManager.cancel(reminderPendingIntent(taskId))
+        alarmManager.cancel(reminderPendingIntent(taskId, testReminder = false))
         NotificationManagerCompat.from(appContext).cancel(taskId.hashCode())
         KardLeafLog.d(TASK_REMINDER_LOG_TAG, "cancel id=$taskId")
     }
@@ -197,13 +204,24 @@ class TaskReminderScheduler(context: Context) {
         return builder.build()
     }
 
-    private fun reminderPendingIntent(taskId: Long): PendingIntent =
+    private fun reminderPendingIntent(
+        task: TaskEntity,
+        testReminder: Boolean,
+    ): PendingIntent = reminderPendingIntent(task.id, task.taskText, testReminder)
+
+    private fun reminderPendingIntent(
+        taskId: Long,
+        taskText: String = "",
+        testReminder: Boolean,
+    ): PendingIntent =
         PendingIntent.getBroadcast(
             appContext,
             taskId.hashCode(),
             Intent(appContext, TaskReminderReceiver::class.java)
                 .setAction(ACTION_TASK_REMINDER)
-                .putExtra(EXTRA_TASK_ID, taskId),
+                .putExtra(EXTRA_TASK_ID, taskId)
+                .putExtra(EXTRA_TASK_TEXT, taskText)
+                .putExtra(EXTRA_TEST_REMINDER, testReminder),
             REMINDER_PENDING_INTENT_FLAGS,
         )
 
@@ -230,6 +248,7 @@ class TaskReminderScheduler(context: Context) {
         const val ACTION_TASK_REMINDER_DISMISS = "com.kangle.kardleaf.action.TASK_REMINDER_DISMISS"
         const val EXTRA_TASK_ID = "task_id"
         const val EXTRA_TASK_TEXT = "task_text"
+        const val EXTRA_TEST_REMINDER = "test_reminder"
         const val CHANNEL_ID = "task_reminders_v3"
         const val SILENT_CHANNEL_ID = "task_reminders_silent_v1"
         private const val ALERT_REQUEST_CODE_MASK = 0x51F5

@@ -25,12 +25,26 @@ internal class EditorViewModel(
     suspend fun getNoteForProperties(noteId: String): Note? = repository.getNote(noteId)
     suspend fun getFullNoteForShare(noteId: String): Note? = repository.getNoteForShare(noteId)
 
+    fun updateNoteTimestamps(
+        noteId: String,
+        createdAtMs: Long,
+        updatedAtMs: Long,
+        onComplete: (Note?) -> Unit,
+    ) {
+        scope.launch {
+            onComplete(runCatching { repository.updateNoteTimestamps(noteId, createdAtMs, updatedAtMs) }.getOrNull())
+        }
+    }
+
     suspend fun getFullNotesForShare(notes: List<Note>): List<Note>? {
         if (notes.isEmpty()) return emptyList()
         val fullNotes = mutableListOf<Note>()
         notes.forEach { fullNotes += getFullNoteForShare(it.id) ?: return null }
         return fullNotes
     }
+
+    suspend fun getFullNotesForGallery(notes: List<Note>): List<Note> =
+        notes.mapNotNull { getFullNoteForShare(it.id) }
 
     suspend fun getNoteTextStatsForProperties(noteId: String): NoteTextStats =
         repository.getNoteTextStatsForProperties(noteId)
@@ -70,7 +84,7 @@ internal class EditorViewModel(
     suspend fun preparePreviewMarkdown(markdown: String, currentFolder: String): String {
         val startMs = SystemClock.elapsedRealtime()
         KardLeafLog.d(OPEN_PATH_PROBE_TAG, "previewPrepare start folder=$currentFolder markdownLen=${markdown.length} thread=${Thread.currentThread().name}")
-        val result = repository.resolveMarkdownImages(markdown, currentFolder)
+        val result = repository.resolveMarkdownImagesForWebPreview(markdown, currentFolder)
         KardLeafLog.d(OPEN_PATH_PROBE_TAG, "previewPrepare done folder=$currentFolder markdownLen=${markdown.length} resultLen=${result.length} elapsed=${SystemClock.elapsedRealtime() - startMs}ms thread=${Thread.currentThread().name}")
         return result
     }

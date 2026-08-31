@@ -56,6 +56,7 @@ object WidgetPinHelper {
 
 class WidgetPickerActivity : ComponentActivity() {
     private val appWidgetManager by lazy { AppWidgetManager.getInstance(this) }
+    private var pickerShown = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,6 +66,29 @@ class WidgetPickerActivity : ComponentActivity() {
         @Suppress("DEPRECATION")
         overridePendingTransition(0, 0)
 
+        val prefsManager = PrefsManager(this)
+        if (prefsManager.hasSeenWidgetShortcutPermissionHint()) {
+            showPicker()
+        } else {
+            prefsManager.markWidgetShortcutPermissionHintSeen()
+            showShortcutPermissionGate()
+        }
+    }
+
+    private fun showShortcutPermissionGate() {
+        setContent {
+            KardLeafTheme(styleSystemBars = false) {
+                ShortcutPermissionDialog(
+                    onConfirm = ::showPicker,
+                    onDismiss = ::finishWithoutTransition,
+                )
+            }
+        }
+    }
+
+    private fun showPicker() {
+        if (pickerShown) return
+        pickerShown = true
         val widgetPinningSupported = isWidgetPinningSupported()
         val quickMemoPinningSupported = isQuickMemoPinningSupported()
         setContent {
@@ -176,6 +200,30 @@ class WidgetPickerActivity : ComponentActivity() {
         const val ACTION_OPEN_QUICK_MEMO = "com.kangle.kardleaf.action.OPEN_QUICK_MEMO"
         const val QUICK_MEMO_SHORTCUT_ID = "quick_memo"
     }
+}
+
+@Composable
+private fun ShortcutPermissionDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.widget_shortcut_permission_title)) },
+        text = { Text(stringResource(R.string.widget_shortcut_permission_message)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.widget_shortcut_permission_allow))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(android.R.string.cancel))
+            }
+        },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+    )
 }
 
 @Composable

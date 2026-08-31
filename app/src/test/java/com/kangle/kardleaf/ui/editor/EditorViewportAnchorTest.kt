@@ -18,6 +18,9 @@ class EditorViewportAnchorTest {
         val content = "a\r\nb\r\nc"
         assertEquals(5, codeMirrorNormalizedLength(content))
         assertEquals(2, codeMirrorCrLfCount(content))
+        assertEquals(3, codeMirrorOffset(content, 4))
+        assertEquals(5, codeMirrorOffset(content, content.length))
+        assertEquals(3, codeMirrorOffset("😀\r\nBravo", 4))
         assertEquals(3, EditorViewportAnchor(4, 0.5f, EditorViewportEdge.CENTER).toCodeMirrorAnchor(content).offset)
         assertEquals(5, EditorViewportAnchor(0, 0.5f, EditorViewportEdge.END).toCodeMirrorAnchor(content).offset)
     }

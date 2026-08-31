@@ -12,10 +12,9 @@ import java.util.regex.PatternSyntaxException
 
 internal fun noteSearchSnippetForLog(text: String, start: Int, end: Int): String {
     if (start < 0 || end <= start || start >= text.length) return ""
-    return text.substring(start.coerceAtLeast(0), end.coerceAtMost(text.length))
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-        .take(32)
+    val safeStart = start.coerceIn(0, text.length)
+    val safeEnd = end.coerceIn(safeStart, text.length)
+    return "range=$safeStart..$safeEnd len=${safeEnd - safeStart}"
 }
 
 internal data class NoteSearchMatchRange(
@@ -242,7 +241,7 @@ internal fun buildNoteSidePanelProperties(
         add(
             NoteFormatUtils.FrontMatterProperty(
                 key = "updated",
-                values = listOf(formatNoteSidePanelTime(currentNote.lastModified)),
+                values = listOf(formatNoteSidePanelTime(currentNote.updatedAt)),
             ),
         )
     }
@@ -296,7 +295,7 @@ private data class MindMapParseResult(
     val error: String? = null,
 )
 
-private val mindMapHeadingRegex = Regex("""^(#{1,6})\s+(.+?)\s*#*\s*$""")
+private val mindMapHeadingRegex = Regex("""^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$""")
 private val mindMapListRegex = Regex("""^([ \t]*)([-*+])\s+(.+?)\s*$""")
 
 internal fun blockedLargeMindMapResult(contentLength: Int): MindMapPrepareResult =
@@ -445,6 +444,12 @@ internal fun createMindMapRoot(title: String = "中心主题"): MindMapEditResul
     return MindMapEditResult(content, TextRange(2, content.length), rootTitle)
 }
 
+private fun mindMapEol(content: String): String = when {
+    "\r\n" in content -> "\r\n"
+    '\r' in content -> "\r"
+    else -> "\n"
+}
+
 private fun insertMindMapNode(
     document: MindMapDocument,
     insertAt: Int,
@@ -453,8 +458,9 @@ private fun insertMindMapNode(
     contextTitle: String,
 ): MindMapEditResult {
     val content = document.content
-    val prefix = if (insertAt > 0 && content[insertAt - 1] != '\n' && content[insertAt - 1] != '\r') "\n" else ""
-    val suffix = if (insertAt >= content.length || (content[insertAt] != '\n' && content[insertAt] != '\r')) "\n" else ""
+    val eol = mindMapEol(content)
+    val prefix = if (insertAt > 0 && content[insertAt - 1] != '\n' && content[insertAt - 1] != '\r') eol else ""
+    val suffix = if (insertAt >= content.length || (content[insertAt] != '\n' && content[insertAt] != '\r')) eol else ""
     val line = formatMindMapNodeLine(depth, title)
     val insertion = prefix + line + suffix
     val updatedContent = content.substring(0, insertAt) + insertion + content.substring(insertAt)
@@ -494,6 +500,40 @@ internal fun addMindMapSibling(
     return insertMindMapNode(document, insertAt, anchor.depth, newTitle, anchor.text)
 }
 
+private fun applyPendingMindMapRename(
+    document: MindMapDocument,
+    renameIndex: Int,
+    renameTitle: String,
+): MindMapDocument {
+    if (renameIndex < 0) return document
+    val renameResult = renameMindMapNode(document, renameIndex, renameTitle) ?: return document
+    return prepareMarkdownMindMap(renameResult.content).document ?: document
+}
+
+internal fun addMindMapChildWithPendingRename(
+    document: MindMapDocument,
+    parentIndex: Int,
+    title: String,
+    renameIndex: Int,
+    renameTitle: String,
+): MindMapEditResult? = addMindMapChild(
+    applyPendingMindMapRename(document, renameIndex, renameTitle),
+    parentIndex,
+    title,
+)
+
+internal fun addMindMapSiblingWithPendingRename(
+    document: MindMapDocument,
+    anchorIndex: Int,
+    title: String,
+    renameIndex: Int,
+    renameTitle: String,
+): MindMapEditResult? = addMindMapSibling(
+    applyPendingMindMapRename(document, renameIndex, renameTitle),
+    anchorIndex,
+    title,
+)
+
 internal fun moveMindMapSubtree(
     document: MindMapDocument,
     nodeIndex: Int,
@@ -523,11 +563,12 @@ internal fun moveMindMapSubtree(
     }
     val firstBlock = document.content.substring(blockStart, blockMid)
     val secondBlock = document.content.substring(blockMid, blockEnd)
+    val eol = mindMapEol(document.content)
     val needsNewline = !secondBlock.endsWith("\n") && !secondBlock.endsWith("\r")
-    val swapped = if (needsNewline) secondBlock + "\n" + firstBlock else secondBlock + firstBlock
+    val swapped = if (needsNewline) secondBlock + eol + firstBlock else secondBlock + firstBlock
     val updatedContent = document.content.substring(0, blockStart) + swapped + document.content.substring(blockEnd)
     val newMovingStart = if (movingBlockIsFirst) {
-        blockStart + secondBlock.length + (if (needsNewline) 1 else 0)
+        blockStart + secondBlock.length + (if (needsNewline) eol.length else 0)
     } else {
         blockStart
     }
@@ -566,21 +607,44 @@ internal fun renameMindMapNode(
     )
 }
 
-internal fun reparentMindMapSubtree(
+internal fun moveMindMapSubtreeToPosition(
+    document: MindMapDocument,
+    movingIndex: Int,
+    targetParentIndex: Int,
+    targetChildIndex: Int,
+): MindMapEditResult? {
+    val nodes = document.nodes
+    val moving = nodes.getOrNull(movingIndex)?.takeIf { it.depth > 0 } ?: return null
+    val targetParent = nodes.getOrNull(targetParentIndex) ?: return null
+    val movingSubtreeEnd = findMindMapSubtreeEnd(nodes, movingIndex)
+    if (targetParentIndex in movingIndex until movingSubtreeEnd) return null
+    val oldSiblings = nodes.filter { it.parentIndex == moving.parentIndex }
+    val oldChildIndex = oldSiblings.indexOfFirst { it.index == movingIndex }
+    val targetChildren = nodes.filter {
+        it.parentIndex == targetParentIndex && it.index != movingIndex
+    }
+    if (targetChildIndex !in 0..targetChildren.size) return null
+    if (moving.parentIndex == targetParentIndex && oldChildIndex == targetChildIndex) return null
+    val targetOffset = targetChildren.getOrNull(targetChildIndex)?.sourceOffset
+        ?: nodes.getOrNull(findMindMapSubtreeEnd(nodes, targetParentIndex))?.sourceOffset
+        ?: document.content.length
+    return moveMindMapSubtreeBlock(document, movingIndex, targetParent.index, targetOffset)
+}
+
+private fun moveMindMapSubtreeBlock(
     document: MindMapDocument,
     movingIndex: Int,
     parentIndex: Int,
+    targetOffset: Int,
 ): MindMapEditResult? {
     val nodes = document.nodes
     val moving = nodes.getOrNull(movingIndex)?.takeIf { it.depth > 0 } ?: return null
     val parent = nodes.getOrNull(parentIndex) ?: return null
-    if (moving.parentIndex == parentIndex) return null
     val movingSubtreeEnd = findMindMapSubtreeEnd(nodes, movingIndex)
     if (parentIndex in movingIndex until movingSubtreeEnd) return null
-
     val blockStart = moving.sourceOffset
     val blockEnd = nodes.getOrNull(movingSubtreeEnd)?.sourceOffset ?: document.content.length
-    val targetEnd = nodes.getOrNull(findMindMapSubtreeEnd(nodes, parentIndex))?.sourceOffset ?: document.content.length
+    if (moving.parentIndex == parentIndex && (targetOffset == blockStart || targetOffset == blockEnd)) return null
     val originalBlock = document.content.substring(blockStart, blockEnd)
     val depthDelta = parent.depth + 1 - moving.depth
     val adjustedBlock = adjustMindMapDepthsInBlock(
@@ -590,10 +654,11 @@ internal fun reparentMindMapSubtree(
         depthDelta = depthDelta,
     )
     val withoutBlock = document.content.removeRange(blockStart, blockEnd)
-    val insertAt = (if (targetEnd > blockStart) targetEnd - originalBlock.length else targetEnd)
+    val insertAt = (if (targetOffset > blockStart) targetOffset - originalBlock.length else targetOffset)
         .coerceIn(0, withoutBlock.length)
-    val prefix = if (insertAt > 0 && withoutBlock[insertAt - 1] != '\n' && withoutBlock[insertAt - 1] != '\r') "\n" else ""
-    val suffix = if (insertAt < withoutBlock.length && !adjustedBlock.endsWith("\n") && !adjustedBlock.endsWith("\r")) "\n" else ""
+    val eol = mindMapEol(document.content)
+    val prefix = if (insertAt > 0 && withoutBlock[insertAt - 1] != '\n' && withoutBlock[insertAt - 1] != '\r') eol else ""
+    val suffix = if (insertAt < withoutBlock.length && !adjustedBlock.endsWith("\n") && !adjustedBlock.endsWith("\r")) eol else ""
     val insertedBlock = prefix + adjustedBlock + suffix
     val updatedContent = withoutBlock.substring(0, insertAt) + insertedBlock + withoutBlock.substring(insertAt)
     val newNodeStart = insertAt + prefix.length

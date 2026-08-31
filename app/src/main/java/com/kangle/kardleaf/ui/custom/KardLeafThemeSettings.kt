@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -44,12 +46,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
@@ -221,6 +223,7 @@ internal fun SettingsValueSlider(
     valueText: String,
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int = 0,
     onValueChange: (Float) -> Unit,
 ) {
     Column(
@@ -237,7 +240,7 @@ internal fun SettingsValueSlider(
             Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             Text(valueText, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Slider(value = value, onValueChange = onValueChange, valueRange = valueRange)
+        Slider(value = value, onValueChange = onValueChange, valueRange = valueRange, steps = steps)
     }
 }
 
@@ -316,9 +319,9 @@ internal fun ThemeColorPickerDialog(
                     Box(
                         modifier = Modifier
                             .size(58.dp)
-                            .clip(RoundedCornerShape(18.dp))
+                            .clip(CircleShape)
                             .background(preview)
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp)),
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
                     )
                     OutlinedTextField(
                         value = hexText,
@@ -343,13 +346,13 @@ internal fun ThemeColorPickerDialog(
                         val selected = (argb and 0x00FFFFFF) == (workingArgb and 0x00FFFFFF)
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .size(36.dp)
+                                .clip(CircleShape)
                                 .background(Color(argb))
                                 .border(
                                     width = if (selected) 2.dp else 1.dp,
                                     color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = CircleShape,
                                 )
                                 .clickable { setColor(argb) },
                         )
@@ -526,23 +529,28 @@ internal fun parseThemeHexColor(raw: String): Int? {
 internal val ThemeCornerRadiusOptions =
     listOf(PrefsManager.THEME_CORNER_RADIUS_FOLLOW, 0, 8, 16, 24, 32)
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ThemeModeChoiceGrid(
     selectedMode: PrefsManager.AppThemeMode,
     onModeClick: (PrefsManager.AppThemeMode) -> Unit,
 ) {
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         PrefsManager.AppThemeMode.values().forEach { mode ->
-            ThemeChoiceBlock(
-                icon = themeModeIcon(mode),
-                title = themeModeLabel(mode),
-                subtitle = themeModeSubtitle(mode),
+            FilterChip(
                 selected = selectedMode == mode,
                 onClick = { onModeClick(mode) },
+                label = { Text(themeModeLabel(mode), maxLines = 1) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = themeModeIcon(mode),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                },
+                modifier = Modifier.weight(1f),
             )
         }
     }
@@ -556,14 +564,16 @@ internal fun ThemeStyleChoiceGrid(
     onStyleClick: (PrefsManager.AppThemeStyle) -> Unit,
 ) {
     FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        maxItemsInEachRow = 2,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         styles.forEach { style ->
             ThemeChoiceBlock(
+                modifier = Modifier.weight(1f),
                 icon = Icons.Outlined.Palette,
                 title = themeStyleLabel(style),
-                subtitle = themeStyleSubtitle(style),
                 selected = selectedStyle == style,
                 onClick = { onStyleClick(style) },
             )
@@ -578,14 +588,16 @@ internal fun ModernThemeColorStyleChoiceGrid(
     onStyleClick: (PrefsManager.ModernThemeColorStyle) -> Unit,
 ) {
     FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        maxItemsInEachRow = 2,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         PrefsManager.ModernThemeColorStyle.values().forEach { style ->
             ThemeChoiceBlock(
+                modifier = Modifier.weight(1f),
                 icon = Icons.Outlined.Palette,
                 title = modernThemeColorStyleLabel(style),
-                subtitle = modernThemeColorStyleSubtitle(style),
                 selected = selectedStyle == style,
                 onClick = { onStyleClick(style) },
             )
@@ -600,14 +612,16 @@ internal fun CleanListFeatureIconStyleChoiceGrid(
     onStyleClick: (PrefsManager.CleanListFeatureIconStyle) -> Unit,
 ) {
     FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        maxItemsInEachRow = 2,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         PrefsManager.CleanListFeatureIconStyle.values().forEach { style ->
             ThemeChoiceBlock(
+                modifier = Modifier.weight(1f),
                 icon = Icons.Outlined.Apps,
                 title = cleanListFeatureIconStyleLabel(style),
-                subtitle = cleanListFeatureIconStyleSubtitle(style),
                 selected = selectedStyle == style,
                 onClick = { onStyleClick(style) },
             )
@@ -619,15 +633,14 @@ internal fun CleanListFeatureIconStyleChoiceGrid(
 internal fun ThemeChoiceBlock(
     icon: ImageVector,
     title: String,
-    subtitle: String,
+    modifier: Modifier = Modifier,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(20.dp)
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .clip(shape)
             .background(MaterialTheme.colorScheme.surface)
             .border(if (selected) 2.dp else 1.dp, borderColor, shape)
@@ -667,13 +680,6 @@ internal fun ThemeChoiceBlock(
             text = title,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -844,52 +850,30 @@ internal fun ThemePaletteBox(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(20.dp)
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
     Column(
         modifier = Modifier
-            .width(92.dp)
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(if (selected) 2.dp else 1.dp, borderColor, shape)
+            .width(72.dp)
+            .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick)
-            .padding(8.dp),
+            .padding(6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(54.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .size(56.dp)
+                .clip(CircleShape)
+                .background(color)
+                .border(if (selected) 3.dp else 1.dp, borderColor, CircleShape),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(color),
-            )
-            Row(modifier = Modifier.align(Alignment.BottomCenter)) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(18.dp)
-                        .background(color.copy(alpha = 0.62f)),
-                )
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(18.dp)
-                        .background(color.copy(alpha = 0.28f)),
-                )
-            }
             if (selected) {
                 Icon(
                     imageVector = Icons.Outlined.Check,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(24.dp),
+                    tint = if (color.luminance() > 0.55f) Color(0xFF111827) else Color.White,
+                    modifier = Modifier.size(22.dp),
                 )
             }
         }
@@ -903,7 +887,6 @@ internal fun ThemePaletteBox(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun CornerRadiusPaletteGrid(
 
@@ -913,176 +896,23 @@ internal fun CornerRadiusPaletteGrid(
     label: (Int) -> String,
     onClick: (Int) -> Unit,
 ) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
-    )
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        values.forEach { value ->
-            val selectedValue = selected == value
-            val previewRadius = if (value == PrefsManager.THEME_CORNER_RADIUS_FOLLOW) 18.dp else value.dp
-            val shape = RoundedCornerShape(18.dp)
-            Column(
-                modifier = Modifier
-                    .width(92.dp)
-                    .clip(shape)
-                    .background(MaterialTheme.colorScheme.surface)
-                    .border(
-                        if (selectedValue) 2.dp else 1.dp,
-                        if (selectedValue) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                        shape,
-                    )
-                    .clickable { onClick(value) }
-                    .padding(8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(width = 54.dp, height = 34.dp)
-                        .clip(RoundedCornerShape(previewRadius))
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (selectedValue) {
-                        Icon(
-                            imageVector = Icons.Outlined.Check,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                }
-                Text(
-                    text = label(value),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-internal fun ThemePreviewCard(
-    themeStyle: PrefsManager.AppThemeStyle,
-    themeMode: PrefsManager.AppThemeMode,
-    accentColor: PrefsManager.ThemeColor,
-    backgroundColor: PrefsManager.ThemeBackgroundColor,
-    modernColorStyle: PrefsManager.ModernThemeColorStyle,
-    customAccentColor: Color,
-    customBackgroundColor: Color,
-) {
-    val isReference = themeStyle == PrefsManager.AppThemeStyle.NOW_IN_ANDROID ||
-        (themeStyle == PrefsManager.AppThemeStyle.MODERN && modernColorStyle == PrefsManager.ModernThemeColorStyle.MODERN)
-    val isCleanList = themeStyle == PrefsManager.AppThemeStyle.CLEAN_LIST
-    val isGitHub = themeStyle == PrefsManager.AppThemeStyle.GITHUB_DARK
-    val isDracula = themeStyle == PrefsManager.AppThemeStyle.DRACULA
-    val accent = when {
-        accentColor == PrefsManager.ThemeColor.CUSTOM -> customAccentColor
-        isGitHub -> githubAccentPreviewColor(accentColor)
-        isDracula -> draculaAccentPreviewColor(accentColor)
-        else -> themeAccentPreviewColor(accentColor)
-    }
-    val background = when {
-        isGitHub -> Color(0xFF0D1117)
-        isDracula -> Color(0xFF282A36)
-        isCleanList -> Color(0xFFF0F2F3)
-        backgroundColor == PrefsManager.ThemeBackgroundColor.CUSTOM -> customBackgroundColor
-        else -> themeBackgroundPreviewColor(backgroundColor)
-    }
-    val foreground = if (isGitHub) Color(0xFFC9D1D9) else if (isDracula) Color(0xFFF8F8F2) else Color(0xFF0F172A)
-    val muted = if (isGitHub) Color(0xFF8B949E) else if (isDracula) Color(0xFFCFCBD8) else Color(0xFF64748B)
-    val chipSurface = if (isGitHub) Color(0xFF161B22) else if (isDracula) Color(0xFF44475A) else Color.White
-    val isModern = themeStyle != PrefsManager.AppThemeStyle.CLASSIC
-    val shape = RoundedCornerShape(
+    val selectedIndex = values.indices.minByOrNull { index ->
         when {
-            isGitHub -> 12.dp
-            isDracula -> 14.dp
-            isCleanList -> 28.dp
-            isModern -> 30.dp
-            else -> 22.dp
+            values[index] == selected -> 0
+            values[index] == PrefsManager.THEME_CORNER_RADIUS_FOLLOW ||
+                selected == PrefsManager.THEME_CORNER_RADIUS_FOLLOW -> Int.MAX_VALUE
+            else -> kotlin.math.abs(values[index] - selected)
+        }
+    } ?: 0
+    SettingsValueSlider(
+        title = title,
+        valueText = label(selected),
+        value = selectedIndex.toFloat(),
+        valueRange = 0f..values.lastIndex.toFloat(),
+        steps = (values.size - 2).coerceAtLeast(0),
+        onValueChange = { position ->
+            values[position.roundToInt().coerceIn(values.indices)].let(onClick)
         },
-    )
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .shadow(if (isModern) 8.dp else 0.dp, shape, clip = false)
-            .clip(shape)
-            .background(background)
-            .border(1.dp, accent.copy(alpha = if (isModern) 0.22f else 0.28f), shape)
-            .padding(if (isModern) 18.dp else 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = "主题预览",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = foreground,
-                )
-                Text(
-                    text = if (isDracula) {
-                        "${themeStyleLabel(themeStyle)} · 固定暗色 · ${themeColorLabel(accentColor)}霓虹"
-                    } else if (isGitHub) {
-                        "${themeStyleLabel(themeStyle)} · 固定暗色 · ${themeColorLabel(accentColor)}链接色"
-                    } else {
-                        if (themeStyle == PrefsManager.AppThemeStyle.MODERN) {
-                            "${themeStyleLabel(themeStyle)} · ${modernThemeColorStyleLabel(modernColorStyle)}色彩 · ${themeModeLabel(themeMode)}"
-                        } else {
-                            "${themeStyleLabel(themeStyle)} · ${themeModeLabel(themeMode)} · ${themeColorLabel(accentColor)} · ${themeBackgroundColorLabel(backgroundColor)}"
-                        }
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = muted,
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(RoundedCornerShape(17.dp))
-                    .background(accent),
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ThemePreviewChip(text = if (isGitHub) "链接色" else if (isDracula) "霓虹按钮" else if (isCleanList) "强调按钮" else if (isModern) "柔和按钮" else "按钮", color = accent, selected = true)
-            ThemePreviewChip(text = if (isGitHub) "仓库卡片" else if (isDracula) "硬边卡片" else if (isCleanList) "白色卡片" else if (isModern) "圆角卡片" else "标签", color = if (isGitHub) Color(0xFF21262D) else if (isDracula) Color(0xFF44475A) else accent.copy(alpha = 0.12f), selected = false, textColor = if (isGitHub || isDracula) foreground else Color(0xFF334155))
-            ThemePreviewChip(text = if (isGitHub) "细边框" else if (isReference) "现代色彩" else if (isDracula) "暗色面板" else if (isCleanList) "分组列表" else if (isModern) "按压动效" else "卡片", color = chipSurface, selected = false, textColor = if (isGitHub || isDracula) foreground else Color(0xFF334155))
-        }
-    }
-}
-
-@Composable
-internal fun ThemePreviewChip(
-    text: String,
-    color: Color,
-    selected: Boolean,
-    textColor: Color = Color(0xFF334155),
-) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelMedium,
-        color = if (selected) Color.White else textColor,
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(color)
-            .border(
-                width = 1.dp,
-                color = if (selected) color else Color(0xFFE2E8F0),
-                shape = RoundedCornerShape(999.dp),
-            )
-            .padding(horizontal = 12.dp, vertical = 6.dp),
     )
 }
 
@@ -1134,26 +964,10 @@ internal fun themeStyleLabel(style: PrefsManager.AppThemeStyle): String =
         PrefsManager.AppThemeStyle.DRACULA -> "霓彩主题"
     }
 
-internal fun themeStyleSubtitle(style: PrefsManager.AppThemeStyle): String =
-    when (style) {
-        PrefsManager.AppThemeStyle.CLASSIC -> "保留 KardLeaf 原有的经典界面和视觉效果"
-        PrefsManager.AppThemeStyle.MODERN -> "柔和圆角、卡片设置项和按压动画"
-        PrefsManager.AppThemeStyle.NOW_IN_ANDROID -> "圆润主题下的现代色彩体系"
-        PrefsManager.AppThemeStyle.CLEAN_LIST -> "浅灰背景、白色大圆角分组列表和彩色图标"
-        PrefsManager.AppThemeStyle.GITHUB_DARK -> "接近代码仓库界面的极暗配色、蓝色链接和细边框"
-        PrefsManager.AppThemeStyle.DRACULA -> "暗色霓虹紫粉风格，按钮和卡片更硬朗"
-    }
-
 internal fun modernThemeColorStyleLabel(style: PrefsManager.ModernThemeColorStyle): String =
     when (style) {
         PrefsManager.ModernThemeColorStyle.CLASSIC -> "经典"
         PrefsManager.ModernThemeColorStyle.MODERN -> "现代"
-    }
-
-internal fun modernThemeColorStyleSubtitle(style: PrefsManager.ModernThemeColorStyle): String =
-    when (style) {
-        PrefsManager.ModernThemeColorStyle.CLASSIC -> "使用当前圆润主题的强调色和背景色效果"
-        PrefsManager.ModernThemeColorStyle.MODERN -> "使用现代 Material3 色彩效果"
     }
 
 internal fun cleanListFeatureIconStyleLabel(style: PrefsManager.CleanListFeatureIconStyle): String =
@@ -1162,30 +976,20 @@ internal fun cleanListFeatureIconStyleLabel(style: PrefsManager.CleanListFeature
         PrefsManager.CleanListFeatureIconStyle.SIMPLE -> "简约"
     }
 
-internal fun cleanListFeatureIconStyleSubtitle(style: PrefsManager.CleanListFeatureIconStyle): String =
-    when (style) {
-        PrefsManager.CleanListFeatureIconStyle.MODERN -> "保留不同颜色的功能项图标"
-        PrefsManager.CleanListFeatureIconStyle.SIMPLE -> "图标统一跟随当前强调色"
-    }
-
 internal fun globalCornerRadiusLabel(radiusDp: Int): String =
     if (radiusDp == PrefsManager.THEME_CORNER_RADIUS_FOLLOW) "跟随主题" else "${radiusDp}dp"
 
 internal fun homeCornerRadiusLabel(radiusDp: Int): String =
     if (radiusDp == PrefsManager.THEME_CORNER_RADIUS_FOLLOW) "跟随全局" else "${radiusDp}dp"
 
+internal fun taskCornerRadiusLabel(radiusDp: Int): String =
+    if (radiusDp == PrefsManager.THEME_CORNER_RADIUS_FOLLOW) "跟随全局" else "${radiusDp}dp"
+
 internal fun themeModeLabel(mode: PrefsManager.AppThemeMode): String =
     when (mode) {
-        PrefsManager.AppThemeMode.SYSTEM -> "跟随系统"
-        PrefsManager.AppThemeMode.LIGHT -> "浅色模式"
-        PrefsManager.AppThemeMode.DARK -> "黑夜模式"
-    }
-
-internal fun themeModeSubtitle(mode: PrefsManager.AppThemeMode): String =
-    when (mode) {
-        PrefsManager.AppThemeMode.SYSTEM -> "使用系统当前的浅色/深色设置"
-        PrefsManager.AppThemeMode.LIGHT -> "始终使用浅色界面"
-        PrefsManager.AppThemeMode.DARK -> "始终使用深色界面"
+        PrefsManager.AppThemeMode.SYSTEM -> "自动"
+        PrefsManager.AppThemeMode.LIGHT -> "浅色"
+        PrefsManager.AppThemeMode.DARK -> "深色"
     }
 
 internal fun themeColorLabel(color: PrefsManager.ThemeColor): String =
@@ -1197,17 +1001,6 @@ internal fun themeColorLabel(color: PrefsManager.ThemeColor): String =
         PrefsManager.ThemeColor.AMBER -> "琥珀色"
         PrefsManager.ThemeColor.RED -> "红色"
         PrefsManager.ThemeColor.CUSTOM -> "自定义"
-    }
-
-internal fun themeColorSubtitle(color: PrefsManager.ThemeColor): String =
-    when (color) {
-        PrefsManager.ThemeColor.BLUE -> "默认蓝色强调色"
-        PrefsManager.ThemeColor.GREEN -> "自然叶子风格"
-        PrefsManager.ThemeColor.PURPLE -> "柔和效率风格"
-        PrefsManager.ThemeColor.PINK -> "轻柔生活风格"
-        PrefsManager.ThemeColor.AMBER -> "温暖阅读风格"
-        PrefsManager.ThemeColor.RED -> "醒目强调风格"
-        PrefsManager.ThemeColor.CUSTOM -> "自定义强调色"
     }
 
 internal fun themeBackgroundColorLabel(color: PrefsManager.ThemeBackgroundColor): String =
@@ -1222,18 +1015,6 @@ internal fun themeBackgroundColorLabel(color: PrefsManager.ThemeBackgroundColor)
         PrefsManager.ThemeBackgroundColor.CUSTOM -> "自定义"
     }
 
-internal fun themeBackgroundColorSubtitle(color: PrefsManager.ThemeBackgroundColor): String =
-    when (color) {
-        PrefsManager.ThemeBackgroundColor.WHITE -> "默认白色背景"
-        PrefsManager.ThemeBackgroundColor.BLUE -> "清爽蓝色背景"
-        PrefsManager.ThemeBackgroundColor.GREEN -> "柔和自然背景"
-        PrefsManager.ThemeBackgroundColor.PURPLE -> "淡紫氛围背景"
-        PrefsManager.ThemeBackgroundColor.PINK -> "温柔浅粉背景"
-        PrefsManager.ThemeBackgroundColor.AMBER -> "暖色阅读背景"
-        PrefsManager.ThemeBackgroundColor.GRAY -> "中性浅灰背景"
-        PrefsManager.ThemeBackgroundColor.CUSTOM -> "自定义背景色"
-    }
-
 internal fun themeAccentPreviewColor(color: PrefsManager.ThemeColor): Color =
     when (color) {
         PrefsManager.ThemeColor.BLUE -> Color(0xFF3B82F6)
@@ -1243,28 +1024,6 @@ internal fun themeAccentPreviewColor(color: PrefsManager.ThemeColor): Color =
         PrefsManager.ThemeColor.AMBER -> Color(0xFF956300)
         PrefsManager.ThemeColor.RED -> Color(0xFFDC2626)
         PrefsManager.ThemeColor.CUSTOM -> Color(0xFF3B82F6)
-    }
-
-internal fun draculaAccentPreviewColor(color: PrefsManager.ThemeColor): Color =
-    when (color) {
-        PrefsManager.ThemeColor.BLUE -> Color(0xFF8BE9FD)
-        PrefsManager.ThemeColor.GREEN -> Color(0xFF50FA7B)
-        PrefsManager.ThemeColor.PURPLE -> Color(0xFFBD93F9)
-        PrefsManager.ThemeColor.PINK -> Color(0xFFFF79C6)
-        PrefsManager.ThemeColor.AMBER -> Color(0xFFFFB86C)
-        PrefsManager.ThemeColor.RED -> Color(0xFFFF5555)
-        PrefsManager.ThemeColor.CUSTOM -> Color(0xFFBD93F9)
-    }
-
-internal fun githubAccentPreviewColor(color: PrefsManager.ThemeColor): Color =
-    when (color) {
-        PrefsManager.ThemeColor.BLUE -> Color(0xFF58A6FF)
-        PrefsManager.ThemeColor.GREEN -> Color(0xFF7EE787)
-        PrefsManager.ThemeColor.PURPLE -> Color(0xFFD2A8FF)
-        PrefsManager.ThemeColor.PINK -> Color(0xFFFFA6D1)
-        PrefsManager.ThemeColor.AMBER -> Color(0xFFE3B341)
-        PrefsManager.ThemeColor.RED -> Color(0xFFFF7B72)
-        PrefsManager.ThemeColor.CUSTOM -> Color(0xFF58A6FF)
     }
 
 internal fun themeBackgroundPreviewColor(color: PrefsManager.ThemeBackgroundColor): Color =

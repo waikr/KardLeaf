@@ -7,6 +7,7 @@ import com.kangle.kardleaf.data.task.TaskEditorResult
 import com.kangle.kardleaf.data.task.TaskHierarchy
 import com.kangle.kardleaf.data.task.nextTaskOccurrence
 import com.kangle.kardleaf.data.task.toTaskEntity
+import com.kangle.kardleaf.data.task.TaskTimeRules
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -14,6 +15,24 @@ import org.junit.Test
 import java.util.Calendar
 
 class TaskListLogicTest {
+    @Test
+    fun completedFeedbackLastsExactlyTwoSeconds() {
+        assertEquals(2_000L, TASK_COMPLETION_SNACKBAR_DURATION_MS)
+    }
+
+    @Test
+    fun pendingDoneOverrideChangesOnlyCompletionState() {
+        val original = task(1, "task", notes = "details", groupId = 2)
+
+        val displayed = applyTaskDoneOverrides(listOf(original), mapOf(1L to true)).single()
+
+        assertTrue(displayed.done)
+        assertEquals(original.taskText, displayed.taskText)
+        assertEquals(original.notes, displayed.notes)
+        assertEquals(original.groupId, displayed.groupId)
+        assertEquals(original.updatedAt, displayed.updatedAt)
+    }
+
     @Test
     fun filtersAndSortsWithoutDroppingTaskMetadata() {
         val now =
@@ -165,6 +184,62 @@ class TaskListLogicTest {
     }
 
     @Test
+    fun taskProjectionSortsSiblingsAndExpandsSearchContext() {
+        val root = task(1, "root", priority = 0)
+        val low = task(2, "low", priority = 1).copy(parentTaskId = root.id)
+        val high = task(3, "needle", priority = 3).copy(parentTaskId = root.id)
+        val otherRoot = task(4, "other", priority = 2)
+
+        val projection =
+            buildTaskListProjection(
+                tasks = listOf(root, low, high, otherRoot),
+                query = "needle",
+                filter = TaskFilter.ALL,
+                sort = TaskSort.PRIORITY,
+            )
+
+        assertEquals(listOf(root.id, high.id), projection.activeRows.map { it.id })
+        assertTrue(root.id in projection.effectiveExpandedTaskIds)
+        assertEquals(setOf(root.id, high.id), projection.selectableIds)
+    }
+
+    @Test
+    fun completedChildAppearsWithoutUnrelatedSiblings() {
+        val root = task(1, "root")
+        val completedChild = task(2, "done", done = true).copy(parentTaskId = root.id)
+        val activeSibling = task(3, "unrelated").copy(parentTaskId = root.id)
+
+        val projection =
+            buildTaskListProjection(
+                tasks = listOf(root, completedChild, activeSibling),
+                query = "",
+                filter = TaskFilter.COMPLETED,
+                sort = TaskSort.MANUAL,
+            )
+
+        assertEquals(listOf(root.id, completedChild.id), projection.completedRows.map { it.id })
+        assertEquals(1, projection.completedCount)
+        assertTrue(activeSibling.id !in projection.selectableIds)
+    }
+
+    @Test
+    fun taskTimeRulesPreferDueTimeForUpcomingAndOverdue() {
+        val now = calendar(2026, Calendar.AUGUST, 12, 12, 0).timeInMillis
+        val today = calendar(2026, Calendar.AUGUST, 12, 9, 0).timeInMillis
+        val tomorrow = calendar(2026, Calendar.AUGUST, 13, 9, 0).timeInMillis
+        val yesterday = calendar(2026, Calendar.AUGUST, 11, 9, 0).timeInMillis
+
+        val reminderTodayDueTomorrow = task(1, "range", dueAt = tomorrow, reminderAt = today)
+        val reminderTomorrowDueYesterday = task(2, "late", dueAt = yesterday, reminderAt = tomorrow)
+        val reminderTomorrow = task(3, "later", reminderAt = tomorrow)
+
+        assertTrue(TaskTimeRules.isToday(reminderTodayDueTomorrow, now))
+        assertTrue(TaskTimeRules.isUpcoming(reminderTomorrow, now))
+        assertTrue(TaskTimeRules.isOverdue(reminderTomorrowDueYesterday, now))
+        assertFalse(TaskTimeRules.isUpcoming(reminderTomorrowDueYesterday, now))
+    }
+
+    @Test
     fun childDraftEnterAddsOnlyAfterNonBlankTextAndBackspaceRemovesEmptyLine() {
         assertEquals(
             listOf("first", ""),
@@ -202,6 +277,7 @@ class TaskListLogicTest {
         notes: String = "",
         repeatRule: String = TaskRepeat.NONE.value,
         groupId: Long? = null,
+        done: Boolean = false,
     ) = TaskEntity(
         id = id,
         taskText = text,
@@ -211,6 +287,7 @@ class TaskListLogicTest {
         notes = notes,
         repeatRule = repeatRule,
         groupId = groupId,
+        done = done,
         createdAt = 1,
         updatedAt = 1,
     )

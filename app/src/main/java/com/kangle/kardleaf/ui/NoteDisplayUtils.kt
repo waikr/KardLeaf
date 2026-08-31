@@ -120,22 +120,6 @@ internal fun extractPreviewImageClickTargets(markdown: String): List<KardLeafIma
 
 internal fun extractLocalMarkdownImageReferences(markdown: String): List<String> {
     if (markdown.isBlank()) return emptyList()
-    val matches = mutableListOf<Pair<Int, String>>()
-    wikiImageReferenceRegex
-        .findAll(markdown)
-        .forEach { match ->
-            val reference = match.groupValues[1].trim()
-            if (reference.isNotBlank()) {
-                matches.add(match.range.first to reference)
-            }
-        }
-    localMarkdownImageReferenceRegex
-        .findAll(markdown)
-        .forEach { match ->
-            val reference = match.groupValues[1].trim().trim('"', '\'')
-            if (reference.isNotBlank()) {
-                matches.add(match.range.first to reference)
-            }
-        }
-    return matches.sortedBy { it.first }.map { it.second }
+    return extractMarkdownImageClickTargets(markdown, ImageClickSource.MarkdownPreview)
+        .map { it.reference }
 }

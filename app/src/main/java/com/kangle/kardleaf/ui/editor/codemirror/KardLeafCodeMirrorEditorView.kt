@@ -61,8 +61,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.TextRange
@@ -540,10 +542,7 @@ private fun codeMirrorSearchSnippetForLog(
     if (text.isEmpty() || start < 0 || end <= start || start >= text.length) return ""
     val safeStart = start.coerceIn(0, text.length)
     val safeEnd = end.coerceIn(safeStart, text.length)
-    return text.substring(safeStart, safeEnd)
-        .replace("\r", "\\r")
-        .replace("\n", "\\n")
-        .take(80)
+    return "range=$safeStart..$safeEnd len=${safeEnd - safeStart}"
 }
 
 private class CodeMirrorImeTraceWebView(context: Context) : WebView(context) {
@@ -567,9 +566,6 @@ private class CodeMirrorImeTraceWebView(context: Context) : WebView(context) {
     private var lastGlobalVisibleHeight = -1
     private var lastGlobalImeEstimate = -1
     private var keyboardFrameTraceRunId = 0
-    private var nativeSelectionPointerProbeMoves = 0
-    private var nativeSelectionPointerLastProbeAt = 0L
-    private var nativeSelectionPointerActive = false
     @Volatile
     private var codeBlockCopyTouch = false
     private val visibleFrame = Rect()
@@ -699,7 +695,6 @@ private class CodeMirrorImeTraceWebView(context: Context) : WebView(context) {
             }
             return try {
                 super.onTouchEvent(cancelEvent)
-                dispatchNativeSelectionPointer(event)
                 true
             } finally {
                 cancelEvent.recycle()
@@ -709,55 +704,7 @@ private class CodeMirrorImeTraceWebView(context: Context) : WebView(context) {
             codeBlockCopyTouch = false
         }
         val handled = super.onTouchEvent(event)
-        dispatchNativeSelectionPointer(event)
         return handled
-    }
-
-    private fun dispatchNativeSelectionPointer(event: MotionEvent) {
-        val actionMasked = event.actionMasked
-        val action = when (actionMasked) {
-            MotionEvent.ACTION_DOWN -> "down"
-            MotionEvent.ACTION_MOVE -> "move"
-            MotionEvent.ACTION_UP -> "up"
-            MotionEvent.ACTION_CANCEL -> "cancel"
-            else -> return
-        }
-        if (actionMasked == MotionEvent.ACTION_DOWN) {
-            nativeSelectionPointerProbeMoves = 0
-            nativeSelectionPointerLastProbeAt = 0L
-            nativeSelectionPointerActive = false
-        }
-        if (actionMasked == MotionEvent.ACTION_MOVE &&
-            !nativeSelectionPointerActive &&
-            (nativeSelectionPointerProbeMoves >= 12 ||
-                nativeSelectionPointerLastProbeAt > 0L &&
-                event.eventTime - nativeSelectionPointerLastProbeAt < 80L)
-        ) {
-            return
-        }
-        if (actionMasked == MotionEvent.ACTION_MOVE) {
-            nativeSelectionPointerProbeMoves += 1
-            nativeSelectionPointerLastProbeAt = event.eventTime
-        }
-        if (actionMasked == MotionEvent.ACTION_UP || actionMasked == MotionEvent.ACTION_CANCEL) {
-            nativeSelectionPointerActive = false
-            nativeSelectionPointerProbeMoves = 0
-            nativeSelectionPointerLastProbeAt = 0L
-        }
-        val density = resources.displayMetrics.density.coerceAtLeast(1f)
-        val x = event.x / density
-        val y = event.y / density
-        evaluateJavascript(
-            "if (window.KardLeafEditor && window.KardLeafEditor.nativeSelectionPointer) { " +
-                "window.KardLeafEditor.nativeSelectionPointer('$action', $x, $y); } else { 'missing'; }",
-        ) { result ->
-            if (actionMasked == MotionEvent.ACTION_MOVE &&
-                nativeSelectionPointerProbeMoves > 0 &&
-                result?.contains("active") == true
-            ) {
-                nativeSelectionPointerActive = true
-            }
-        }
     }
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
@@ -862,7 +809,6 @@ internal fun KardLeafCodeMirrorEditor(
     showTitle: Boolean,
     livePreviewEnabled: Boolean = false,
     active: Boolean = true,
-    keyboardInsetPx: Int = 0,
     requestFocusToken: Int = 0,
     onFocusRequestHandled: (Int) -> Unit = {},
     preferredFocusSelection: TextRange? = null,
@@ -875,11 +821,13 @@ internal fun KardLeafCodeMirrorEditor(
     userPerfOpenStartRealtimeMs: Long? = null,
     userPerfSizeTier: String = codeMirrorUserPerfNoteSizeTier(initialContent.length),
     onUserPerfBodyRendered: (Int, String) -> Unit = { _, _ -> },
+    imeAnimationTargetBottomPx: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val webViewRef = remember { AtomicReference<WebView?>(null) }
     val codeMirrorAssetUrl = buildCodeMirrorAssetUrl(livePreviewEnabled)
     val appContext = LocalContext.current.applicationContext
+    val imeViewportInset = with(LocalDensity.current) { imeAnimationTargetBottomPx.toDp() }
     val appColorScheme = MaterialTheme.colorScheme
     val codeMirrorBackgroundArgb = appColorScheme.background.toArgb()
     val codeMirrorThemeColorsScript = buildCodeMirrorThemeColorsScript(
@@ -908,6 +856,8 @@ internal fun KardLeafCodeMirrorEditor(
     val latestUserPerfBodyRendered by rememberUpdatedState(onUserPerfBodyRendered)
     var pageReady by remember(documentKey) { mutableStateOf(false) }
     var codeMirrorContentApplied by remember(documentKey) { mutableStateOf(false) }
+    val pendingSearchState = remember(documentKey) { mutableStateOf<List<Any>?>(null) }
+    val pendingSearchSelection = remember(documentKey) { mutableStateOf<TextRange?>(null) }
     var hasShownInitialContent by remember(documentKey) { mutableStateOf(false) }
     var lastPushedContentLength by remember(documentKey) { mutableStateOf(-1) }
     var lastPushDocumentAt by remember(documentKey) { mutableStateOf(0L) }
@@ -945,17 +895,25 @@ internal fun KardLeafCodeMirrorEditor(
         }
     }
 
-    LaunchedEffect(documentKey, initialTitle) {
-        controller.updateExternalTitle(initialTitle)
-    }
-
-    LaunchedEffect(pageReady, keyboardInsetPx) {
-        if (pageReady) {
-            webViewRef.get()?.setCodeMirrorKeyboardInsetPx(
-                keyboardInsetPx = keyboardInsetPx,
-                reason = "composeInsets",
+    LaunchedEffect(pageReady, imeAnimationTargetBottomPx) {
+        if (!pageReady || imeAnimationTargetBottomPx <= 0) return@LaunchedEffect
+        withFrameNanos { }
+        val webView = webViewRef.get() ?: return@LaunchedEffect
+        if (webView.isCodeMirrorReleased()) return@LaunchedEffect
+        webView.evaluateJavascript(
+            "if (window.KardLeafEditor && window.KardLeafEditor.prepareImeReveal) { " +
+                "window.KardLeafEditor.prepareImeReveal($imeAnimationTargetBottomPx); } else { 'missing'; }",
+        ) { result ->
+            if (webView.isCodeMirrorReleased()) return@evaluateJavascript
+            KardLeafLog.d(
+                CODEMIRROR_IME_TRACE_TAG,
+                "ime viewport reveal result=$result target=$imeAnimationTargetBottomPx key=$documentKey",
             )
         }
+    }
+
+    LaunchedEffect(documentKey, initialTitle) {
+        controller.updateExternalTitle(initialTitle)
     }
 
     LaunchedEffect(requestFocusToken, pageReady, codeMirrorContentApplied) {
@@ -1200,7 +1158,7 @@ internal fun KardLeafCodeMirrorEditor(
             val requestAt = SystemClock.elapsedRealtime()
             KardLeafLog.d(
                 CODEMIRROR_TRACE_TAG,
-                "search bridge selection request key=$documentKey len=${text.length} " +
+                "search bridge selection request bridge=setContentFromAndroid addToHistory=false key=$documentKey len=${text.length} " +
                     "selection=${selection.start}-${selection.end} " +
                     "selectedText=${codeMirrorSearchSnippetForLog(text, selection.start, selection.end)} " +
                     "livePreview=$livePreviewEnabled pageReady=$pageReady sideChanges=$hasEditorSideChanges " +
@@ -1259,7 +1217,11 @@ internal fun KardLeafCodeMirrorEditor(
                         "})();",
                 ) { result ->
                     if (webView.isCodeMirrorReleased()) return@evaluateJavascript
-                    KardLeafLog.d(CODEMIRROR_TRACE_TAG, "external range replace result=$result range=$start..$end insertLen=${replacement.length} key=$documentKey")
+                    KardLeafLog.d(
+                        CODEMIRROR_TRACE_TAG,
+                        "external range replace result=$result addToHistory=true range=$start..$end " +
+                            "insertLen=${replacement.length} key=$documentKey",
+                    )
                 }
             }
             true
@@ -1305,7 +1267,39 @@ internal fun KardLeafCodeMirrorEditor(
             },
         )
         controller.setExternalCommandExecutor { command, args ->
-            val webView = webViewRef.get() ?: return@setExternalCommandExecutor false
+            val webView = webViewRef.get()
+            val searchCommand = command == "setSearchState" ||
+                command == "clearSearchState" ||
+                command == "selectRange"
+            val shouldDeferSearchCommand = !pageReady ||
+                (command == "selectRange" && !codeMirrorContentApplied)
+            if (searchCommand) {
+                when (command) {
+                    "setSearchState" -> {
+                        pendingSearchState.value =
+                            if (webView == null || !pageReady || !codeMirrorContentApplied) args else null
+                    }
+                    "clearSearchState" -> {
+                        pendingSearchState.value = null
+                        pendingSearchSelection.value = null
+                    }
+                    "selectRange" -> {
+                        if (webView == null || shouldDeferSearchCommand) {
+                            val start = (args.getOrNull(0) as? Number)?.toInt()
+                            val end = (args.getOrNull(1) as? Number)?.toInt() ?: start
+                            if (start != null && end != null) {
+                                pendingSearchSelection.value = TextRange(start, end)
+                            }
+                        } else {
+                            pendingSearchSelection.value = null
+                        }
+                    }
+                }
+            }
+            if (searchCommand && (webView == null || shouldDeferSearchCommand)) {
+                return@setExternalCommandExecutor true
+            }
+            if (webView == null) return@setExternalCommandExecutor false
             val quotedCommand = JSONObject.quote(command)
             val serializedArgs = args.joinToString(",") { arg ->
                 when (arg) {
@@ -1504,6 +1498,18 @@ internal fun KardLeafCodeMirrorEditor(
                         "body visible after content applied len=$contentLength status=$status key=$documentKey",
                     )
                     latestUserPerfBodyRendered(contentLength, status)
+                }
+                val deferredSearchState = pendingSearchState.value
+                val deferredSearchSelection = pendingSearchSelection.value
+                if (deferredSearchState != null || deferredSearchSelection != null) {
+                    pendingSearchState.value = null
+                    pendingSearchSelection.value = null
+                    deferredSearchState?.let { args ->
+                        controller.executeCommand("setSearchState", *args.toTypedArray())
+                    }
+                    deferredSearchSelection?.let { selection ->
+                        controller.executeCommand("selectRange", selection.start, selection.end)
+                    }
                 }
             },
             onEditorContentEdited = {
@@ -1931,7 +1937,9 @@ internal fun KardLeafCodeMirrorEditor(
                     androidViewUpdateLastAt[0] = now
                 }
                 },
-                modifier = Modifier.matchParentSize(),
+                modifier = Modifier
+                    .matchParentSize()
+                    .padding(bottom = imeViewportInset),
                 onRelease = { webView ->
                     val lifecycleState = webView.codeMirrorLifecycleState() ?: return@AndroidView
                     if (lifecycleState.released) return@AndroidView
@@ -2608,70 +2616,10 @@ private fun WebView.hideCodeMirrorKeyboard(reason: String) {
     clearFocus()
     val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
     imm?.hideSoftInputFromWindow(windowToken, 0)
-    setCodeMirrorKeyboardInsetPx(0, "hide:$reason")
     KardLeafLog.d(
         CODEMIRROR_TRACE_TAG,
         "android keyboard hide reason=$reason hasFocus=${hasFocus()}",
     )
-}
-
-private fun WebView.setCodeMirrorKeyboardInsetPx(keyboardInsetPx: Int, reason: String) {
-    if (isCodeMirrorReleased()) return
-    // 页面 viewport 为 initial-scale=1，JS 侧（window.innerHeight / visualViewport /
-    // --kardleaf-ime-safe-bottom）全部以 CSS px 计算，这里必须把物理像素换算成 CSS px。
-    // 直接传物理像素会放大约 density 倍，表格工具栏与光标安全区都会被顶到屏幕中部。
-    val density = resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
-    val safeInset = (keyboardInsetPx.coerceAtLeast(0) / density).roundToInt()
-    val quotedReason = JSONObject.quote(reason)
-    val script =
-        "if (window.KardLeafEditor && window.KardLeafEditor.setKeyboardInsetPx) { " +
-            "window.KardLeafEditor.setKeyboardInsetPx($safeInset); 'ok'; " +
-            "} else { 'missing'; }"
-    evaluateJavascript(script) { result ->
-        if (isCodeMirrorReleased()) return@evaluateJavascript
-        KardLeafLog.d(
-            CODEMIRROR_DEBUG_TRACE_TAG,
-            "[ime] set keyboard inset result=$result reason=$quotedReason " +
-                "rawPx=${keyboardInsetPx.coerceAtLeast(0)} cssPx=$safeInset hasFocus=${hasFocus()}",
-        )
-    }
-}
-
-private fun WebView.codeMirrorKeyboardBottomInsetPx(): Int {
-    val targetView = rootView ?: this
-    val insets = ViewCompat.getRootWindowInsets(targetView)
-        ?: ViewCompat.getRootWindowInsets(this)
-        ?: return 0
-    if (!insets.isVisible(WindowInsetsCompat.Type.ime())) return 0
-    val imeBottom = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-    val navBottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
-    val inset = (imeBottom - navBottom).coerceAtLeast(0)
-    KardLeafLog.d(
-        CODEMIRROR_TRACE_TAG,
-        "keyboard inset for cursor imeBottom=$imeBottom navBottom=$navBottom inset=$inset webView=${width}x${height}",
-    )
-    return inset
-}
-
-private fun WebView.ensureCodeMirrorCursorVisible(reason: String, keyboardInsetPx: Int? = null) {
-    if (isCodeMirrorReleased()) return
-    val quotedReason = JSONObject.quote(reason)
-    val insetArgument = keyboardInsetPx?.coerceAtLeast(0)?.toString()
-    val script =
-        "if (window.KardLeafEditor && window.KardLeafEditor.ensureCursorVisible) { " +
-            (if (insetArgument != null) {
-                "window.KardLeafEditor.ensureCursorVisible($quotedReason, $insetArgument); 'ok'; "
-            } else {
-                "window.KardLeafEditor.ensureCursorVisible($quotedReason); 'ok'; "
-            }) +
-            "} else { 'missing'; }"
-    evaluateJavascript(script) { result ->
-        if (isCodeMirrorReleased()) return@evaluateJavascript
-        KardLeafLog.d(
-            CODEMIRROR_DEBUG_TRACE_TAG,
-            "[cursor] ensure request result=$result reason=$reason keyboardInsetPx=${keyboardInsetPx ?: -1} hasFocus=${hasFocus()}",
-        )
-    }
 }
 
 private fun decodeJavascriptStringResult(result: String?): String? {

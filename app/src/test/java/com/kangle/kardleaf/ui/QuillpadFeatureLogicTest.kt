@@ -44,6 +44,29 @@ class QuillpadFeatureLogicTest {
     }
 
     @Test
+    fun keepsUtf16OffsetsAcrossEmojiCrLfAndSearchOptions() {
+        val text = "😀\r\nBravo bravo\r\nBRAVO"
+
+        assertEquals(
+            listOf(
+                NoteSearchMatchRange(4, 9),
+                NoteSearchMatchRange(10, 15),
+                NoteSearchMatchRange(17, 22),
+            ),
+            buildNoteSearchMatches(text, "bravo", false, false).matches,
+        )
+        assertEquals(
+            listOf(NoteSearchMatchRange(4, 9)),
+            buildNoteSearchMatches(text, "Bravo", false, true).matches,
+        )
+        assertEquals(
+            listOf(NoteSearchMatchRange(4, 15)),
+            buildNoteSearchMatches(text, "bravo\\sbravo", true, false).matches,
+        )
+        assertTrue(buildNoteSearchMatches(text, "missing", false, false).matches.isEmpty())
+    }
+
+    @Test
     fun replacesCurrentAndAllMatches() {
         val current = buildCurrentReplacement(
             text = "a1 a2",

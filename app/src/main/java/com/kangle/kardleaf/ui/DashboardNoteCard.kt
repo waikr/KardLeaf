@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
@@ -68,7 +69,7 @@ import com.kangle.kardleaf.ui.theme.LocalKardLeafHomeCornerRadiusDp
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 import java.text.SimpleDateFormat
 import java.util.Locale
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CancellationException
 
 private const val USER_PERF_TRACE_TAG = "KardLeafUserPerf"
 private const val OPEN_PATH_PROBE_TAG = "KardLeafOpenPathProbe"
@@ -186,11 +187,11 @@ fun NoteCard(
     val shouldLoadThumbnail = showImagePreview && searchMatch == null && imageReference != null
     val showSearchJump = searchQuery.isNotBlank() && searchMatch != null && searchMatch.startOffset >= 0 && onSearchJump != null
     // 首帧同步读内存缓存，命中时直接出图，消除卡片重建后的灰色占位
-    var thumbnailBitmap by remember(note.id, imageReference, note.lastModified.time) {
+    var thumbnailBitmap by remember(note.file.path, imageReference) {
         mutableStateOf(if (shouldLoadThumbnail) peekImageThumbnail(note) else null)
     }
 
-    LaunchedEffect(shouldLoadThumbnail, note.id, imageReference, note.lastModified.time, loadImageThumbnail) {
+    LaunchedEffect(shouldLoadThumbnail, note.file.path, imageReference, note.lastModified.time) {
         if (!shouldLoadThumbnail) {
             if (imageReference != null) {
                 KardLeafLog.d(
@@ -204,12 +205,9 @@ fun NoteCard(
             return@LaunchedEffect
         }
 
-        // 已有同 key 的图（来自 peek 或上一轮加载）就不再重复加载；
-        // 加载被门控暂停时也先试一次内存缓存，滑动中命中即出图
-        if (thumbnailBitmap != null) return@LaunchedEffect
+        // 先保留同步缓存命中的旧图，再异步校验当前版本；加载期间不退回空白占位。
         peekImageThumbnail(note)?.let {
             thumbnailBitmap = it
-            return@LaunchedEffect
         }
 
         KardLeafLog.d(
@@ -219,8 +217,12 @@ fun NoteCard(
                 "lastModified=${note.lastModified.time} contentLen=${note.content.length} previewLen=${note.contentPreview.length} loaderHash=${System.identityHashCode(loadImageThumbnail)}",
         )
         val thumbnailStartMs = SystemClock.elapsedRealtime()
-        val loadedBitmap = withTimeoutOrNull(2000L) {
-            runCatching { loadImageThumbnail(note) }.getOrNull()
+        val loadedBitmap = try {
+            loadImageThumbnail(note)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            null
         }
         val thumbnailElapsedMs = SystemClock.elapsedRealtime() - thumbnailStartMs
         KardLeafLog.d(
@@ -242,9 +244,7 @@ fun NoteCard(
                     "modified=${note.lastModified.time}",
             )
         }
-        if (loadedBitmap != null || thumbnailBitmap == null) {
-            thumbnailBitmap = loadedBitmap
-        }
+        thumbnailBitmap = loadedBitmap
     }
 
     val cardElevation by animateDpAsState(
@@ -422,7 +422,8 @@ fun NoteCard(
                 }
             }
 
-            val visibleYamlTags = if (!isCompact && showYamlTags) note.tags.take(3) else emptyList()
+            val visibleYamlTags = if (!isCompact && showYamlTags) note.tags.take(2) else emptyList()
+            val showYamlTagsOverflow = !isCompact && showYamlTags && note.tags.size > visibleYamlTags.size
             val showModifiedDateText = !isCompact && showModifiedDate
             val showDeletedDateText = showDeletedDate && deletedDateText != null
             if (folderTag != null || visibleYamlTags.isNotEmpty() || showModifiedDateText || showDeletedDateText || showSearchJump) {
@@ -445,12 +446,24 @@ fun NoteCard(
                             visibleYamlTags.forEach { tag ->
                                 NoteCardTagChip("#$tag")
                             }
+                            if (showYamlTagsOverflow) {
+                                NoteCardTagChip("…")
+                            }
                         }
                     } else {
                         Spacer(modifier = Modifier.weight(1f))
                     }
                     val rightDateText = if (showDeletedDateText) deletedDateText else if (showModifiedDateText) modifiedDateText else null
                     if (rightDateText != null) {
+                        if (showDeletedDateText) {
+                            Icon(
+                                imageVector = Icons.Outlined.DeleteOutline,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                        }
                         Text(
                             text = rightDateText,
                             style = MaterialTheme.typography.labelSmall,
@@ -503,6 +516,8 @@ private fun NoteCardTagChip(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelSmall,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         color = if (isDracula) MaterialTheme.colorScheme.onSurface else if (isModern) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier =
             Modifier

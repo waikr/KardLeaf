@@ -197,7 +197,7 @@ private fun onboardingPages(): List<OnboardingPageData> =
         ),
         OnboardingPageData(
             title = "设置中心",
-            description = "集中管理常规、编辑器、附件与文件、数据与安全设置",
+            description = "集中管理常规、编辑器、数据与安全和其他设置",
             target = OnboardingTourTarget.Settings,
             scene = OnboardingScene.Settings,
         ),
@@ -1003,14 +1003,14 @@ private fun SettingsScene() {
             ) {
                 SettingsSection("常规") {
                     SettingsRow(Icons.Outlined.Folder, "笔记库", "KardLeaf")
-                    SettingsRow(Icons.Outlined.Palette, "主题切换", "清爽列表 · 跟随系统 · 蓝色 · 白色")
+                    SettingsRow(Icons.Outlined.Palette, "主题设置", "清爽列表 · 自动 · 蓝色 · 白色")
                     SettingsRow(Icons.Outlined.Tune, "应用界面", "列表 · 修改时间降序")
                     SettingsRow(Icons.Outlined.ViewHeadline, "首页底部工具栏", "已显示 5 个图标，按钮 46dp")
                     SettingsRow(Icons.Outlined.Article, "侧边栏", "数据卡片")
                 }
                 SettingsSection("编辑器") {
-                    SettingsRow(Icons.Outlined.FormatListBulleted, "字符按钮位置", "调整工具按钮顺序")
-                    SettingsRow(Icons.Outlined.StickyNote2, "笔记顶部栏", "大纲与属性备注通过顶部按钮打开")
+                    SettingsRow(Icons.Outlined.FormatListBulleted, "底部工具栏", "调整工具按钮顺序")
+                    SettingsRow(Icons.Outlined.StickyNote2, "顶部工具栏", "大纲与属性备注通过顶部按钮打开")
                     SettingsRow(Icons.Outlined.Edit, "默认打开模式", "编辑模式")
                     SettingsRow(Icons.Outlined.Description, "编辑器内核", "原生 Beta 内核")
                     SettingsRow(Icons.Outlined.Checklist, "编辑底部工具栏常驻", "已开启")

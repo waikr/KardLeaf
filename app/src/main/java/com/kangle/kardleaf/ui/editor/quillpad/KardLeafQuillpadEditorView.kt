@@ -19,6 +19,7 @@ import android.text.TextWatcher
 import android.text.style.BackgroundColorSpan
 import android.text.style.LineHeightSpan
 import android.text.style.ReplacementSpan
+import android.text.style.UpdateAppearance
 import android.text.style.UpdateLayout
 import android.util.AttributeSet
 import android.util.TypedValue
@@ -92,6 +93,8 @@ private const val INLINE_IMAGE_PREVIEW_MAX_CHARS = 30_000
 private const val INLINE_IMAGE_PREVIEW_MAX_COUNT = 12
 private const val INLINE_IMAGE_PREVIEW_DEBOUNCE_MS = 350L
 
+private object QuillpadTextDisplayInvalidationSpan : UpdateAppearance
+
 private data class QuillpadInlineImageMatch(
     val syntaxStart: Int,
     val syntaxEnd: Int,
@@ -99,6 +102,29 @@ private data class QuillpadInlineImageMatch(
     val syntaxLineEnd: Int,
     val reference: String,
 )
+
+internal data class QuillpadInlineImageIdentity(
+    val syntaxStart: Int,
+    val syntaxEnd: Int,
+    val reference: String,
+)
+
+internal data class QuillpadInlineImageReconciliation(
+    val missing: List<QuillpadInlineImageIdentity>,
+    val obsolete: List<QuillpadInlineImageIdentity>,
+)
+
+internal fun reconcileQuillpadInlineImages(
+    requested: List<QuillpadInlineImageIdentity>,
+    applied: List<QuillpadInlineImageIdentity>,
+): QuillpadInlineImageReconciliation {
+    val requestedSet = requested.toHashSet()
+    val appliedSet = applied.toHashSet()
+    return QuillpadInlineImageReconciliation(
+        missing = requested.filterNot(appliedSet::contains),
+        obsolete = applied.filterNot(requestedSet::contains),
+    )
+}
 
 private data class QuillpadInlineImageItem(
     val syntaxStart: Int,
@@ -320,18 +346,39 @@ private class KernelExtendedEditText(
     private var imagePreviewPreDrawListener: ViewTreeObserver.OnPreDrawListener? = null
     private val imagePreviewWatcher =
         object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun beforeTextChanged(
+                s: CharSequence?,
+                start: Int,
+                count: Int,
+                after: Int,
+            ) = Unit
 
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun onTextChanged(
+                s: CharSequence?,
+                start: Int,
+                before: Int,
+                count: Int,
+            ) {
+                val inserted =
+                    s?.subSequence(start.coerceAtLeast(0), (start + count).coerceAtMost(s.length))?.toString().orEmpty()
+                val hasCompleteImageSyntax =
+                    NoteFormatUtils.obsidianImageReferenceRegex.containsMatchIn(inserted) ||
+                        NoteFormatUtils.localMarkdownImageReferenceRegex.containsMatchIn(inserted)
+                imagePreviewRefreshImmediately =
+                    count > 0 && hasCompleteImageSyntax
+            }
 
             override fun afterTextChanged(s: Editable?) {
-                scheduleInlineImagePreviewRefresh()
+                val immediate = imagePreviewRefreshImmediately
+                imagePreviewRefreshImmediately = false
+                scheduleInlineImagePreviewRefresh(immediate)
             }
         }
     private var imagePreviewExecutor = if (role == "content") Executors.newSingleThreadExecutor() else null
     private var imagePreviewResolver = if (role == "content") KardLeafInlineImagePreviewResolver(context) else null
     private var imagePreviewEnabled = false
     private var imagePreviewReleased = false
+    private var imagePreviewRefreshImmediately = false
 
     @Volatile
     private var imagePreviewDocumentKey = ""
@@ -381,7 +428,7 @@ private class KernelExtendedEditText(
 
     fun refreshInlineImagePreview() {
         clearInlineImagePreviewSpans()
-        scheduleInlineImagePreviewRefresh()
+        scheduleInlineImagePreviewRefresh(immediate = true)
     }
 
     fun bindInlineImagePreviewDocument(documentKey: String) {
@@ -419,6 +466,7 @@ private class KernelExtendedEditText(
         }
         requestLayout()
         invalidate()
+        invalidateShiftedTextBlocksFrom(changedSpans.minOf { editable.getSpanStart(it) })
         scheduleImagePreviewPreDraw("selection", changedSpans)
     }
 
@@ -587,7 +635,7 @@ private class KernelExtendedEditText(
         if (w != oldw) scheduleInlineImagePreviewRefresh()
     }
 
-    private fun scheduleInlineImagePreviewRefresh() {
+    private fun scheduleInlineImagePreviewRefresh(immediate: Boolean = false) {
         removeCallbacks(imagePreviewRefreshRunnable)
         if (role != "content" || imagePreviewReleased) return
         imagePreviewToken.incrementAndGet()
@@ -601,13 +649,16 @@ private class KernelExtendedEditText(
             imagePreviewFolder != imagePreviewAppliedFolder ||
                 imagePreviewLineSpacingMultiplier != imagePreviewAppliedLineSpacingMultiplier ||
                 (width > 0 && availableWidth != imagePreviewAppliedWidth)
-        if (
-            previewContextChanged ||
-            (editable != null && imagePreviewItems.any { !inlineImageSpanStillMatches(it, editable) })
-        ) {
+        if (previewContextChanged) {
             clearInlineImagePreviewSpans()
+        } else if (editable != null) {
+            removeInlineImagePreviewSpans(imagePreviewItems.filter { !inlineImageSpanStillMatches(it, editable) })
         }
-        postDelayed(imagePreviewRefreshRunnable, INLINE_IMAGE_PREVIEW_DEBOUNCE_MS)
+        if (immediate) {
+            post(imagePreviewRefreshRunnable)
+        } else {
+            postDelayed(imagePreviewRefreshRunnable, INLINE_IMAGE_PREVIEW_DEBOUNCE_MS)
+        }
     }
 
     private fun inlineImageSpanStillMatches(
@@ -647,63 +698,91 @@ private class KernelExtendedEditText(
 
         val availableWidth = (width - totalPaddingLeft - totalPaddingRight).coerceAtLeast(1)
         val folder = imagePreviewFolder
-        if (canKeepInlineImagePreviewSpans(matches, folder, availableWidth)) return
+        val previewContextChanged =
+            folder != imagePreviewAppliedFolder ||
+                availableWidth != imagePreviewAppliedWidth ||
+                imagePreviewLineSpacingMultiplier != imagePreviewAppliedLineSpacingMultiplier
+        if (imagePreviewItems.isNotEmpty() && previewContextChanged) {
+            clearInlineImagePreviewSpans()
+        }
+
+        val appliedByIdentity = mutableMapOf<QuillpadInlineImageIdentity, QuillpadInlineImageLineHeightSpan>()
+        val detachedSpans = mutableListOf<QuillpadInlineImageLineHeightSpan>()
+        imagePreviewItems.forEach { span ->
+            val spanStart = text?.getSpanStart(span) ?: -1
+            val spanEnd = text?.getSpanEnd(span) ?: -1
+            if (spanStart < 0 || spanEnd <= spanStart) {
+                detachedSpans += span
+            } else {
+                appliedByIdentity[QuillpadInlineImageIdentity(spanStart, spanEnd, span.reference)] = span
+            }
+        }
+        val matchByIdentity =
+            matches.associateBy { match ->
+                QuillpadInlineImageIdentity(match.syntaxStart, match.syntaxEnd, match.reference)
+            }
+        val reconciliation = reconcileQuillpadInlineImages(matchByIdentity.keys.toList(), appliedByIdentity.keys.toList())
+        val obsoleteSpans =
+            detachedSpans + reconciliation.obsolete.mapNotNull(appliedByIdentity::get)
+        removeInlineImagePreviewSpans(obsoleteSpans)
+        val missingMatches = reconciliation.missing.mapNotNull(matchByIdentity::get)
+        if (missingMatches.isEmpty()) return
 
         val resolver = imagePreviewResolver ?: return
         val executor = imagePreviewExecutor ?: return
         val maxPreviewHeight = dp(220)
         try {
-            executor.execute {
-                val previews =
-                    matches.take(INLINE_IMAGE_PREVIEW_MAX_COUNT).mapNotNull { match ->
-                        if (imagePreviewReleased || token != imagePreviewToken.get()) return@mapNotNull null
-                        val startedAt = SystemClock.elapsedRealtime()
+            executor.execute load@{
+                missingMatches.forEach { match ->
+                    if (imagePreviewReleased || token != imagePreviewToken.get()) return@load
+                    val startedAt = SystemClock.elapsedRealtime()
+                    logImageLoad(
+                        event = "loadStart",
+                        match = match,
+                        token = token,
+                        documentKey = documentKey,
+                        sourceWidth = -1,
+                        sourceHeight = -1,
+                        targetWidth = availableWidth,
+                        targetHeight = maxPreviewHeight,
+                        elapsedMs = 0,
+                    )
+                    val bitmap = resolver.resolveBitmap(folder, match.reference, availableWidth, maxPreviewHeight)
+                    val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+                    if (bitmap == null) {
                         logImageLoad(
-                            event = "loadStart",
+                            event = "loadFailed reason=resolveBitmapNull",
                             match = match,
                             token = token,
                             documentKey = documentKey,
                             sourceWidth = -1,
                             sourceHeight = -1,
-                            targetWidth = availableWidth,
-                            targetHeight = maxPreviewHeight,
-                            elapsedMs = 0,
-                        )
-                        val bitmap = resolver.resolveBitmap(folder, match.reference, availableWidth, maxPreviewHeight)
-                        val elapsedMs = SystemClock.elapsedRealtime() - startedAt
-                        if (bitmap == null) {
-                            logImageLoad(
-                                event = "loadFailed reason=resolveBitmapNull",
-                                match = match,
-                                token = token,
-                                documentKey = documentKey,
-                                sourceWidth = -1,
-                                sourceHeight = -1,
-                                targetWidth = -1,
-                                targetHeight = -1,
-                                elapsedMs = elapsedMs,
-                            )
-                            return@mapNotNull null
-                        }
-                        val scale =
-                            minOf(
-                                availableWidth.toFloat() / bitmap.width.coerceAtLeast(1),
-                                maxPreviewHeight.toFloat() / bitmap.height.coerceAtLeast(1),
-                                1f,
-                            )
-                        val targetWidth = (bitmap.width * scale).roundToInt().coerceAtLeast(1)
-                        val targetHeight = (bitmap.height * scale).roundToInt().coerceAtLeast(1)
-                        logImageLoad(
-                            event = "loadSuccess",
-                            match = match,
-                            token = token,
-                            documentKey = documentKey,
-                            sourceWidth = bitmap.width,
-                            sourceHeight = bitmap.height,
-                            targetWidth = targetWidth,
-                            targetHeight = targetHeight,
+                            targetWidth = -1,
+                            targetHeight = -1,
                             elapsedMs = elapsedMs,
                         )
+                        return@forEach
+                    }
+                    val scale =
+                        minOf(
+                            availableWidth.toFloat() / bitmap.width.coerceAtLeast(1),
+                            maxPreviewHeight.toFloat() / bitmap.height.coerceAtLeast(1),
+                            1f,
+                        )
+                    val targetWidth = (bitmap.width * scale).roundToInt().coerceAtLeast(1)
+                    val targetHeight = (bitmap.height * scale).roundToInt().coerceAtLeast(1)
+                    logImageLoad(
+                        event = "loadSuccess",
+                        match = match,
+                        token = token,
+                        documentKey = documentKey,
+                        sourceWidth = bitmap.width,
+                        sourceHeight = bitmap.height,
+                        targetWidth = targetWidth,
+                        targetHeight = targetHeight,
+                        elapsedMs = elapsedMs,
+                    )
+                    val preview =
                         QuillpadInlineImageItem(
                             syntaxStart = match.syntaxStart,
                             syntaxEnd = match.syntaxEnd,
@@ -714,120 +793,138 @@ private class KernelExtendedEditText(
                             widthPx = targetWidth,
                             heightPx = targetHeight,
                         )
+                    if (imagePreviewReleased || token != imagePreviewToken.get()) {
+                        recycleBitmap(bitmap)
+                        return@load
                     }
-                val posted =
-                    post {
-                        if (
-                            imagePreviewReleased ||
-                            token != imagePreviewToken.get() ||
-                            documentKey != imagePreviewDocumentKey ||
-                            source != text?.toString().orEmpty()
-                        ) {
-                            previews.forEach { recycleBitmap(it.bitmap) }
-                            return@post
+                    val posted =
+                        post {
+                            if (
+                                imagePreviewReleased ||
+                                token != imagePreviewToken.get() ||
+                                documentKey != imagePreviewDocumentKey ||
+                                source != text?.toString().orEmpty()
+                            ) {
+                                recycleBitmap(bitmap)
+                                return@post
+                            }
+                            applyInlineImagePreviewSpan(preview, folder, availableWidth)
                         }
-                        applyInlineImagePreviewSpans(previews, folder, availableWidth)
+                    if (!posted) {
+                        recycleBitmap(bitmap)
+                        return@load
                     }
-                if (!posted) previews.forEach { recycleBitmap(it.bitmap) }
+                }
             }
         } catch (_: RejectedExecutionException) {
             // The view was disposed while a delayed refresh was being submitted.
         }
     }
 
-    private fun canKeepInlineImagePreviewSpans(
-        matches: List<QuillpadInlineImageMatch>,
-        folder: String,
-        availableWidth: Int,
-    ): Boolean {
-        val editable = text ?: return false
-        if (
-            folder != imagePreviewAppliedFolder ||
-            availableWidth != imagePreviewAppliedWidth ||
-            imagePreviewLineSpacingMultiplier != imagePreviewAppliedLineSpacingMultiplier
-        ) {
-            return false
-        }
-        if (matches.size != imagePreviewItems.size) return false
-        return matches.zip(imagePreviewItems).all { (match, span) ->
-            val spanStart = match.syntaxStart.coerceIn(0, editable.length)
-            val spanEnd = match.syntaxEnd.coerceIn(spanStart, editable.length)
-            match.reference == span.reference &&
-                spanStart < spanEnd &&
-                editable.getSpanStart(span) == spanStart &&
-                editable.getSpanEnd(span) == spanEnd
-        }
-    }
-
-    private fun applyInlineImagePreviewSpans(
-        previews: List<QuillpadInlineImageItem>,
+    private fun applyInlineImagePreviewSpan(
+        preview: QuillpadInlineImageItem,
         folder: String,
         availableWidth: Int,
     ) {
-        clearInlineImagePreviewSpans(requestRelayout = false)
         val editable = text
         if (editable == null) {
-            previews.forEach { recycleBitmap(it.bitmap) }
+            recycleBitmap(preview.bitmap)
             return
         }
-        val spans =
-            previews.mapNotNull { preview ->
-                val spanStart = preview.syntaxStart.coerceIn(0, editable.length)
-                val spanEnd = preview.syntaxEnd.coerceIn(spanStart, editable.length)
-                if (spanStart >= spanEnd) {
-                    recycleBitmap(preview.bitmap)
-                    return@mapNotNull null
-                }
-                val previewGap = dp(8)
-                QuillpadInlineImageLineHeightSpan(
-                    reference = preview.reference,
-                    bitmap = preview.bitmap,
-                    widthPx = preview.widthPx,
-                    heightPx = preview.heightPx,
-                    reservedHeightPx = preview.heightPx + previewGap * 2,
-                    previewGapPx = previewGap,
-                    lineSpacingMultiplier = imagePreviewLineSpacingMultiplier,
-                    syntaxStart = spanStart,
-                    syntaxEnd = spanEnd,
-                    syntaxLineStart = preview.syntaxLineStart,
-                    syntaxLineEnd = preview.syntaxLineEnd,
-                ).also { span ->
-                    span.diagnosticBaseline = captureImageLayoutBaseline(span)
-                    span.hiddenForSelection = span.shouldHideForSelection(editable, hasFocus() && previewTouchReference == null)
-                    logImageLayout("layoutBefore", span, span.diagnosticBaseline)
-                    editable.setSpan(span, spanStart, spanEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    logImageLayout("spanApply", span, requestLayoutCalled = true)
-                }
+        val spanStart = preview.syntaxStart.coerceIn(0, editable.length)
+        val spanEnd = preview.syntaxEnd.coerceIn(spanStart, editable.length)
+        val identity = QuillpadInlineImageIdentity(spanStart, spanEnd, preview.reference)
+        if (
+            spanStart >= spanEnd ||
+            imagePreviewItems.any { span ->
+                editable.getSpanStart(span) == identity.syntaxStart &&
+                    editable.getSpanEnd(span) == identity.syntaxEnd &&
+                    span.reference == identity.reference
             }
-        imagePreviewItems = spans
+        ) {
+            recycleBitmap(preview.bitmap)
+            return
+        }
+        val previewGap = dp(8)
+        val span =
+            QuillpadInlineImageLineHeightSpan(
+                reference = preview.reference,
+                bitmap = preview.bitmap,
+                widthPx = preview.widthPx,
+                heightPx = preview.heightPx,
+                reservedHeightPx = preview.heightPx + previewGap * 2,
+                previewGapPx = previewGap,
+                lineSpacingMultiplier = imagePreviewLineSpacingMultiplier,
+                syntaxStart = spanStart,
+                syntaxEnd = spanEnd,
+                syntaxLineStart = preview.syntaxLineStart,
+                syntaxLineEnd = preview.syntaxLineEnd,
+            )
+        span.diagnosticBaseline = captureImageLayoutBaseline(span)
+        span.hiddenForSelection = span.shouldHideForSelection(editable, hasFocus() && previewTouchReference == null)
+        logImageLayout("layoutBefore", span, span.diagnosticBaseline)
+        editable.setSpan(span, spanStart, spanEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        logImageLayout("spanApply", span, requestLayoutCalled = true)
+        imagePreviewItems = (imagePreviewItems + span).sortedBy(editable::getSpanStart)
         imagePreviewAppliedFolder = folder
         imagePreviewAppliedWidth = availableWidth
         imagePreviewAppliedLineSpacingMultiplier = imagePreviewLineSpacingMultiplier
+        invalidateShiftedTextBlocksFrom(spanStart)
         requestLayout()
         invalidate()
-        scheduleImagePreviewPreDraw("apply", spans)
+        scheduleImagePreviewPreDraw("apply", listOf(span))
     }
 
-    private fun clearInlineImagePreviewSpans(requestRelayout: Boolean = true) {
+    private fun removeInlineImagePreviewSpans(spansToRemove: List<QuillpadInlineImageLineHeightSpan>) {
+        if (spansToRemove.isEmpty()) return
         removeImagePreviewPreDrawListener()
         val editable = text
-        val spans = editable?.getSpans(0, editable.length, QuillpadInlineImageLineHeightSpan::class.java).orEmpty()
+        val spans = spansToRemove.distinct()
+        val displayInvalidationStart =
+            spans.mapNotNull { span -> editable?.getSpanStart(span)?.takeIf { it >= 0 } }.minOrNull()
+                ?: spans.minOfOrNull { it.syntaxStart }
         spans.forEach { span ->
-            if (requestRelayout) logImageLayout("layoutBefore reason=remove", span, captureImageLayoutBaseline(span))
-            logImageLayout("spanRemove", span, requestLayoutCalled = requestRelayout)
+            logImageLayout("layoutBefore reason=remove", span, captureImageLayoutBaseline(span))
+            logImageLayout("spanRemove", span, requestLayoutCalled = true)
             editable?.removeSpan(span)
+            recycleBitmap(span.bitmap)
         }
-        val oldItems = imagePreviewItems
-        imagePreviewItems = emptyList()
+        imagePreviewItems = imagePreviewItems.filterNot(spans::contains)
+        if (imagePreviewItems.isEmpty()) {
+            imagePreviewAppliedFolder = ""
+            imagePreviewAppliedWidth = -1
+            imagePreviewAppliedLineSpacingMultiplier = -1f
+        }
+        displayInvalidationStart?.let(::invalidateShiftedTextBlocksFrom)
+        requestLayout()
+        invalidate()
+        scheduleImagePreviewPreDraw("remove", spans)
+    }
+
+    private fun clearInlineImagePreviewSpans() {
+        val editable = text
+        val textSpans =
+            editable?.getSpans(0, editable.length, QuillpadInlineImageLineHeightSpan::class.java).orEmpty().toList()
+        val spans = (textSpans + imagePreviewItems).distinct()
+        removeInlineImagePreviewSpans(spans)
         imagePreviewAppliedFolder = ""
         imagePreviewAppliedWidth = -1
         imagePreviewAppliedLineSpacingMultiplier = -1f
-        oldItems.forEach { recycleBitmap(it.bitmap) }
-        if (spans.isNotEmpty() || oldItems.isNotEmpty()) {
-            if (requestRelayout) requestLayout()
-            invalidate()
-            if (requestRelayout) scheduleImagePreviewPreDraw("remove", oldItems)
-        }
+    }
+
+    private fun invalidateShiftedTextBlocksFrom(offset: Int) {
+        val editable = text ?: return
+        val start = offset.coerceIn(0, editable.length)
+        if (start >= editable.length) return
+        // A LineHeightSpan moves every following DynamicLayout block, while TextView only dirties
+        // the span's own block. A transient appearance span invalidates the shifted display tail.
+        editable.setSpan(
+            QuillpadTextDisplayInvalidationSpan,
+            start,
+            editable.length,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
+        editable.removeSpan(QuillpadTextDisplayInvalidationSpan)
     }
 
     private fun findInlineImageMatches(source: String): List<QuillpadInlineImageMatch> {
@@ -2035,6 +2132,16 @@ internal class KardLeafQuillpadEditorView
             }
         }
 
+        private inline fun withProgrammaticContentChange(block: () -> Unit) {
+            val wasProgrammatic = programmaticChange
+            programmaticChange = true
+            try {
+                block()
+            } finally {
+                programmaticChange = wasProgrammatic
+            }
+        }
+
         private fun requestCursorRectangle(
             source: String,
             offset: Int = contentEditText.selectionEnd,
@@ -2154,7 +2261,9 @@ internal class KardLeafQuillpadEditorView
             val selection = getContentSelection()
             val start = minOf(selection.start, selection.end)
             val end = maxOf(selection.start, selection.end)
-            contentEditText.text?.replace(start, end, insertion)
+            withProgrammaticContentChange {
+                contentEditText.text?.replace(start, end, insertion)
+            }
             contentEditText.setSelection(start + insertion.length)
         }
 
@@ -2162,7 +2271,9 @@ internal class KardLeafQuillpadEditorView
             newText: String,
             selection: TextRange?,
         ) {
-            contentEditText.text?.replace(0, contentEditText.length(), newText)
+            withProgrammaticContentChange {
+                contentEditText.text?.replace(0, contentEditText.length(), newText)
+            }
             val target = selection ?: TextRange(newText.length)
             setContentSelection(target.start, target.end)
         }
@@ -2215,6 +2326,7 @@ internal class KardLeafQuillpadEditorView
             if (result.errorMessage != null) return 0
 
             val density = resources.displayMetrics.density
+            val textLayout = contentEditText.layout
             result.matches.forEach { match ->
                 val isCurrent = match.start == currentStart
                 var containsLineBreak = false
@@ -2224,7 +2336,12 @@ internal class KardLeafQuillpadEditorView
                         break
                     }
                 }
-                val span = if (containsLineBreak) {
+                // ReplacementSpan is atomic to Layout, so use a character span for soft-wrapped matches too.
+                val spansVisualLines = textLayout?.let { layout ->
+                    layout.getLineForOffset(match.start) !=
+                        layout.getLineForOffset((match.end - 1).coerceAtLeast(match.start))
+                } == true
+                val span = if (containsLineBreak || spansVisualLines) {
                     QuillpadMultilineSearchHighlightSpan(SEARCH_HIGHLIGHT_COLOR)
                 } else {
                     QuillpadRoundedSearchHighlightSpan(

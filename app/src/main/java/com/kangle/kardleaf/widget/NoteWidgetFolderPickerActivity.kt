@@ -10,11 +10,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -43,6 +40,11 @@ import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.ui.ThemeColorPickerDialog
 import com.kangle.kardleaf.ui.ThemeCustomAccentColorPalette
 import com.kangle.kardleaf.ui.ThemeCustomBackgroundColorPalette
+import com.kangle.kardleaf.ui.FileTreePickerDialog
+import com.kangle.kardleaf.ui.FileTreePickerNode
+import com.kangle.kardleaf.ui.FileTreeSelectionMode
+import com.kangle.kardleaf.ui.buildFileTreePickerFolderNodes
+import com.kangle.kardleaf.ui.normalizeFolderPathForUi
 import com.kangle.kardleaf.ui.theme.KardLeafTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -97,7 +99,7 @@ class NoteWidgetFolderPickerActivity : ComponentActivity() {
 
                     LaunchedEffect(appWidgetId, widgetKind) {
                         if (widgetKind == WidgetTheme.Kind.DAILY) {
-                            dailyFolderPaths = loadFolderPaths()
+                            dailyFolderPaths = loadFolderPaths(dailyFolder)
                         }
                     }
 
@@ -172,16 +174,20 @@ class NoteWidgetFolderPickerActivity : ComponentActivity() {
                         )
                     }
                     if (showDailyFolderPicker) {
-                        NoteWidgetFolderPickerDialog(
-                            folderChoices = dailyFolderPaths
-                                ?.let { buildExpandedFolderChoices(it + dailyFolder) }
-                                ?.filter { it.folder != null },
-                            selectedFolder = dailyFolder,
-                            onSelect = { folder ->
-                                if (folder != null) {
-                                    dailyFolder = folder
-                                    showDailyFolderPicker = false
-                                }
+                        FileTreePickerDialog(
+                            title = stringResource(R.string.widget_folder_picker_title),
+                            nodes = dailyFolderPaths?.let {
+                                buildWidgetFolderPickerNodes(
+                                    paths = it,
+                                    rootLabel = stringResource(R.string.widget_folder_root),
+                                )
+                            },
+                            selectedId = folderPickerSelectionId(dailyFolder),
+                            selectionMode = FileTreeSelectionMode.FOLDER,
+                            loadingText = stringResource(R.string.widget_folder_picker_loading),
+                            onSelect = { node ->
+                                dailyFolder = node.value
+                                showDailyFolderPicker = false
                             },
                             onDismiss = { showDailyFolderPicker = false },
                         )
@@ -198,11 +204,19 @@ class NoteWidgetFolderPickerActivity : ComponentActivity() {
                     folderPaths = loadFolderPaths()
                 }
 
-                NoteWidgetFolderPickerDialog(
-                    folderChoices = folderPaths?.let(::buildExpandedFolderChoices),
-                    selectedFolder = selectedFolder,
-                    onSelect = { folder ->
-                        NoteListWidgetProvider.selectFolder(this, appWidgetId, folder)
+                FileTreePickerDialog(
+                    title = stringResource(R.string.widget_folder_picker_title),
+                    nodes = folderPaths?.let {
+                        buildWidgetFolderPickerNodes(
+                            paths = it,
+                            rootLabel = stringResource(R.string.widget_folder_root),
+                        )
+                    },
+                    selectedId = folderPickerSelectionId(selectedFolder),
+                    selectionMode = FileTreeSelectionMode.FOLDER,
+                    loadingText = stringResource(R.string.widget_folder_picker_loading),
+                    onSelect = { node ->
+                        NoteListWidgetProvider.selectFolder(this, appWidgetId, node.value)
                         finish()
                     },
                     onDismiss = { finish() },
@@ -217,19 +231,27 @@ class NoteWidgetFolderPickerActivity : ComponentActivity() {
         overridePendingTransition(0, 0)
     }
 
-    private suspend fun loadFolderPaths(): List<String> = withContext(Dispatchers.IO) {
+    private suspend fun loadFolderPaths(extraPath: String? = null): List<String> = withContext(Dispatchers.IO) {
         runCatching {
             val appContext = applicationContext
-            val hiddenFolders = PrefsManager(appContext).getHiddenFolderPaths()
-            AppDatabase.getDatabase(appContext)
+            val hiddenFolders = PrefsManager(appContext)
+                .getHiddenFolderPaths()
+                .map(::normalizeFolderPathForUi)
+                .filter(String::isNotBlank)
+            val paths = AppDatabase.getDatabase(appContext)
                 .labelDao()
                 .getAllLabels()
                 .first()
+            (paths + listOfNotNull(extraPath)).asSequence()
+                .map(::normalizeFolderPathForUi)
+                .filter(String::isNotBlank)
                 .filterNot { path ->
                     hiddenFolders.any { hidden ->
                         path == hidden || path.startsWith("$hidden/")
                     }
                 }
+                .distinct()
+                .toList()
         }.getOrDefault(emptyList())
     }
 
@@ -377,95 +399,33 @@ private fun WidgetSettingsDialog(
     )
 }
 
-private data class FolderChoice(
-    val folder: String?,
-    val name: String,
-    val depth: Int,
-)
+private const val ROOT_PICKER_ID = "__kardleaf_root__"
 
-@Composable
-private fun NoteWidgetFolderPickerDialog(
-    folderChoices: List<FolderChoice>?,
-    selectedFolder: String?,
-    onSelect: (String?) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(text = stringResource(R.string.widget_folder_picker_title)) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 480.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                if (folderChoices == null) {
-                    Text(text = stringResource(R.string.widget_folder_picker_loading))
-                }
-                folderChoices?.forEach { choice ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(choice.folder) }
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Spacer(modifier = Modifier.width((choice.depth * 20).dp))
-                        RadioButton(
-                            selected = selectedFolder == choice.folder,
-                            onClick = null,
-                        )
-                        Text(
-                            text = when (choice.folder) {
-                                null -> stringResource(R.string.widget_folder_all_notes)
-                                "" -> stringResource(R.string.widget_folder_root)
-                                else -> choice.name
-                            },
-                            modifier = Modifier.padding(start = 4.dp),
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(text = stringResource(R.string.action_cancel))
-            }
-        },
-    )
+private fun folderPickerSelectionId(folder: String?): String? {
+    if (folder == null) return null
+    val normalized = normalizeFolderPathForUi(folder)
+    return normalized.ifBlank { ROOT_PICKER_ID }
 }
 
-private fun buildExpandedFolderChoices(paths: List<String>): List<FolderChoice> {
-    val normalizedPaths = paths
-        .asSequence()
-        .map { it.trim().trim('/') }
-        .filter { it.isNotBlank() }
-        .distinct()
-        .toList()
-
-    val result = mutableListOf(
-        FolderChoice(folder = null, name = "", depth = 0),
-        FolderChoice(folder = "", name = "", depth = 0),
+private fun buildWidgetFolderPickerNodes(
+    paths: Collection<String>,
+    rootLabel: String,
+): List<FileTreePickerNode<String>> {
+    val folders = buildFileTreePickerFolderNodes(paths)
+    val root = FileTreePickerNode(
+        id = ROOT_PICKER_ID,
+        label = rootLabel,
+        value = "",
+        hasChildren = folders.any { it.depth == 0 },
     )
-
-    fun appendChildren(prefix: String, depth: Int) {
-        val prefixWithSlash = prefix.takeIf { it.isNotBlank() }?.let { "$it/" }.orEmpty()
-        normalizedPaths
-            .asSequence()
-            .filter { it.startsWith(prefixWithSlash) && it != prefix }
-            .map { it.removePrefix(prefixWithSlash).substringBefore('/') }
-            .filter { it.isNotBlank() }
-            .distinct()
-            .sorted()
-            .forEach { name ->
-                val path = if (prefix.isBlank()) name else "$prefix/$name"
-                result += FolderChoice(folder = path, name = name, depth = depth)
-                appendChildren(path, depth + 1)
-            }
+    val nestedFolders = folders.map { folder ->
+        folder.copy(
+            depth = folder.depth + 1,
+            parentId = folder.parentId ?: ROOT_PICKER_ID,
+        )
     }
-
-    appendChildren(prefix = "", depth = 0)
-    return result
+    return buildList {
+        add(root)
+        addAll(nestedFolders)
+    }
 }

@@ -109,6 +109,9 @@
     <string name="widget_pin_request_failed">Could not open the widget picker. Long-press the Home screen and choose Widgets.</string>
     <string name="widget_open_permission_settings">Open settings</string>
     <string name="widget_permission_settings_failed">Could not open permission settings. Open KardLeaf app info manually in system settings.</string>
+    <string name="widget_shortcut_permission_title">Notice</string>
+    <string name="widget_shortcut_permission_message">Without Home screen shortcut permission, widgets cannot be added from the app.</string>
+    <string name="widget_shortcut_permission_allow">Got it</string>
 
     <string name="shortcut_quick_note_short">New note</string>
     <string name="shortcut_quick_note_long">Quick new note</string>

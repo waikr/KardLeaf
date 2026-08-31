@@ -6,10 +6,13 @@ import android.os.SystemClock
 import android.os.VibrationAttributes
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import com.kangle.kardleaf.data.database.AppDatabase
 import com.kangle.kardleaf.data.database.TaskEntity
@@ -17,7 +20,8 @@ import com.kangle.kardleaf.data.task.TaskEditorResult
 import com.kangle.kardleaf.data.task.toTaskEntity
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.data.utils.KardLeafLogTags
-import com.kangle.kardleaf.ui.TaskEditorDialog
+import com.kangle.kardleaf.ui.TaskEditorOverlay
+import com.kangle.kardleaf.ui.TaskEditorSaveState
 import com.kangle.kardleaf.ui.showToast
 import com.kangle.kardleaf.ui.theme.KardLeafTheme
 import com.kangle.kardleaf.widget.TaskListWidgetProvider
@@ -32,6 +36,9 @@ class TaskQuickAddActivity : ComponentActivity() {
     private var editingTask: TaskEntity? = null
     private var storeDeferred: Deferred<TaskMarkdownStore?>? = null
     private var saveInProgress = false
+    private var saveState by mutableStateOf(TaskEditorSaveState.Idle)
+    private var saveError by mutableStateOf<String?>(null)
+    private var editorVisible by mutableStateOf(false)
     private var editorOpenStartedAtMs = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,6 +48,8 @@ class TaskQuickAddActivity : ComponentActivity() {
             setTheme(android.R.style.Theme_NoDisplay)
         }
         super.onCreate(savedInstanceState)
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        setFinishOnTouchOutside(true)
         if (clickAction == CLICK_ACTION_TOGGLE) {
             if (taskId > 0L) {
                 TaskCompletionFeedback.perform(applicationContext, VibrationAttributes.USAGE_HARDWARE_FEEDBACK)
@@ -85,6 +94,7 @@ class TaskQuickAddActivity : ComponentActivity() {
 
     private fun showEditor(task: TaskEntity?) {
         val taskDao = AppDatabase.getDatabase(applicationContext).taskDao()
+        editorVisible = true
         KardLeafLog.d(
             KardLeafLogTags.USER_PERF,
             "taskEditor showEditor source=widget taskId=${task?.id ?: 0} elapsed=${SystemClock.elapsedRealtime() - editorOpenStartedAtMs}ms",
@@ -98,12 +108,16 @@ class TaskQuickAddActivity : ComponentActivity() {
                 )
             }
             KardLeafTheme(styleSystemBars = false) {
-                TaskEditorDialog(
+                BackHandler(enabled = saveState == TaskEditorSaveState.Saving) {}
+                TaskEditorOverlay(
+                    visible = editorVisible,
                     task = task,
                     groups = groups,
-                    useDialog = false,
                     autoFocusTitle = true,
                     openStartedAtMs = editorOpenStartedAtMs,
+                    saveState = saveState,
+                    saveError = saveError,
+                    drawScrim = false,
                     onDismiss = { if (!saveInProgress) finish() },
                     onSave = ::saveTask,
                 )
@@ -120,19 +134,23 @@ class TaskQuickAddActivity : ComponentActivity() {
     private fun saveTask(result: TaskEditorResult) {
         if (saveInProgress) return
         saveInProgress = true
+        setFinishOnTouchOutside(false)
+        saveState = TaskEditorSaveState.Saving
+        saveError = null
+        editorVisible = false
+        window.attributes = window.attributes.apply { dimAmount = 0f }
         val appContext = applicationContext
         lifecycleScope.launch {
-            val saved =
+            val saveResult =
                 try {
                     withContext(Dispatchers.IO) {
                         val now = System.currentTimeMillis()
                         val store = storeDeferred?.await() ?: TaskMarkdownStore.create(appContext) ?: return@withContext null
                         val current = editingTask
-                        store.saveTaskBatch(
+                        store.saveTaskBatchResult(
                             original = current,
                             candidate = result.toTaskEntity(current, now),
                             parentTaskId = result.parentTaskId,
-                            parentTaskSelectionChanged = result.parentTaskSelectionChanged,
                             childTaskTexts = result.childTaskTexts,
                         )
                     }
@@ -140,14 +158,24 @@ class TaskQuickAddActivity : ComponentActivity() {
                     throw error
                 } catch (error: Exception) {
                     KardLeafLog.e(KardLeafLogTags.TASK_SAVE, "quick task save failed", error)
-                    null
+                    TaskSaveResult.Failure(
+                        TaskSaveFailure(TaskSaveFailureReason.Unknown, "任务保存失败，请重试"),
+                    )
                 }
-            val savedBatch = saved
-            if (savedBatch == null) {
+            if (saveResult !is TaskSaveResult.Success) {
+                val failureMessage = (saveResult as? TaskSaveResult.Failure)?.failure?.message ?: "任务保存失败，请重试"
                 saveInProgress = false
-                showToast("任务保存失败，请检查笔记库权限")
+                setFinishOnTouchOutside(true)
+                saveState = TaskEditorSaveState.Failed
+                saveError = failureMessage
+                editorVisible = true
+                window.attributes = window.attributes.apply { dimAmount = 0.12f }
+                showToast(failureMessage)
                 return@launch
             }
+            val savedBatch = saveResult.batch
+            saveState = TaskEditorSaveState.Idle
+            saveError = null
             runCatching {
                 val scheduler = TaskReminderScheduler(appContext)
                 scheduler.schedule(savedBatch.task)

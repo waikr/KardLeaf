@@ -26,15 +26,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -47,24 +46,23 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.AccessTime
-import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.ExpandLess
-import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Notifications
@@ -72,6 +70,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
@@ -88,6 +87,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -123,14 +123,16 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -140,7 +142,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.window.PopupProperties
-import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.findViewTreeLifecycleOwner
@@ -161,6 +162,10 @@ import com.kangle.kardleaf.data.task.TaskHierarchy
 import com.kangle.kardleaf.data.task.TaskMarkdownStore
 import com.kangle.kardleaf.data.task.TaskReminderScheduler
 import com.kangle.kardleaf.data.task.TaskRepeat
+import com.kangle.kardleaf.data.task.TaskSaveFailure
+import com.kangle.kardleaf.data.task.TaskSaveFailureReason
+import com.kangle.kardleaf.data.task.TaskSaveResult
+import com.kangle.kardleaf.data.task.TaskTimeRules
 import com.kangle.kardleaf.data.task.toTaskEntity
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.data.utils.KardLeafLogTags
@@ -183,6 +188,16 @@ import kotlin.math.abs
 private const val TASK_REMINDER_LOG_TAG = "KardLeafTaskReminder"
 private const val TASK_SCAN_LOG_TAG = "KardLeafTaskScan"
 private const val GLOBAL_TASK_FILTER_PATH = "\u0000global"
+private const val TASK_TEST_REMINDER_DELAY_MS = 5_000L
+internal const val TASK_COMPLETION_SNACKBAR_DURATION_MS = 2_000L
+
+private enum class TaskBottomToolbarAction {
+    EDIT,
+    NEW_GROUP,
+    NEW_TASK,
+    TRASH,
+    SETTINGS,
+}
 
 internal enum class TaskFilter(val label: String) {
     ALL("全部"),
@@ -205,6 +220,7 @@ internal enum class TaskSort(val label: String) {
 fun TaskListScreen(
     noteRepository: RoomNoteRepository,
     onOpenDrawer: () -> Unit,
+    onOpenSettings: () -> Unit = {},
     onOpenNotePath: (String) -> Unit = {},
     onMissingManagedFile: (MissingTaskMarkdownFile) -> Unit = {},
 ) {
@@ -213,6 +229,8 @@ fun TaskListScreen(
     val appContext = context.applicationContext
     val taskDao = remember { AppDatabase.getDatabase(appContext).taskDao() }
     val prefsManager = remember { PrefsManager(appContext) }
+    val homeActionStyle = remember { prefsManager.getHomeActionStyle() }
+    val homeBottomToolbarButtonSizeDp = remember { prefsManager.getHomeBottomToolbarButtonSizeDp() }
     val managedTaskPath = TaskMarkdownStore.managedNotePath(prefsManager)
     val scheduler = remember { TaskReminderScheduler(appContext) }
     val taskStore = remember(noteRepository) { TaskMarkdownStore(appContext, noteRepository, taskDao) }
@@ -222,11 +240,13 @@ fun TaskListScreen(
     val tasks by taskDao.observeTasks().collectAsState(initial = emptyList())
     val trashedTasks by taskDao.observeTrashedTasks().collectAsState(initial = emptyList())
     val groups by taskDao.observeGroups().collectAsState(initial = emptyList())
+    val selectionGroupPickerNodes = remember(groups) { taskGroupPickerNodes(groups) }
     val managedTaskSource by remember(taskDao, managedTaskPath) {
         taskDao.observeMarkdownTaskSource(managedTaskPath)
     }.collectAsState(initial = null)
     var editingTaskId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showEditor by rememberSaveable { mutableStateOf(false) }
+    var editorSession by rememberSaveable { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
     var showSearch by remember { mutableStateOf(false) }
     var showMarkdownTasks by remember {
@@ -263,11 +283,15 @@ fun TaskListScreen(
     var showTaskTrash by remember { mutableStateOf(false) }
     var taskEditMode by remember { mutableStateOf(false) }
     var selectedTaskIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var pendingTaskDone by remember { mutableStateOf(emptyMap<Long, Boolean>()) }
+    var pendingMarkdownDone by remember { mutableStateOf(emptyMap<String, Boolean>()) }
     var showSelectionMenu by remember { mutableStateOf(false) }
     var showSelectionMoveDialog by remember { mutableStateOf(false) }
     var showDeleteSelectedDialog by remember { mutableStateOf(false) }
     var showEmptyTrashDialog by remember { mutableStateOf(false) }
     var taskSaveInProgress by remember { mutableStateOf(false) }
+    var taskSaveState by remember { mutableStateOf(TaskEditorSaveState.Idle) }
+    var taskSaveError by remember { mutableStateOf<String?>(null) }
     var editingGroup by remember { mutableStateOf<TaskGroupEntity?>(null) }
     var newGroupParentPath by remember { mutableStateOf("") }
     var showGroupEditor by remember { mutableStateOf(false) }
@@ -283,15 +307,26 @@ fun TaskListScreen(
     var editableActiveTasks by remember { mutableStateOf(emptyList<TaskEntity>()) }
     var editableCompletedTasks by remember { mutableStateOf(emptyList<TaskEntity>()) }
     var duplicateTaskIdConflict by remember { mutableStateOf<DuplicateTaskIdConflict?>(null) }
+    val displayedTasks = remember(tasks, pendingTaskDone) { applyTaskDoneOverrides(tasks, pendingTaskDone) }
+    val displayedMarkdownTasks =
+        remember(markdownTasks, pendingMarkdownDone) {
+            markdownTasks.map { item ->
+                pendingMarkdownDone[itemKey(item)]?.let { item.copy(done = it) } ?: item
+            }
+        }
     val editingTask =
-        remember(tasks, trashedTasks, editingTaskId) {
-            editingTaskId?.let { id -> (tasks + trashedTasks).firstOrNull { it.id == id } }
+        remember(displayedTasks, trashedTasks, editingTaskId) {
+            editingTaskId?.let { id -> (displayedTasks + trashedTasks).firstOrNull { it.id == id } }
         }
     fun requestTaskEditor(
         source: String,
         taskId: Long? = null,
         parentTaskId: Long? = null,
     ) {
+        if (taskSaveInProgress) return
+        taskSaveState = TaskEditorSaveState.Idle
+        taskSaveError = null
+        editorSession += 1
         editorOpenStartedAtMs = SystemClock.elapsedRealtime()
         KardLeafLog.d(
             KardLeafLogTags.USER_PERF,
@@ -318,11 +353,11 @@ fun TaskListScreen(
         }
     }
     val groupFilteredTasks =
-        remember(tasks, trashedTasks, groups, taskGroupFilter, showGlobalTasksOnly, showTaskTrash) {
+        remember(displayedTasks, trashedTasks, groups, taskGroupFilter, showGlobalTasksOnly, showTaskTrash) {
             when {
                 showTaskTrash -> trashedTasks
                 showGlobalTasksOnly -> emptyList()
-                else -> filterTasksByTaskGroup(tasks, groups, taskGroupFilter)
+                else -> filterTasksByTaskGroup(displayedTasks, groups, taskGroupFilter)
             }
         }
     val filteredTasks =
@@ -335,49 +370,24 @@ fun TaskListScreen(
             )
         }
     val managedTaskParentIds =
-        remember(tasks, trashedTasks) {
-            (tasks + trashedTasks).mapNotNull { task -> task.parentTaskId?.let { task.id to it } }.toMap()
+        remember(displayedTasks, trashedTasks) {
+            (displayedTasks + trashedTasks).mapNotNull { task -> task.parentTaskId?.let { task.id to it } }.toMap()
         }
-    val managedTaskRootIds =
-        remember(tasks, trashedTasks, managedTaskParentIds) {
-            TaskHierarchy.rootIds(tasks + trashedTasks, managedTaskParentIds)
+    val taskProjection =
+        remember(groupFilteredTasks, searchQuery, taskFilter, taskSort, expandedTaskIds, showTaskTrash) {
+            buildTaskListProjection(
+                tasks = if (showTaskTrash) emptyList() else groupFilteredTasks,
+                query = searchQuery,
+                filter = taskFilter,
+                sort = taskSort,
+                expandedTaskIds = expandedTaskIds,
+            )
         }
-    val managedTaskById =
-        remember(tasks, trashedTasks) {
-            (tasks + trashedTasks).associateBy { it.id }
-        }
-    val filteredRootOrder =
-        remember(filteredTasks, managedTaskRootIds) {
-            filteredTasks.mapNotNull { managedTaskRootIds[it.id] }.distinct()
-        }
-    val filteredRootIds = filteredRootOrder.toSet()
-    val activeRootIds =
-        remember(filteredRootIds, managedTaskById, taskFilter, showTaskTrash) {
-            if (showTaskTrash || taskFilter == TaskFilter.COMPLETED) {
-                emptySet()
-            } else {
-                filteredRootIds.filter { managedTaskById[it]?.done != true }.toSet()
-            }
-        }
-    val completedRootIds =
-        remember(filteredRootIds, managedTaskById, taskFilter, showTaskTrash) {
-            if (!showTaskTrash && (taskFilter == TaskFilter.ALL || taskFilter == TaskFilter.COMPLETED)) {
-                filteredRootIds.filter { managedTaskById[it]?.done == true }.toSet()
-            } else {
-                emptySet()
-            }
-        }
-    val activeTasks =
-        remember(filteredRootOrder, activeRootIds, managedTaskById) {
-            filteredRootOrder.mapNotNull { rootId -> managedTaskById[rootId]?.takeIf { rootId in activeRootIds } }
-        }
-    val completedTasks =
-        remember(filteredRootOrder, completedRootIds, managedTaskById) {
-            filteredRootOrder.mapNotNull { rootId -> managedTaskById[rootId]?.takeIf { rootId in completedRootIds } }
-        }
+    val activeTasks = taskProjection.activeRoots
+    val completedTasks = taskProjection.completedRoots
     val selectedTasks =
-        remember(tasks, trashedTasks, selectedTaskIds, showTaskTrash) {
-            val source = if (showTaskTrash) trashedTasks else tasks
+        remember(displayedTasks, trashedTasks, selectedTaskIds, showTaskTrash) {
+            val source = if (showTaskTrash) trashedTasks else displayedTasks
             source.filter { it.id in selectedTaskIds }
         }
     val selectedTaskGroup =
@@ -389,26 +399,47 @@ fun TaskListScreen(
             groups.firstOrNull { normalizeFolderPathForUi(it.name) == selectedPath }
         }
     val markdownTasksByKey =
-        remember(markdownTasks) {
-            markdownTasks.associateBy(::itemKey)
+        remember(displayedMarkdownTasks) {
+            displayedMarkdownTasks.associateBy(::itemKey)
         }
     val visibleMarkdownTasks =
-        remember(markdownTasks, markdownTasksByKey, searchQuery, managedTaskPath) {
+        remember(displayedMarkdownTasks, markdownTasksByKey, searchQuery, managedTaskPath) {
             val query = searchQuery.trim()
-            markdownTasks.filter { item ->
+            val candidates = displayedMarkdownTasks.filter { item ->
                 markdownTasksByKey[markdownTaskRootKey(item, markdownTasksByKey)]?.done != true &&
                     !(
                         item.notePath == managedTaskPath &&
                             item.taskId?.startsWith(TaskMarkdownStore.TASK_ID_PREFIX) == true
-                    ) &&
-                    (query.isBlank() || item.taskText.contains(query, ignoreCase = true) ||
+                    )
+            }
+            if (query.isBlank()) {
+                candidates
+            } else {
+                val candidateByKey = candidates.associateBy(::itemKey)
+                val matchedKeys = candidates.filter { item ->
+                    item.taskText.contains(query, ignoreCase = true) ||
                         item.noteTitle.contains(query, ignoreCase = true) ||
-                        item.notes.contains(query, ignoreCase = true))
+                        item.notes.contains(query, ignoreCase = true)
+                }.mapTo(hashSetOf(), ::itemKey)
+                val contextKeys = matchedKeys.flatMap { key -> markdownTaskAncestorKeys(key, candidateByKey) }.toSet()
+                candidates.filter { item -> itemKey(item) in matchedKeys || itemKey(item) in contextKeys }
+            }
+        }
+    val effectiveMarkdownExpandedTaskKeys =
+        remember(visibleMarkdownTasks, expandedMarkdownTaskKeys, searchQuery) {
+            if (searchQuery.isBlank()) {
+                expandedMarkdownTaskKeys
+            } else {
+                val itemsByKey = visibleMarkdownTasks.associateBy(::itemKey)
+                expandedMarkdownTaskKeys + visibleMarkdownTasks
+                    .map(::itemKey)
+                    .flatMap { markdownTaskAncestorKeys(it, itemsByKey) }
+                    .toSet()
             }
         }
     val managedTaskIndentLevels =
-        remember(tasks, trashedTasks, managedTaskParentIds) {
-            TaskHierarchy.depths(tasks + trashedTasks, managedTaskParentIds)
+        remember(displayedTasks, trashedTasks, managedTaskParentIds) {
+            TaskHierarchy.depths(displayedTasks + trashedTasks, managedTaskParentIds)
         }
     val showGlobalTaskSection =
         !showTaskTrash &&
@@ -429,8 +460,13 @@ fun TaskListScreen(
         }
     }
 
-    LaunchedEffect(showTaskTrash, tasks, trashedTasks) {
-        val visibleIds = (if (showTaskTrash) trashedTasks else tasks).mapTo(hashSetOf()) { it.id }
+    LaunchedEffect(showTaskTrash, taskEditMode, displayedTasks, trashedTasks, filteredTasks, taskProjection) {
+        val visibleIds =
+            when {
+                showTaskTrash -> filteredTasks.mapTo(hashSetOf()) { it.id }
+                taskEditMode -> (taskProjection.activeRoots + taskProjection.completedRoots).mapTo(hashSetOf()) { it.id }
+                else -> taskProjection.selectableIds
+            }
         selectedTaskIds = selectedTaskIds.intersect(visibleIds)
     }
 
@@ -459,28 +495,22 @@ fun TaskListScreen(
         } else {
             completedTasks
         }
-    val activeTaskTreeTasks =
-        remember(groupFilteredTasks, managedTaskRootIds, activeRootIds) {
-            groupFilteredTasks.filter { managedTaskRootIds[it.id] in activeRootIds }
-        }
-    val completedTaskTreeTasks =
-        remember(groupFilteredTasks, managedTaskRootIds, completedRootIds) {
-            groupFilteredTasks.filter { managedTaskRootIds[it.id] in completedRootIds }
-        }
+    val activeTaskTreeTasks = taskProjection.activeTreeTasks
+    val completedTaskTreeTasks = taskProjection.completedTreeTasks
     val displayActiveTaskTree =
-        remember(taskEditMode, displayActiveTasks, activeTaskTreeTasks, managedTaskParentIds, expandedTaskIds) {
+        remember(taskEditMode, displayActiveTasks, taskProjection) {
             if (taskEditMode) {
                 displayActiveTasks
             } else {
-                TaskHierarchy.flatten(activeTaskTreeTasks, managedTaskParentIds, expandedTaskIds)
+                taskProjection.activeRows
             }
         }
     val displayCompletedTaskTree =
-        remember(taskEditMode, displayCompletedTasks, completedTaskTreeTasks, managedTaskParentIds, expandedTaskIds) {
+        remember(taskEditMode, displayCompletedTasks, taskProjection) {
             if (taskEditMode) {
                 displayCompletedTasks
             } else {
-                TaskHierarchy.flatten(completedTaskTreeTasks, managedTaskParentIds, expandedTaskIds)
+                taskProjection.completedRows
             }
         }
     val activeTaskChildCounts =
@@ -491,7 +521,7 @@ fun TaskListScreen(
         remember(completedTaskTreeTasks, managedTaskParentIds) {
             TaskHierarchy.childCounts(completedTaskTreeTasks, managedTaskParentIds)
         }
-    val visibleMarkdownTaskTree = flattenMarkdownTaskTree(visibleMarkdownTasks, expandedMarkdownTaskKeys)
+    val visibleMarkdownTaskTree = flattenMarkdownTaskTree(visibleMarkdownTasks, effectiveMarkdownExpandedTaskKeys)
     val markdownTaskChildCounts = markdownTaskChildCounts(visibleMarkdownTasks)
 
     fun saveTask(
@@ -500,38 +530,139 @@ fun TaskListScreen(
     ) {
         if (taskSaveInProgress) return
         taskSaveInProgress = true
+        taskSaveState = TaskEditorSaveState.Saving
+        taskSaveError = null
+        showEditor = false
         scope.launch {
             val now = System.currentTimeMillis()
-            val savedTask =
+            val saveResult =
                 try {
                     withContext(Dispatchers.IO) {
-                        taskStore.saveTaskBatch(
+                        taskStore.saveTaskBatchResult(
                             original = original,
                             candidate = result.toTaskEntity(original, now),
                             parentTaskId = result.parentTaskId,
-                            parentTaskSelectionChanged = result.parentTaskSelectionChanged,
                             childTaskTexts = result.childTaskTexts,
-                        )?.task
+                        )
                     }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
                     KardLeafLog.e(KardLeafLogTags.TASK_SAVE, "task screen save failed", error)
-                    null
+                    TaskSaveResult.Failure(
+                        TaskSaveFailure(TaskSaveFailureReason.Unknown, "任务保存失败，请重试"),
+                    )
                 }
-            if (savedTask == null) {
+            if (saveResult !is TaskSaveResult.Success) {
+                val failureMessage = (saveResult as? TaskSaveResult.Failure)?.failure?.message ?: "任务保存失败，请重试"
                 taskSaveInProgress = false
-                context.showToast("任务保存失败，请检查笔记库权限")
+                taskSaveState = TaskEditorSaveState.Failed
+                taskSaveError = failureMessage
+                showEditor = true
+                context.showToast(failureMessage)
                 return@launch
             }
+            val savedTask = saveResult.batch.task
             taskSaveInProgress = false
-            showEditor = false
+            taskSaveState = TaskEditorSaveState.Idle
+            taskSaveError = null
             editingTaskId = null
             newTaskParentId = null
             runCatching { scheduler.schedule(savedTask) }.onFailure { error ->
                 KardLeafLog.e(KardLeafLogTags.TASK_SAVE, "task reminder scheduling failed id=${savedTask.id}", error)
             }
             if (savedTask.reminderAt != null && !TaskReminderScheduler.areNotificationsEnabled(context)) {
+                context.showToast("系统通知未开启，提醒可能无法弹出")
+            }
+        }
+    }
+
+    fun saveTaskDetails(
+        original: TaskEntity,
+        candidate: TaskEntity,
+        editedSubtasks: List<TaskEntity>,
+        newSubtaskTexts: List<String>,
+        onComplete: (Boolean) -> Unit = {},
+    ) {
+        KardLeafLog.d(
+            KardLeafLogTags.TASK_SAVE,
+            "detail callback taskId=${original.id} candidateTitleLen=${candidate.taskText.length} " +
+                "candidateNotesLen=${candidate.notes.length} editedSubtasks=${editedSubtasks.size} " +
+                "newSubtasks=${newSubtaskTexts.count(String::isNotBlank)} openedTaskId=${openedTask?.id} " +
+                "inProgress=$taskSaveInProgress",
+        )
+        if (taskSaveInProgress) {
+            KardLeafLog.w(KardLeafLogTags.TASK_SAVE, "detail callback skipped taskId=${original.id} reason=in-progress")
+            onComplete(false)
+            return
+        }
+        taskSaveInProgress = true
+        taskSaveState = TaskEditorSaveState.Saving
+        taskSaveError = null
+        KardLeafLog.d(KardLeafLogTags.TASK_SAVE, "detail worker launch taskId=${original.id}")
+        scope.launch {
+            val now = System.currentTimeMillis()
+            val saveResult =
+                try {
+                    withContext(Dispatchers.IO) {
+                        KardLeafLog.d(KardLeafLogTags.TASK_SAVE, "detail store start taskId=${original.id}")
+                        taskStore.saveTaskBatchResult(
+                            original = original,
+                            candidate = candidate.copy(
+                                taskText = candidate.taskText.trim(),
+                                notes = candidate.notes.trim(),
+                                done = original.done,
+                                updatedAt = now,
+                            ),
+                            parentTaskId = original.parentTaskId,
+                            childTaskTexts = newSubtaskTexts,
+                            updatedSubtasks = editedSubtasks.map { it.copy(updatedAt = now) },
+                        ).also { result ->
+                            KardLeafLog.d(
+                                KardLeafLogTags.TASK_SAVE,
+                                "detail store return taskId=${original.id} success=${result is TaskSaveResult.Success} " +
+                                    "savedChildren=${(result as? TaskSaveResult.Success)?.batch?.children?.size ?: 0}",
+                            )
+                        }
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    KardLeafLog.e(KardLeafLogTags.TASK_SAVE, "detail worker exception taskId=${original.id}", error)
+                    TaskSaveResult.Failure(
+                        TaskSaveFailure(TaskSaveFailureReason.Unknown, "任务保存失败，请重试"),
+                    )
+                }
+            taskSaveInProgress = false
+            if (saveResult is TaskSaveResult.Success) taskSaveState = TaskEditorSaveState.Idle
+            KardLeafLog.d(
+                KardLeafLogTags.TASK_SAVE,
+                "detail worker result taskId=${original.id} success=${saveResult is TaskSaveResult.Success} " +
+                    "openedTaskId=${openedTask?.id}",
+            )
+            if (saveResult !is TaskSaveResult.Success) {
+                val failureMessage = (saveResult as? TaskSaveResult.Failure)?.failure?.message ?: "任务保存失败，请重试"
+                taskSaveState = TaskEditorSaveState.Failed
+                taskSaveError = failureMessage
+                KardLeafLog.w(KardLeafLogTags.TASK_SAVE, "detail save failed taskId=${original.id} stage=worker-result")
+                context.showToast(failureMessage)
+                onComplete(false)
+                return@launch
+            }
+            val savedBatch = saveResult.batch
+            if (openedTask?.id == original.id) {
+                KardLeafLog.d(KardLeafLogTags.TASK_SAVE, "detail opened task refresh taskId=${original.id}")
+                openedTask = savedBatch.task
+            } else {
+                KardLeafLog.d(
+                    KardLeafLogTags.TASK_SAVE,
+                    "detail opened task refresh skipped taskId=${original.id} currentOpenedTaskId=${openedTask?.id}",
+                )
+            }
+            KardLeafLog.d(KardLeafLogTags.TASK_SAVE, "detail schedule taskId=${savedBatch.task.id}")
+            scheduler.schedule(savedBatch.task)
+            onComplete(true)
+            if (savedBatch.task.reminderAt != null && !TaskReminderScheduler.areNotificationsEnabled(context)) {
                 context.showToast("系统通知未开启，提醒可能无法弹出")
             }
         }
@@ -581,17 +712,27 @@ fun TaskListScreen(
 
     fun showUndoSnackbar(
         message: String,
+        durationMillis: Long? = null,
         undo: suspend () -> Boolean,
     ) {
         scope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
-            val result =
+            val dismissJob = durationMillis?.let { duration ->
+                launch {
+                    delay(duration)
+                    snackbarHostState.currentSnackbarData?.dismiss()
+                }
+            }
+            val result = try {
                 snackbarHostState.showSnackbar(
                     message = message,
                     actionLabel = "撤回",
                     withDismissAction = false,
-                    duration = SnackbarDuration.Long,
+                    duration = if (durationMillis == null) SnackbarDuration.Long else SnackbarDuration.Indefinite,
                 )
+            } finally {
+                dismissJob?.cancel()
+            }
             if (result == SnackbarResult.ActionPerformed) {
                 val success = withContext(Dispatchers.IO) { undo() }
                 if (!success) context.showToast("撤回失败，请检查笔记库权限")
@@ -696,7 +837,10 @@ fun TaskListScreen(
         done: Boolean,
         onSuccess: (TaskEntity) -> Unit = {},
     ) {
-        if (done) TaskCompletionFeedback.perform(context)
+        if (done) {
+            TaskCompletionFeedback.perform(context)
+        }
+        pendingTaskDone = pendingTaskDone + (task.id to done)
         scope.launch {
             val now = System.currentTimeMillis()
             val updated = task.copy(done = done, updatedAt = now)
@@ -705,13 +849,15 @@ fun TaskListScreen(
                     taskStore.setTaskDone(task, updated)
                 }
             if (result == null) {
+                if (pendingTaskDone[task.id] == done) pendingTaskDone = pendingTaskDone - task.id
                 context.showToast("任务状态保存失败，请检查笔记库权限")
             } else {
+                if (pendingTaskDone[task.id] == done) pendingTaskDone = pendingTaskDone - task.id
                 onSuccess(result.first)
                 scheduler.schedule(result.first)
                 result.second?.let(scheduler::schedule)
                 if (done) {
-                    showUndoSnackbar("已完成") {
+                    showUndoSnackbar("已完成", TASK_COMPLETION_SNACKBAR_DURATION_MS) {
                         taskStore.undoTaskCompletion(result.first, result.second)
                     }
                 }
@@ -765,13 +911,22 @@ fun TaskListScreen(
         }
     }
 
+    fun openNewGroupEditor() {
+        editingGroup = null
+        newGroupParentPath =
+            (taskGroupFilter as? MainViewModel.NoteFilter.Label)
+                ?.name
+                .orEmpty()
+        showGroupEditor = true
+    }
+
     fun testReminderTask(text: String): TaskEntity {
         val now = System.currentTimeMillis()
         return TaskEntity(
             id = (now % 1_000_000_000L) + 9_000_000_000L,
             taskText = text,
             done = false,
-            reminderAt = now + 10_000L,
+            reminderAt = now + TASK_TEST_REMINDER_DELAY_MS,
             createdAt = now,
             updatedAt = now,
         )
@@ -779,20 +934,19 @@ fun TaskListScreen(
 
     fun runReminderTest() {
         val task = testReminderTask("测试提醒")
-        KardLeafLog.i(TASK_REMINDER_LOG_TAG, "test delayed start id=${task.id} delayMs=10000")
-        scheduler.schedule(task)
+        KardLeafLog.i(TASK_REMINDER_LOG_TAG, "test delayed start id=${task.id} delayMs=$TASK_TEST_REMINDER_DELAY_MS")
+        scheduler.scheduleTest(task)
         scope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
             snackbarHostState.showSnackbar(
-                message = "10 秒后提醒",
+                message = "${TASK_TEST_REMINDER_DELAY_MS / 1000} 秒后提醒",
                 duration = SnackbarDuration.Long,
             )
         }
     }
 
-    BackHandler(enabled = openedTask != null || taskEditMode || selectedTaskIds.isNotEmpty() || showSearch || showTaskTrash) {
+    BackHandler(enabled = taskEditMode || selectedTaskIds.isNotEmpty() || showSearch || showTaskTrash) {
         when {
-            openedTask != null -> openedTask = null
             taskEditMode -> taskEditMode = false
             selectedTaskIds.isNotEmpty() -> {
                 selectedTaskIds = emptySet()
@@ -807,12 +961,46 @@ fun TaskListScreen(
         }
     }
 
-    val detailTask = openedTask
+    BackHandler(enabled = taskSaveInProgress) {}
+
+    val showTaskBottomToolbar =
+        homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR &&
+            !showTaskTrash &&
+            selectedTaskIds.isEmpty()
+    val taskBottomToolbarItems = listOf(
+        KardLeafBottomToolbarItem(
+            id = TaskBottomToolbarAction.EDIT,
+            icon = if (taskEditMode) Icons.Outlined.Check else ImageVector.vectorResource(R.drawable.ic_folder_navigation_edit),
+            contentDescription = if (taskEditMode) "完成编辑" else "编辑",
+        ),
+        KardLeafBottomToolbarItem(
+            id = TaskBottomToolbarAction.NEW_GROUP,
+            icon = Icons.Outlined.CreateNewFolder,
+            contentDescription = "新建分组",
+        ),
+        KardLeafBottomToolbarItem(
+            id = TaskBottomToolbarAction.NEW_TASK,
+            icon = Icons.Outlined.Add,
+            contentDescription = "新建任务",
+        ),
+        KardLeafBottomToolbarItem(
+            id = TaskBottomToolbarAction.TRASH,
+            icon = Icons.Outlined.DeleteOutline,
+            contentDescription = "回收站",
+        ),
+        KardLeafBottomToolbarItem(
+            id = TaskBottomToolbarAction.SETTINGS,
+            icon = Icons.Outlined.Settings,
+            contentDescription = "设置",
+        ),
+    )
+
+    val detailTask = openedTask?.let { opened -> displayedTasks.firstOrNull { it.id == opened.id } ?: opened }
     if (detailTask != null) {
         val detailSubtasks =
-            remember(detailTask.id, tasks, managedTaskParentIds) {
-                val descendantIds = TaskHierarchy.descendants(tasks, setOf(detailTask.id))
-                val subtree = tasks.filter { it.id == detailTask.id || it.id in descendantIds }
+            remember(detailTask.id, displayedTasks, managedTaskParentIds) {
+                val descendantIds = TaskHierarchy.descendants(displayedTasks, setOf(detailTask.id))
+                val subtree = displayedTasks.filter { it.id == detailTask.id || it.id in descendantIds }
                 TaskHierarchy.flatten(subtree, managedTaskParentIds, descendantIds + detailTask.id)
                     .filterNot { it.id == detailTask.id }
             }
@@ -829,23 +1017,33 @@ fun TaskListScreen(
             groups = groups,
             subtasks = detailSubtasks,
             subtaskIndentLevels = detailSubtaskIndentLevels,
-            onBack = { openedTask = null },
-            onEdit = {
+            onBack = {
+                KardLeafLog.d(KardLeafLogTags.TASK_SAVE, "detail onBack callback taskId=${detailTask.id} openedTaskId=${openedTask?.id}")
                 openedTask = null
-                requestTaskEditor("detail_edit", detailTask.id, managedTaskParentIds[detailTask.id])
             },
-            onAddSubtask = {
-                openedTask = null
-                requestTaskEditor("detail_add_subtask", parentTaskId = detailTask.id)
+            saving = taskSaveInProgress,
+            onSave = { candidate, editedSubtasks, newSubtaskTexts, onComplete ->
+                KardLeafLog.d(
+                    KardLeafLogTags.TASK_SAVE,
+                    "detail onSave callback taskId=${detailTask.id} editedSubtasks=${editedSubtasks.size} " +
+                        "newSubtasks=${newSubtaskTexts.count(String::isNotBlank)}",
+                )
+                saveTaskDetails(detailTask, candidate, editedSubtasks, newSubtaskTexts, onComplete)
             },
             onToggleDone = { done ->
                 toggleDone(detailTask, done) { updatedTask -> openedTask = updatedTask }
+            },
+            onToggleSubtaskDone = { subtask, done -> toggleDone(subtask, done) },
+            onDelete = {
+                openedTask = null
+                deleteTask(detailTask)
             },
         )
         return
     }
 
-    Scaffold(
+    Box(Modifier.fillMaxSize()) {
+        Scaffold(
         topBar = {
             if (selectedTaskIds.isNotEmpty()) {
                 TopAppBar(
@@ -860,7 +1058,12 @@ fun TaskListScreen(
                     },
                     actions = {
                         IconButton(onClick = {
-                            val visibleIds = filteredTasks.mapTo(hashSetOf()) { it.id }
+                            val visibleIds =
+                                when {
+                                    showTaskTrash -> filteredTasks.mapTo(hashSetOf()) { it.id }
+                                    taskEditMode -> (displayActiveTasks + displayCompletedTasks).mapTo(hashSetOf()) { it.id }
+                                    else -> taskProjection.selectableIds
+                                }
                             selectedTaskIds =
                                 if (visibleIds.isNotEmpty() && selectedTaskIds.containsAll(visibleIds)) {
                                     emptySet()
@@ -982,24 +1185,150 @@ fun TaskListScreen(
                                 tint = if (showSearch) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        if (!showTaskTrash) {
-                            Box {
-                                val hasActiveFilters =
-                                    taskFilter != TaskFilter.ALL ||
-                                        taskGroupFilter !is MainViewModel.NoteFilter.All ||
-                                        taskSort != TaskSort.MANUAL ||
-                                        showGlobalTasksOnly
-                                IconButton(onClick = { showTaskFilters = true }) {
+                        Box {
+                            val hasActiveFilters =
+                                taskFilter != TaskFilter.ALL ||
+                                    taskGroupFilter !is MainViewModel.NoteFilter.All ||
+                                    taskSort != TaskSort.MANUAL ||
+                                    showGlobalTasksOnly
+                                IconButton(onClick = { showTaskOptions = true }) {
                                     Icon(
-                                        Icons.Outlined.FilterList,
-                                        contentDescription = if (hasActiveFilters) "筛选任务，已启用" else "筛选任务",
+                                        Icons.Filled.MoreVert,
+                                        contentDescription = "更多选项",
                                         tint =
-                                            if (hasActiveFilters) {
+                                            if (!showTaskTrash && hasActiveFilters) {
                                                 MaterialTheme.colorScheme.primary
                                             } else {
                                                 MaterialTheme.colorScheme.onSurfaceVariant
                                             },
                                     )
+                                }
+                                DropdownMenu(
+                                    expanded = showTaskOptions,
+                                    onDismissRequest = { showTaskOptions = false },
+                                ) {
+                                    if (!showTaskTrash) {
+                                        DropdownMenuItem(
+                                            text = { Text(if (hasActiveFilters) "筛选任务（已启用）" else "筛选任务") },
+                                            leadingIcon = { Icon(Icons.Outlined.FilterList, contentDescription = null) },
+                                            onClick = {
+                                                showTaskOptions = false
+                                                showTaskFilters = true
+                                            },
+                                        )
+                                        HorizontalDivider()
+                                    }
+                                    if (showTaskTrash) {
+                                        DropdownMenuItem(
+                                            text = { Text("返回任务清单") },
+                                            leadingIcon = { Icon(Icons.Outlined.ArrowBack, null) },
+                                            onClick = { closeTaskTrash() },
+                                        )
+                                        if (trashedTasks.isNotEmpty()) {
+                                            DropdownMenuItem(
+                                                text = { Text("清空回收站") },
+                                                leadingIcon = { Icon(Icons.Outlined.DeleteSweep, null) },
+                                                onClick = {
+                                                    showTaskOptions = false
+                                                    showEmptyTrashDialog = true
+                                                },
+                                            )
+                                        }
+                                    } else {
+                                        if (!showTaskBottomToolbar) {
+                                            DropdownMenuItem(
+                                                text = { Text(if (taskEditMode) "完成编辑" else "编辑") },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        if (taskEditMode) Icons.Outlined.Check else Icons.Outlined.Edit,
+                                                        contentDescription = null,
+                                                    )
+                                                },
+                                                onClick = {
+                                                    taskEditMode = !taskEditMode
+                                                    selectedTaskIds = emptySet()
+                                                    showTaskOptions = false
+                                                },
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("新建分组") },
+                                                leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, null) },
+                                                onClick = {
+                                                    showTaskOptions = false
+                                                    openNewGroupEditor()
+                                                },
+                                            )
+                                        }
+                                        selectedTaskGroup?.let { group ->
+                                            DropdownMenuItem(
+                                                text = { Text("重命名当前分组") },
+                                                leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                                onClick = {
+                                                    showTaskOptions = false
+                                                    editingGroup = group
+                                                    showGroupEditor = true
+                                                },
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("上移当前分组") },
+                                                leadingIcon = { Icon(Icons.Outlined.ArrowUpward, null) },
+                                                enabled = groups.indexOfFirst { it.id == group.id } > 0,
+                                                onClick = {
+                                                    showTaskOptions = false
+                                                    moveGroup(group, -1)
+                                                },
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("下移当前分组") },
+                                                leadingIcon = { Icon(Icons.Outlined.ArrowDownward, null) },
+                                                enabled = groups.indexOfFirst { it.id == group.id } < groups.lastIndex,
+                                                onClick = {
+                                                    showTaskOptions = false
+                                                    moveGroup(group, 1)
+                                                },
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("删除当前分组") },
+                                                leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                                onClick = {
+                                                    showTaskOptions = false
+                                                    deletingGroup = group
+                                                },
+                                            )
+                                        }
+                                        if (!showTaskBottomToolbar) {
+                                            DropdownMenuItem(
+                                                text = { Text("回收站") },
+                                                leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null) },
+                                                onClick = { openTaskTrash() },
+                                            )
+                                        }
+                                        DropdownMenuItem(
+                                            text = { Text("全局任务") },
+                                            leadingIcon = { Icon(Icons.Outlined.Checklist, null) },
+                                            trailingIcon = {
+                                                if (showMarkdownTasks) {
+                                                    Icon(Icons.Outlined.Check, contentDescription = null)
+                                                }
+                                            },
+                                            onClick = {
+                                                showMarkdownTasks = !showMarkdownTasks
+                                                if (!showMarkdownTasks) showGlobalTasksOnly = false
+                                                prefsManager.saveShowMarkdownTasksInTaskList(showMarkdownTasks)
+                                                showTaskOptions = false
+                                            },
+                                        )
+                                        if (BuildConfig.KARDLEAF_DEV_VARIANT) {
+                                            DropdownMenuItem(
+                                                text = { Text("测试提醒") },
+                                                leadingIcon = { Icon(Icons.Outlined.Notifications, null) },
+                                                onClick = {
+                                                    showTaskOptions = false
+                                                    runReminderTest()
+                                                },
+                                            )
+                                        }
+                                    }
                                 }
                                 TaskFilterMenu(
                                     expanded = showTaskFilters,
@@ -1033,124 +1362,25 @@ fun TaskListScreen(
                                     },
                                 )
                             }
-                        }
-                        Box {
-                            IconButton(onClick = { showTaskOptions = true }) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = "更多选项")
+                    },
+                )
+            }
+        },
+        bottomBar = {
+            if (showTaskBottomToolbar) {
+                KardLeafBottomToolbar(
+                    items = taskBottomToolbarItems,
+                    buttonSizeDp = homeBottomToolbarButtonSizeDp,
+                    onItemClick = { action ->
+                        when (action) {
+                            TaskBottomToolbarAction.EDIT -> {
+                                taskEditMode = !taskEditMode
+                                selectedTaskIds = emptySet()
                             }
-                            DropdownMenu(
-                                expanded = showTaskOptions,
-                                onDismissRequest = { showTaskOptions = false },
-                            ) {
-                                if (showTaskTrash) {
-                                    DropdownMenuItem(
-                                        text = { Text("返回任务清单") },
-                                        leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
-                                        onClick = { closeTaskTrash() },
-                                    )
-                                    if (trashedTasks.isNotEmpty()) {
-                                        DropdownMenuItem(
-                                            text = { Text("清空回收站") },
-                                            leadingIcon = { Icon(Icons.Outlined.Delete, null) },
-                                            onClick = {
-                                                showTaskOptions = false
-                                                showEmptyTrashDialog = true
-                                            },
-                                        )
-                                    }
-                                } else {
-                                    DropdownMenuItem(
-                                        text = { Text(if (taskEditMode) "完成编辑" else "编辑") },
-                                        leadingIcon = {
-                                            Icon(
-                                                if (taskEditMode) Icons.Outlined.Check else Icons.Outlined.Edit,
-                                                contentDescription = null,
-                                            )
-                                        },
-                                        onClick = {
-                                            taskEditMode = !taskEditMode
-                                            selectedTaskIds = emptySet()
-                                            showTaskOptions = false
-                                        },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("新建分组") },
-                                        onClick = {
-                                            showTaskOptions = false
-                                            editingGroup = null
-                                            newGroupParentPath =
-                                                (taskGroupFilter as? MainViewModel.NoteFilter.Label)
-                                                    ?.name
-                                                    .orEmpty()
-                                            showGroupEditor = true
-                                        },
-                                    )
-                                    selectedTaskGroup?.let { group ->
-                                        DropdownMenuItem(
-                                            text = { Text("重命名当前分组") },
-                                            leadingIcon = { Icon(Icons.Outlined.Edit, null) },
-                                            onClick = {
-                                                showTaskOptions = false
-                                                editingGroup = group
-                                                showGroupEditor = true
-                                            },
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("上移当前分组") },
-                                            leadingIcon = { Icon(Icons.Outlined.ArrowUpward, null) },
-                                            enabled = groups.indexOfFirst { it.id == group.id } > 0,
-                                            onClick = {
-                                                showTaskOptions = false
-                                                moveGroup(group, -1)
-                                            },
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("下移当前分组") },
-                                            leadingIcon = { Icon(Icons.Outlined.ArrowDownward, null) },
-                                            enabled = groups.indexOfFirst { it.id == group.id } < groups.lastIndex,
-                                            onClick = {
-                                                showTaskOptions = false
-                                                moveGroup(group, 1)
-                                            },
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("删除当前分组") },
-                                            leadingIcon = { Icon(Icons.Outlined.Delete, null) },
-                                            onClick = {
-                                                showTaskOptions = false
-                                                deletingGroup = group
-                                            },
-                                        )
-                                    }
-                                    DropdownMenuItem(
-                                        text = { Text("回收站") },
-                                        onClick = { openTaskTrash() },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("全局任务") },
-                                        trailingIcon = {
-                                            if (showMarkdownTasks) {
-                                                Icon(Icons.Outlined.Check, contentDescription = null)
-                                            }
-                                        },
-                                        onClick = {
-                                            showMarkdownTasks = !showMarkdownTasks
-                                            if (!showMarkdownTasks) showGlobalTasksOnly = false
-                                            prefsManager.saveShowMarkdownTasksInTaskList(showMarkdownTasks)
-                                            showTaskOptions = false
-                                        },
-                                    )
-                                    if (BuildConfig.KARDLEAF_DEV_VARIANT) {
-                                        DropdownMenuItem(
-                                            text = { Text("测试提醒") },
-                                            onClick = {
-                                                showTaskOptions = false
-                                                runReminderTest()
-                                            },
-                                        )
-                                    }
-                                }
-                            }
+                            TaskBottomToolbarAction.NEW_GROUP -> openNewGroupEditor()
+                            TaskBottomToolbarAction.NEW_TASK -> requestTaskEditor("task_toolbar")
+                            TaskBottomToolbarAction.TRASH -> openTaskTrash()
+                            TaskBottomToolbarAction.SETTINGS -> onOpenSettings()
                         }
                     },
                 )
@@ -1159,11 +1389,25 @@ fun TaskListScreen(
         snackbarHost = {
             SnackbarHost(
                 hostState = snackbarHostState,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 80.dp),
-            )
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+            ) { data ->
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Snackbar(
+                        snackbarData = data,
+                        modifier = Modifier.widthIn(max = 280.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        actionColor = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
         },
         floatingActionButton = {
-            if (!showTaskTrash) {
+            if (!showTaskTrash && !showTaskBottomToolbar) {
                 FloatingActionButton(onClick = { requestTaskEditor("task_list_fab") }) {
                     Icon(Icons.Outlined.Add, contentDescription = "新建任务")
                 }
@@ -1175,8 +1419,8 @@ fun TaskListScreen(
                 Modifier
                     .fillMaxSize()
                     .padding(padding),
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (permissionHintState.visible) {
                 item {
@@ -1221,12 +1465,6 @@ fun TaskListScreen(
                                     recursive = currentGroup?.recursive != true,
                                 )
                         },
-                        editMode = taskEditMode,
-                        onAddFolder = { parentPath ->
-                            editingGroup = null
-                            newGroupParentPath = parentPath
-                            showGroupEditor = true
-                        },
                     )
                 }
             }
@@ -1268,7 +1506,7 @@ fun TaskListScreen(
                     item(key = "active-section") {
                         TaskSection(
                             title = "未完成",
-                            count = activeTasks.size,
+                            count = taskProjection.activeCount,
                             collapsed = activeCollapsed,
                             onToggle = { activeCollapsed = !activeCollapsed },
                             tasks = displayActiveTaskTree,
@@ -1283,7 +1521,7 @@ fun TaskListScreen(
                                 isTrash = false,
                                 indentLevel = managedTaskIndentLevels[task.id] ?: 0,
                                 hasChildren = (activeTaskChildCounts[task.id] ?: 0) > 0,
-                                expanded = task.id in expandedTaskIds,
+                                expanded = task.id in taskProjection.effectiveExpandedTaskIds,
                                 onToggleChildren = {
                                     expandedTaskIds =
                                         if (task.id in expandedTaskIds) {
@@ -1322,7 +1560,7 @@ fun TaskListScreen(
                             MarkdownTaskRow(
                                 item = item,
                                 hasChildren = (markdownTaskChildCounts[itemKey(item)] ?: 0) > 0,
-                                expanded = itemKey(item) in expandedMarkdownTaskKeys,
+                                expanded = itemKey(item) in effectiveMarkdownExpandedTaskKeys,
                                 onToggleChildren = {
                                     val key = itemKey(item)
                                     expandedMarkdownTaskKeys =
@@ -1333,14 +1571,21 @@ fun TaskListScreen(
                                         }
                                 },
                                 onToggleDone = { done ->
-                                    if (done) TaskCompletionFeedback.perform(context)
+                                    val key = itemKey(item)
+                                    if (done) {
+                                        TaskCompletionFeedback.perform(context)
+                                    }
+                                    pendingMarkdownDone = pendingMarkdownDone + (key to done)
                                     scope.launch {
                                         val success =
                                             withContext(Dispatchers.IO) {
                                                 taskStore.setMarkdownTaskDone(item, done)
                                             }
+                                        if (pendingMarkdownDone[key] == done) {
+                                            pendingMarkdownDone = pendingMarkdownDone - key
+                                        }
                                         if (success && done) {
-                                            showUndoSnackbar("已完成") {
+                                            showUndoSnackbar("已完成", TASK_COMPLETION_SNACKBAR_DURATION_MS) {
                                                 taskStore.setMarkdownTaskDone(item, false)
                                             }
                                         }
@@ -1356,7 +1601,7 @@ fun TaskListScreen(
                     item(key = "completed-header") {
                         TaskSection(
                             title = "已完成",
-                            count = completedTasks.size,
+                            count = taskProjection.completedCount,
                             collapsed = completedCollapsed,
                             onToggle = { completedCollapsed = !completedCollapsed },
                             tasks = displayCompletedTaskTree,
@@ -1371,7 +1616,7 @@ fun TaskListScreen(
                                 isTrash = false,
                                 indentLevel = managedTaskIndentLevels[task.id] ?: 0,
                                 hasChildren = (completedTaskChildCounts[task.id] ?: 0) > 0,
-                                expanded = task.id in expandedTaskIds,
+                                expanded = task.id in taskProjection.effectiveExpandedTaskIds,
                                 onToggleChildren = {
                                     expandedTaskIds =
                                         if (task.id in expandedTaskIds) {
@@ -1397,50 +1642,40 @@ fun TaskListScreen(
         }
     }
 
-    if (showEditor) {
-                TaskEditorDialog(
-                    task = editingTask,
-                    groups = groups,
-                    parentTaskIds = managedTaskParentIds,
-                    initialGroupId =
-                        editingTask?.groupId
-                            ?: newTaskParentId?.let { parentId -> tasks.firstOrNull { it.id == parentId }?.groupId }
-                            ?: selectedTaskGroup?.id,
-                    initialParentTaskId = newTaskParentId,
-                    autoFocusTitle = true,
-                    openStartedAtMs = editorOpenStartedAtMs,
-                    onDismiss = {
-                        if (!taskSaveInProgress) {
-                            showEditor = false
-                            editingTaskId = null
-                            newTaskParentId = null
-                        }
-                    },
-                    onSave = { result -> saveTask(editingTask, result) },
-                )
+        key(editorSession) {
+            TaskEditorOverlay(
+                visible = showEditor,
+                task = editingTask,
+                groups = groups,
+                initialGroupId =
+                    editingTask?.groupId
+                        ?: newTaskParentId?.let { parentId -> displayedTasks.firstOrNull { it.id == parentId }?.groupId }
+                        ?: selectedTaskGroup?.id,
+                initialParentTaskId = newTaskParentId,
+                autoFocusTitle = true,
+                openStartedAtMs = editorOpenStartedAtMs,
+                saveState = taskSaveState,
+                saveError = taskSaveError,
+                onDismiss = {
+                    if (!taskSaveInProgress) {
+                        showEditor = false
+                        editingTaskId = null
+                        newTaskParentId = null
+                    }
+                },
+                onSave = { result -> saveTask(editingTask, result) },
+            )
+        }
     }
 
     if (showSelectionMoveDialog) {
-        AlertDialog(
-            onDismissRequest = { showSelectionMoveDialog = false },
-            title = { Text("移动到分组") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    (listOf<TaskGroupEntity?>(null) + groups).forEach { group ->
-                        TextButton(
-                            onClick = { moveSelectedToGroup(group?.id) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                text = if (group == null) "未分组" else group.name,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { showSelectionMoveDialog = false }) { Text("取消") } },
+        FileTreePickerDialog(
+            title = "移动到分组",
+            nodes = selectionGroupPickerNodes,
+            selectedId = null,
+            selectionMode = FileTreeSelectionMode.FOLDER,
+            onSelect = { node -> moveSelectedToGroup(node.value) },
+            onDismiss = { showSelectionMoveDialog = false },
         )
     }
 
@@ -1611,6 +1846,101 @@ private fun DuplicateTaskIdDialog(
     )
 }
 
+internal fun applyTaskDoneOverrides(
+    tasks: List<TaskEntity>,
+    overrides: Map<Long, Boolean>,
+): List<TaskEntity> =
+    tasks.map { task -> overrides[task.id]?.let { task.copy(done = it) } ?: task }
+
+internal data class TaskListProjection(
+    val activeRoots: List<TaskEntity>,
+    val completedRoots: List<TaskEntity>,
+    val activeTreeTasks: List<TaskEntity>,
+    val completedTreeTasks: List<TaskEntity>,
+    val activeRows: List<TaskEntity>,
+    val completedRows: List<TaskEntity>,
+    val selectableIds: Set<Long>,
+    val effectiveExpandedTaskIds: Set<Long>,
+    val activeCount: Int,
+    val completedCount: Int,
+)
+
+internal fun buildTaskListProjection(
+    tasks: List<TaskEntity>,
+    query: String,
+    filter: TaskFilter,
+    sort: TaskSort,
+    expandedTaskIds: Set<Long> = emptySet(),
+    now: Long = System.currentTimeMillis(),
+): TaskListProjection {
+    if (tasks.isEmpty()) {
+        return TaskListProjection(
+            activeRoots = emptyList(),
+            completedRoots = emptyList(),
+            activeTreeTasks = emptyList(),
+            completedTreeTasks = emptyList(),
+            activeRows = emptyList(),
+            completedRows = emptyList(),
+            selectableIds = emptySet(),
+            effectiveExpandedTaskIds = emptySet(),
+            activeCount = 0,
+            completedCount = 0,
+        )
+    }
+    val normalizedQuery = query.trim()
+    val byId = tasks.associateBy { it.id }
+    val parentIds = tasks.associate { it.id to it.parentTaskId }
+    val matchedIds = tasks.filter { task ->
+        (normalizedQuery.isBlank() || task.taskText.contains(normalizedQuery, ignoreCase = true) ||
+            task.notes.contains(normalizedQuery, ignoreCase = true)) &&
+            taskMatchesFilter(task, filter, now)
+    }.mapTo(hashSetOf()) { it.id }
+    val contextAncestorIds = matchedIds.flatMap { taskAncestorIds(it, parentIds, byId.keys) }.toSet()
+    val relevantIds =
+        if (normalizedQuery.isBlank() && filter == TaskFilter.ALL) {
+            byId.keys
+        } else {
+            matchedIds + contextAncestorIds
+        }
+    val relevantTasks = tasks.filter { it.id in relevantIds }
+    val orderedRelevantTasks = orderTaskTree(relevantTasks, parentIds, sort)
+    val rootIds = TaskHierarchy.rootIds(relevantTasks, parentIds)
+    val rootOrder = orderedRelevantTasks.mapNotNull { rootIds[it.id] }.distinct()
+    val roots = rootOrder.mapNotNull(byId::get)
+    val effectiveExpandedTaskIds =
+        expandedTaskIds.intersect(relevantIds) +
+            if (normalizedQuery.isBlank() && filter == TaskFilter.ALL) emptySet() else contextAncestorIds
+    val rows = TaskHierarchy.flatten(orderedRelevantTasks, parentIds, effectiveExpandedTaskIds)
+    val activeRootIds =
+        if (filter == TaskFilter.COMPLETED) {
+            emptySet()
+        } else {
+            roots.filterNot(TaskEntity::done).mapTo(hashSetOf()) { it.id }
+        }
+    val completedRootIds =
+        if (filter == TaskFilter.COMPLETED) {
+            roots.mapTo(hashSetOf()) { it.id }
+        } else {
+            roots.filter(TaskEntity::done).mapTo(hashSetOf()) { it.id }
+        }
+    val activeTreeTasks = orderedRelevantTasks.filter { rootIds[it.id] in activeRootIds }
+    val completedTreeTasks = orderedRelevantTasks.filter { rootIds[it.id] in completedRootIds }
+    val activeRows = rows.filter { rootIds[it.id] in activeRootIds }
+    val completedRows = rows.filter { rootIds[it.id] in completedRootIds }
+    return TaskListProjection(
+        activeRoots = roots.filter { it.id in activeRootIds },
+        completedRoots = roots.filter { it.id in completedRootIds },
+        activeTreeTasks = activeTreeTasks,
+        completedTreeTasks = completedTreeTasks,
+        activeRows = activeRows,
+        completedRows = completedRows,
+        selectableIds = (activeRows + completedRows).mapTo(hashSetOf()) { it.id },
+        effectiveExpandedTaskIds = effectiveExpandedTaskIds,
+        activeCount = activeRootIds.size,
+        completedCount = if (filter == TaskFilter.COMPLETED) matchedIds.count { byId[it]?.done == true } else completedRootIds.size,
+    )
+}
+
 internal fun filterAndSortTasks(
     tasks: List<TaskEntity>,
     query: String,
@@ -1618,42 +1948,81 @@ internal fun filterAndSortTasks(
     sort: TaskSort,
     now: Long = System.currentTimeMillis(),
 ): List<TaskEntity> {
-    val startToday = startOfTodayMillis(now)
-    val endToday = endOfTodayMillis(now)
-    val searched =
-        tasks.filter { task ->
-            query.isBlank() || task.taskText.contains(query, ignoreCase = true) ||
-                task.notes.contains(query, ignoreCase = true)
-        }
-    val filtered =
-        searched.filter { task ->
-            val due = task.dueAt ?: task.reminderAt
-            when (filter) {
-                TaskFilter.ALL -> true
-                TaskFilter.TODAY -> !task.done && due != null && due in startToday..endToday
-                TaskFilter.UPCOMING -> !task.done && due != null && due > endToday
-                TaskFilter.OVERDUE -> !task.done && due != null && due < now
-                TaskFilter.COMPLETED -> task.done
-            }
-        }
-    return when (sort) {
-        TaskSort.MANUAL -> filtered.sortedWith(compareBy<TaskEntity> { it.manualOrder }.thenBy { it.id })
-        TaskSort.DUE ->
-            filtered.sortedWith(
-                compareBy<TaskEntity> { (it.dueAt ?: it.reminderAt) == null }
-                    .thenBy { it.dueAt ?: it.reminderAt }
-                    .thenByDescending { it.priority }
-                    .thenByDescending { it.updatedAt },
-            )
-        TaskSort.PRIORITY ->
-            filtered.sortedWith(
-                compareByDescending<TaskEntity> { it.priority }
-                    .thenBy { (it.dueAt ?: it.reminderAt) == null }
-                    .thenBy { it.dueAt ?: it.reminderAt }
-                    .thenByDescending { it.updatedAt },
-            )
-        TaskSort.UPDATED -> filtered.sortedByDescending { it.updatedAt }
+    val normalizedQuery = query.trim()
+    return tasks
+        .filter { task ->
+            (normalizedQuery.isBlank() || task.taskText.contains(normalizedQuery, ignoreCase = true) ||
+                task.notes.contains(normalizedQuery, ignoreCase = true)) &&
+                taskMatchesFilter(task, filter, now)
+        }.sortedWith(taskComparator(sort))
+}
+
+private fun taskMatchesFilter(task: TaskEntity, filter: TaskFilter, now: Long): Boolean =
+    when (filter) {
+        TaskFilter.ALL -> true
+        TaskFilter.TODAY -> TaskTimeRules.isToday(task, now)
+        TaskFilter.UPCOMING -> TaskTimeRules.isUpcoming(task, now)
+        TaskFilter.OVERDUE -> TaskTimeRules.isOverdue(task, now)
+        TaskFilter.COMPLETED -> task.done
     }
+
+private fun taskComparator(sort: TaskSort): Comparator<TaskEntity> =
+    when (sort) {
+        TaskSort.MANUAL -> compareBy<TaskEntity> { it.manualOrder }.thenBy { it.id }
+        TaskSort.DUE ->
+            compareBy<TaskEntity> { (TaskTimeRules.listTime(it)) == null }
+                .thenBy { TaskTimeRules.listTime(it) }
+                .thenByDescending { it.priority }
+                .thenByDescending { it.updatedAt }
+                .thenBy { it.id }
+        TaskSort.PRIORITY ->
+            compareByDescending<TaskEntity> { it.priority }
+                .thenBy { TaskTimeRules.listTime(it) == null }
+                .thenBy { TaskTimeRules.listTime(it) }
+                .thenByDescending { it.updatedAt }
+                .thenBy { it.id }
+        TaskSort.UPDATED -> compareByDescending<TaskEntity> { it.updatedAt }.thenBy { it.id }
+    }
+
+private fun orderTaskTree(
+    tasks: List<TaskEntity>,
+    parentIds: Map<Long, Long?>,
+    sort: TaskSort,
+): List<TaskEntity> {
+    if (tasks.isEmpty()) return emptyList()
+    val taskIds = tasks.mapTo(hashSetOf()) { it.id }
+    val comparator = taskComparator(sort)
+    val childrenByParent =
+        tasks.filter { parentIds[it.id] in taskIds }
+            .groupBy { parentIds.getValue(it.id)!! }
+            .mapValues { (_, children) -> children.sortedWith(comparator) }
+    val roots = tasks.filter { parentIds[it.id] !in taskIds }.sortedWith(comparator)
+    val result = ArrayList<TaskEntity>(tasks.size)
+    val visited = hashSetOf<Long>()
+    fun append(task: TaskEntity) {
+        if (!visited.add(task.id)) return
+        result += task
+        childrenByParent[task.id].orEmpty().forEach(::append)
+    }
+    roots.forEach(::append)
+    tasks.sortedWith(comparator).forEach { if (it.id !in visited) append(it) }
+    return result
+}
+
+private fun taskAncestorIds(
+    taskId: Long,
+    parentIds: Map<Long, Long?>,
+    taskIds: Set<Long>,
+): Set<Long> {
+    val result = linkedSetOf<Long>()
+    val visited = hashSetOf<Long>()
+    var parentId = parentIds[taskId]
+    while (parentId != null && visited.add(parentId)) {
+        if (parentId !in taskIds) break
+        result += parentId
+        parentId = parentIds[parentId]
+    }
+    return result
 }
 
 internal fun filterTasksByTaskGroup(
@@ -1671,55 +2040,6 @@ internal fun filterTasksByTaskGroup(
     }
 }
 
-private data class LegacyTaskGroupTreeRow(
-    val group: TaskGroupEntity,
-    val depth: Int,
-)
-
-private fun legacyTaskGroupTreeRows(groups: List<TaskGroupEntity>): List<LegacyTaskGroupTreeRow> {
-    val ordered = groups.sortedBy { it.sortOrder }
-    val paths = ordered.associateBy { normalizeFolderPathForUi(it.name) }
-    val children =
-        ordered.groupBy { group ->
-            normalizeFolderPathForUi(group.name)
-                .substringBeforeLast('/', missingDelimiterValue = "")
-                .takeIf(paths::containsKey)
-                .orEmpty()
-        }
-    return buildList {
-        fun append(
-            parentPath: String,
-            depth: Int,
-        ) {
-            children[parentPath].orEmpty().forEach { group ->
-                add(LegacyTaskGroupTreeRow(group, depth))
-                append(normalizeFolderPathForUi(group.name), depth + 1)
-            }
-        }
-        append("", 0)
-    }
-}
-
-@Composable
-private fun LegacyTaskGroupMenuRow(
-    label: String,
-    depth: Int,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick)
-                .padding(start = 16.dp + 20.dp * depth, end = 16.dp, top = 12.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (selected) Icon(Icons.Outlined.Check, contentDescription = null)
-    }
-}
-
 private fun itemKey(item: MarkdownTaskItem): String = "${item.notePath}:${item.lineNumber}"
 
 private fun markdownTaskParentKey(
@@ -1729,6 +2049,20 @@ private fun markdownTaskParentKey(
     item.parentLineNumber
         ?.let { line -> itemsByKey["${item.notePath}:$line"] }
         ?.let(::itemKey)
+
+private fun markdownTaskAncestorKeys(
+    itemKey: String,
+    itemsByKey: Map<String, MarkdownTaskItem>,
+): Set<String> {
+    val result = linkedSetOf<String>()
+    val visited = hashSetOf<String>()
+    var parentKey = itemsByKey[itemKey]?.let { markdownTaskParentKey(it, itemsByKey) }
+    while (parentKey != null && visited.add(parentKey)) {
+        result += parentKey
+        parentKey = itemsByKey[parentKey]?.let { markdownTaskParentKey(it, itemsByKey) }
+    }
+    return result
+}
 
 private fun markdownTaskRootKey(
     item: MarkdownTaskItem,
@@ -1953,22 +2287,17 @@ private fun TaskFilterMenuOption(
         onClick = onClick,
     )
 }
-
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun LegacyTaskEditorDialog(
     task: TaskEntity?,
     groups: List<TaskGroupEntity> = emptyList(),
-    parentTasks: List<TaskEntity> = emptyList(),
-    parentTaskIds: Map<Long, Long> = emptyMap(),
     initialGroupId: Long? = null,
     initialParentTaskId: Long? = null,
     autoFocusTitle: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (TaskEditorResult) -> Unit,
 ) {
-    val editorState = rememberTaskEditorState(task, initialGroupId, initialParentTaskId, parentTaskIds)
+    val editorState = rememberTaskEditorState(task, initialGroupId, initialParentTaskId)
     with(editorState) {
     val titleFocusRequester = remember { FocusRequester() }
     val lightEditor = MaterialTheme.colorScheme.background.luminance() > 0.5f
@@ -2003,30 +2332,11 @@ internal fun LegacyTaskEditorDialog(
             childFocusRequesters.getOrNull(index)?.requestFocus()
         }
     }
-    BackHandler(enabled = showGroupMenu || showPriorityMenu || showParentMenu) {
+    BackHandler(enabled = showGroupMenu || showPriorityMenu) {
         showGroupMenu = false
         showPriorityMenu = false
-        showParentMenu = false
     }
-
-    val descendantTaskIds =
-        remember(task?.id, parentTaskIds) {
-            task?.id?.let { TaskHierarchy.descendants(it, parentTaskIds) }.orEmpty()
-        }
-    val selectableParentTasks =
-        parentTasks.filter { parent ->
-            !parent.isTrashed &&
-                parent.id != task?.id &&
-                parent.id !in descendantTaskIds &&
-                parent.groupId == groupId
-        }
-
-    LaunchedEffect(groupId, selectableParentTasks) {
-        if (parentTaskId != null && selectableParentTasks.none { it.id == parentTaskId }) {
-            parentTaskId = null
-            parentTaskSelectionChanged = true
-        }
-    }
+    val groupPickerNodes = remember(groups) { taskGroupPickerNodes(groups) }
 
     fun submitTask() {
         val trimmedText = text.trim()
@@ -2058,7 +2368,6 @@ internal fun LegacyTaskEditorDialog(
                 reminderRing = reminderRing,
                 reminderVibrate = reminderVibrate,
                 parentTaskId = parentTaskId,
-                parentTaskSelectionChanged = parentTaskSelectionChanged,
                 childTaskTexts = childTaskTexts,
             ),
         )
@@ -2331,74 +2640,6 @@ internal fun LegacyTaskEditorDialog(
                             onClick = ::toggleInlineChildInput,
                         )
                     }
-                    Box {
-                        LegacyTaskEditorToolbarButton(
-                            icon = {
-                                Icon(
-                                    imageVector = Icons.Outlined.AccountTree,
-                                    contentDescription = "父任务",
-                                    tint =
-                                        if (parentTaskId == null) {
-                                            MaterialTheme.colorScheme.onSurface
-                                        } else {
-                                            MaterialTheme.colorScheme.primary
-                                        },
-                                    modifier = Modifier.size(editorIconSize),
-                                )
-                            },
-                            onClick = { showParentMenu = true },
-                        )
-                        DropdownMenu(
-                            expanded = showParentMenu,
-                            onDismissRequest = { showParentMenu = false },
-                            modifier = Modifier.widthIn(min = 180.dp, max = 260.dp),
-                            properties =
-                                PopupProperties(
-                                    focusable = false,
-                                    dismissOnBackPress = false,
-                                    dismissOnClickOutside = true,
-                                ),
-                        ) {
-                            Text(
-                                text = "选择父任务",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            )
-                            DropdownMenuItem(
-                                text = { Text("无父任务") },
-                                trailingIcon = {
-                                    if (parentTaskId == null) {
-                                        Icon(Icons.Outlined.Check, contentDescription = null)
-                                    }
-                                },
-                                onClick = {
-                                    parentTaskId = null
-                                    parentTaskSelectionChanged = true
-                                    showParentMenu = false
-                                },
-                            )
-                            selectableParentTasks
-                                .forEach { parent ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(parent.taskText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        },
-                                        trailingIcon = {
-                                            if (parent.id == parentTaskId) {
-                                                Icon(Icons.Outlined.Check, contentDescription = null)
-                                            }
-                                        },
-                                        onClick = {
-                                            parentTaskId = parent.id
-                                            parentTaskSelectionChanged = true
-                                            groupId = parent.groupId
-                                            showParentMenu = false
-                                        },
-                                    )
-                                }
-                        }
-                    }
                     Spacer(modifier = Modifier.weight(1f))
                     Box {
                         Row(
@@ -2416,6 +2657,22 @@ internal fun LegacyTaskEditorDialog(
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Icon(Icons.Filled.ArrowDropDown, contentDescription = "选择分组")
+                        }
+                        if (showGroupMenu) {
+                            FileTreePickerDialog(
+                                title = "选择分组",
+                                nodes = groupPickerNodes,
+                                selectedId = taskGroupPickerSelectionId(groups, groupId),
+                                selectionMode = FileTreeSelectionMode.FOLDER,
+                                onSelect = { node ->
+                                    if (groupId != node.value && parentTaskId != null) {
+                                        parentTaskId = null
+                                    }
+                                    groupId = node.value
+                                    showGroupMenu = false
+                                },
+                                onDismiss = { showGroupMenu = false },
+                            )
                         }
                     }
                 }
@@ -2496,69 +2753,6 @@ internal fun LegacyTaskEditorDialog(
                 tonalElevation = 0.dp,
             ) {
                 editorPanel(Modifier.padding(horizontal = 16.dp))
-            }
-            if (showGroupMenu) {
-                Row(
-                    modifier =
-                        Modifier
-                            .fillMaxSize()
-                            .statusBarsPadding()
-                            .zIndex(2f),
-                ) {
-                    Spacer(
-                        modifier =
-                            Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .clickable { showGroupMenu = false },
-                    )
-                    Surface(
-                        modifier =
-                            Modifier
-                                .widthIn(min = 260.dp, max = 320.dp)
-                                .fillMaxHeight(),
-                        shape = RoundedCornerShape(4.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        tonalElevation = 3.dp,
-                    ) {
-                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                            Text(
-                                text = "选择分组",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            )
-                            LegacyTaskGroupMenuRow(
-                                label = "未分组",
-                                depth = 0,
-                                selected = groupId == null,
-                                onClick = {
-                                    if (groupId != null && parentTaskId != null) {
-                                        parentTaskId = null
-                                        parentTaskSelectionChanged = true
-                                    }
-                                    groupId = null
-                                    showGroupMenu = false
-                                },
-                            )
-                            legacyTaskGroupTreeRows(groups).forEach { row ->
-                                LegacyTaskGroupMenuRow(
-                                    label = row.group.name.substringAfterLast('/'),
-                                    depth = row.depth,
-                                    selected = row.group.id == groupId,
-                                    onClick = {
-                                        if (groupId != row.group.id && parentTaskId != null) {
-                                            parentTaskId = null
-                                            parentTaskSelectionChanged = true
-                                        }
-                                        groupId = row.group.id
-                                        showGroupMenu = false
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
             }
         }
     }

@@ -67,6 +67,7 @@ internal class EditorPreferences(private val prefs: SharedPreferences) {
 
     fun getTopToolbarItemOrder(): List<PrefsManager.EditorTopToolbarItemId> {
         migrateTopToolbarDefaultsV2IfNeeded()
+        migrateTopToolbarKernelOrderIfNeeded()
         val raw = prefs.getString(KEY_TOP_TOOLBAR_ITEM_ORDER, null)
             ?: return PrefsManager.EditorTopToolbarItemId.DEFAULT_ORDER
         val ids = raw.split(",").mapNotNull { runCatching { PrefsManager.EditorTopToolbarItemId.valueOf(it) }.getOrNull() }
@@ -84,11 +85,20 @@ internal class EditorPreferences(private val prefs: SharedPreferences) {
 
     fun getTopToolbarMoreItems(): Set<PrefsManager.EditorTopToolbarItemId> {
         migrateTopToolbarDefaultsV2IfNeeded()
+        migrateTopToolbarKernelOrderIfNeeded()
         val storedItems = prefs.getStringSet(KEY_TOP_TOOLBAR_MORE_ITEMS, null)
             ?.mapNotNull { runCatching { PrefsManager.EditorTopToolbarItemId.valueOf(it) }.getOrNull() }
             ?.filter { it != PrefsManager.EditorTopToolbarItemId.MORE }
             ?.toSet()
             ?: return PrefsManager.EditorTopToolbarItemId.DEFAULT_MORE_ITEMS
+        if (!prefs.getBoolean(KEY_TOP_TOOLBAR_KERNEL_DEFAULT_MIGRATED, false)) {
+            val migratedItems = storedItems + PrefsManager.EditorTopToolbarItemId.KERNEL
+            prefs.edit()
+                .putBoolean(KEY_TOP_TOOLBAR_KERNEL_DEFAULT_MIGRATED, true)
+                .putStringSet(KEY_TOP_TOOLBAR_MORE_ITEMS, migratedItems.map { it.name }.toSet())
+                .apply()
+            return migratedItems
+        }
         if (prefs.getBoolean(KEY_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED, false)) return storedItems
         val migratedItems = storedItems + PrefsManager.EditorTopToolbarItemId.DEFAULT_MORE_ITEMS
         prefs.edit()
@@ -103,6 +113,7 @@ internal class EditorPreferences(private val prefs: SharedPreferences) {
         val safeItems = items.filter { it != PrefsManager.EditorTopToolbarItemId.MORE }
         prefs.edit()
             .putBoolean(KEY_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED, true)
+            .putBoolean(KEY_TOP_TOOLBAR_KERNEL_DEFAULT_MIGRATED, true)
             .putStringSet(KEY_TOP_TOOLBAR_MORE_ITEMS, safeItems.map { it.name }.toSet())
             .apply()
     }
@@ -119,6 +130,40 @@ internal class EditorPreferences(private val prefs: SharedPreferences) {
         migrateTopToolbarDefaultsV2IfNeeded()
         val safeItems = items.filter { it != PrefsManager.EditorTopToolbarItemId.MORE }
         prefs.edit().putStringSet(KEY_TOP_TOOLBAR_HIDDEN_ITEMS, safeItems.map { it.name }.toSet()).apply()
+    }
+
+    fun getTopToolbarItemLabel(item: PrefsManager.EditorTopToolbarItemId, fallback: String): String =
+        prefs.getString(KEY_TOP_TOOLBAR_ITEM_LABEL_PREFIX + item.name, null)?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: fallback
+
+    fun saveTopToolbarItemLabel(item: PrefsManager.EditorTopToolbarItemId, label: String) {
+        val key = KEY_TOP_TOOLBAR_ITEM_LABEL_PREFIX + item.name
+        prefs.edit().apply {
+            if (label.trim().isBlank()) remove(key) else putString(key, label.trim())
+        }.apply()
+    }
+
+    fun clearTopToolbarItemLabels() {
+        prefs.edit().apply {
+            PrefsManager.EditorTopToolbarItemId.values().forEach { remove(KEY_TOP_TOOLBAR_ITEM_LABEL_PREFIX + it.name) }
+        }.apply()
+    }
+
+    private fun migrateTopToolbarKernelOrderIfNeeded() {
+        val raw = prefs.getString(KEY_TOP_TOOLBAR_ITEM_ORDER, null) ?: return
+        val storedOrder = raw.split(",")
+            .mapNotNull { runCatching { PrefsManager.EditorTopToolbarItemId.valueOf(it) }.getOrNull() }
+        if (PrefsManager.EditorTopToolbarItemId.KERNEL in storedOrder) return
+
+        val migratedOrder = storedOrder.toMutableList()
+        val kernelIndex = PrefsManager.EditorTopToolbarItemId.DEFAULT_ORDER
+            .indexOf(PrefsManager.EditorTopToolbarItemId.KERNEL)
+            .coerceAtMost(migratedOrder.size)
+        migratedOrder.add(kernelIndex, PrefsManager.EditorTopToolbarItemId.KERNEL)
+        prefs.edit()
+            .putString(KEY_TOP_TOOLBAR_ITEM_ORDER, migratedOrder.joinToString(",") { it.name })
+            .apply()
     }
 
     private fun migrateTopToolbarDefaultsV2IfNeeded() {
@@ -181,7 +226,9 @@ internal class EditorPreferences(private val prefs: SharedPreferences) {
         const val KEY_TOP_TOOLBAR_ITEM_ORDER = "editor_top_toolbar_item_order"
         const val KEY_TOP_TOOLBAR_MORE_ITEMS = "editor_top_toolbar_more_items"
         const val KEY_TOP_TOOLBAR_HIDDEN_ITEMS = "editor_top_toolbar_hidden_items"
+        const val KEY_TOP_TOOLBAR_ITEM_LABEL_PREFIX = "editor_top_toolbar_item_label_"
         const val KEY_TOP_TOOLBAR_MORE_DEFAULT_MIGRATED = "editor_top_toolbar_more_default_migrated"
+        const val KEY_TOP_TOOLBAR_KERNEL_DEFAULT_MIGRATED = "editor_top_toolbar_kernel_default_migrated"
         const val KEY_TOP_TOOLBAR_DEFAULTS_V2_MIGRATED = "editor_top_toolbar_defaults_v2_migrated"
 
         val PREVIOUS_DEFAULT_ORDER = listOf(

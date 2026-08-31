@@ -2,7 +2,10 @@ package com.kangle.kardleaf.ui
 
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -12,31 +15,28 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.SwapVert
-import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Label
-import androidx.compose.material.icons.outlined.TextFields
-import androidx.compose.material.icons.outlined.Title
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,17 +46,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import com.kangle.kardleaf.R
-import com.kangle.kardleaf.data.model.NoteSearchOptions
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.localizedText
@@ -71,27 +72,45 @@ fun SearchBar(
     requestFocus: Boolean = true,
 ) {
     val searchQuery by viewModel.searchQuery.collectAsState()
+
+    SearchTextField(
+        value = searchQuery,
+        onValueChange = viewModel::onSearchQueryChanged,
+        placeholder = stringResource(R.string.search_hint),
+        clearDescription = stringResource(R.string.clear_search),
+        requestFocus = requestFocus,
+        onClear = { viewModel.onSearchQueryChanged("") },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
+@Composable
+fun SearchTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    clearDescription: String,
+    requestFocus: Boolean = false,
+    onClear: () -> Unit = { onValueChange("") },
+    modifier: Modifier = Modifier,
+) {
     val focusRequester = remember { FocusRequester() }
-    val keyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(requestFocus) {
         if (!requestFocus) return@LaunchedEffect
         withFrameNanos { }
         runCatching { focusRequester.requestFocus() }
-        withFrameNanos { }
-        keyboardController?.show()
     }
 
     Row(
         modifier =
-            Modifier
-                .fillMaxSize()
+            modifier
                 .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BasicTextField(
-            value = searchQuery,
-            onValueChange = { viewModel.onSearchQueryChanged(it) },
+            value = value,
+            onValueChange = onValueChange,
             modifier =
                 Modifier
                     .weight(1f)
@@ -105,9 +124,9 @@ fun SearchBar(
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             decorationBox = { innerTextField ->
                 Box(contentAlignment = Alignment.CenterStart) {
-                    if (searchQuery.isEmpty()) {
+                    if (value.isEmpty()) {
                         Text(
-                            text = stringResource(R.string.search_hint),
+                            text = placeholder,
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         )
@@ -117,11 +136,11 @@ fun SearchBar(
             },
         )
 
-        if (searchQuery.isNotEmpty()) {
-            IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
+        if (value.isNotEmpty()) {
+            IconButton(onClick = onClear) {
                 Icon(
                     imageVector = Icons.Outlined.Close,
-                    contentDescription = stringResource(R.string.clear_search),
+                    contentDescription = clearDescription,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -130,13 +149,15 @@ fun SearchBar(
 }
 
 @Composable
-fun SearchFilterToolbar(viewModel: MainViewModel) {
+fun SearchFilterToolbar(
+    viewModel: MainViewModel,
+    showCategoryStrip: Boolean = false,
+    onCategoryStripToggle: () -> Unit = {},
+) {
     val query by viewModel.searchQuery.collectAsState()
     val options by viewModel.searchOptions.collectAsState()
     val tags by viewModel.yamlTags.collectAsState()
-    val folders by viewModel.labels.collectAsState()
     var showTagMenu by remember { mutableStateOf(false) }
-    var showFolderMenu by remember { mutableStateOf(false) }
     val invalidRegex = options.useRegex && query.isNotBlank() && runCatching { Regex(query) }.isFailure
 
     Surface(
@@ -151,44 +172,40 @@ fun SearchFilterToolbar(viewModel: MainViewModel) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FilterChip(
+            SearchToolbarButton(
                 selected = options.matchCase,
+                contentDescription = localizedText("区分大小写", "Match case"),
                 onClick = { viewModel.setSearchMatchCase(!options.matchCase) },
-                label = { Text("Aa") },
-                leadingIcon = { Icon(Icons.Outlined.TextFields, null, Modifier.size(18.dp)) },
-            )
-            FilterChip(
+            ) {
+                Text("Aa", style = MaterialTheme.typography.labelLarge)
+            }
+            SearchToolbarButton(
                 selected = options.useRegex,
+                contentDescription = if (invalidRegex) {
+                    localizedText("正则无效", "Invalid regex")
+                } else {
+                    localizedText("正则表达式", "Regular expression")
+                },
                 onClick = { viewModel.setSearchUseRegex(!options.useRegex) },
-                label = { Text(".*") },
-                leadingIcon = { Icon(Icons.Outlined.Code, null, Modifier.size(18.dp)) },
-            )
-            FilterChip(
-                selected = options.matchTitle,
-                onClick = { viewModel.setSearchMatchTitle(!options.matchTitle) },
-                label = { Text(localizedText("标题", "Title")) },
-                leadingIcon = { Icon(Icons.Outlined.Title, null, Modifier.size(18.dp)) },
-            )
-            FilterChip(
-                selected = options.matchContent,
-                onClick = { viewModel.setSearchMatchContent(!options.matchContent) },
-                label = { Text(localizedText("正文", "Body")) },
-                leadingIcon = { Icon(Icons.Outlined.Article, null, Modifier.size(18.dp)) },
-            )
-            Box {
-                FilterChip(
-                    modifier = Modifier.widthIn(max = 160.dp),
-                    selected = options.tag != null,
-                    onClick = { showTagMenu = true },
-                    label = {
-                        Text(
-                            options.tag?.let { "#$it" } ?: localizedText("标签", "Tag"),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
-                    leadingIcon = { Icon(Icons.Outlined.Label, null, Modifier.size(18.dp)) },
+            ) {
+                Text(
+                    ".*",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (invalidRegex) MaterialTheme.colorScheme.error else LocalContentColor.current,
                 )
+            }
+            Box {
+                SearchToolbarButton(
+                    selected = options.tag != null,
+                    contentDescription = options.tag?.let { "#$it" } ?: localizedText("标签", "Tag"),
+                    onClick = { showTagMenu = true },
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Label,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
                 KardLeafDropdownMenu(
                     expanded = showTagMenu,
                     onDismissRequest = { showTagMenu = false },
@@ -214,50 +231,16 @@ fun SearchFilterToolbar(viewModel: MainViewModel) {
                     }
                 }
             }
-            Box {
-                FilterChip(
-                    modifier = Modifier.widthIn(max = 180.dp),
-                    selected = options.folder != null,
-                    onClick = { showFolderMenu = true },
-                    label = {
-                        Text(
-                            options.folder?.ifBlank { localizedText("根目录", "Root") }
-                                ?: localizedText("文件夹", "Folder"),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
-                    leadingIcon = { Icon(Icons.Outlined.Folder, null, Modifier.size(18.dp)) },
+            SearchToolbarButton(
+                selected = showCategoryStrip || options.folder != null,
+                contentDescription = localizedText("分类标签", "Folder categories"),
+                onClick = onCategoryStripToggle,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Folder,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
                 )
-                KardLeafDropdownMenu(
-                    expanded = showFolderMenu,
-                    onDismissRequest = { showFolderMenu = false },
-                    properties = PopupProperties(focusable = false),
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(localizedText("全部文件夹", "All folders")) },
-                        trailingIcon = { if (options.folder == null) Icon(Icons.Default.Check, null) },
-                        onClick = {
-                            viewModel.setSearchFolder(null)
-                            showFolderMenu = false
-                        },
-                    )
-                    folders.forEach { folder ->
-                        DropdownMenuItem(
-                            text = { Text(folder, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            trailingIcon = { if (options.folder == folder) Icon(Icons.Default.Check, null) },
-                            onClick = {
-                                viewModel.setSearchFolder(folder)
-                                showFolderMenu = false
-                            },
-                        )
-                    }
-                }
-            }
-            if (options != NoteSearchOptions()) {
-                TextButton(onClick = viewModel::resetSearchFilters) {
-                    Text(localizedText("重置", "Reset"))
-                }
             }
             if (invalidRegex) {
                 Text(
@@ -266,7 +249,56 @@ fun SearchFilterToolbar(viewModel: MainViewModel) {
                     color = MaterialTheme.colorScheme.error,
                 )
             }
+            SearchToolbarButton(
+                selected = options.matchTitle,
+                contentDescription = localizedText("匹配标题", "Match title"),
+                onClick = { viewModel.setSearchMatchTitle(!options.matchTitle) },
+            ) {
+                Text(localizedText("标题", "Title"), style = MaterialTheme.typography.labelLarge)
+            }
+            SearchToolbarButton(
+                selected = options.matchContent,
+                contentDescription = localizedText("匹配正文", "Match body"),
+                onClick = { viewModel.setSearchMatchContent(!options.matchContent) },
+            ) {
+                Text(localizedText("正文", "Body"), style = MaterialTheme.typography.labelLarge)
+            }
         }
+    }
+}
+
+@Composable
+private fun SearchToolbarButton(
+    selected: Boolean = false,
+    contentDescription: String,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val backgroundColor = if (selected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
+    }
+    val contentColor = if (selected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Box(
+        modifier = Modifier
+            .height(42.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(backgroundColor)
+            .semantics { this.contentDescription = contentDescription }
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        CompositionLocalProvider(LocalContentColor provides contentColor, content = content)
     }
 }
 
@@ -366,6 +398,14 @@ fun SortButton(viewModel: MainViewModel) {
                 trailingIcon = { if (effectiveSortOrder == PrefsManager.SortOrder.DATE_MODIFIED) Icon(Icons.Default.Check, null) },
                 onClick = {
                     viewModel.setSortOrder(PrefsManager.SortOrder.DATE_MODIFIED)
+                    showSortMenu = false
+                },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.sort_date_created)) },
+                trailingIcon = { if (effectiveSortOrder == PrefsManager.SortOrder.DATE_CREATED) Icon(Icons.Default.Check, null) },
+                onClick = {
+                    viewModel.setSortOrder(PrefsManager.SortOrder.DATE_CREATED)
                     showSortMenu = false
                 },
             )

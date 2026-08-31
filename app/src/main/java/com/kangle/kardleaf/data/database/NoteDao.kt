@@ -73,38 +73,35 @@ interface NoteDao {
     suspend fun getNoteShellsByPaths(filePaths: List<String>): List<NoteEntity>
 
     @Query(
-        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE folder = :folder OR folder LIKE :folderPrefix",
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes WHERE folder = :folder OR substr(folder, 1, length(:folder) + 1) = :folder || '/'",
     )
-    suspend fun getNoteShellsInFolderTree(
-        folder: String,
-        folderPrefix: String,
-    ): List<NoteEntity>
+    suspend fun getNoteShellsInFolderTree(folder: String): List<NoteEntity>
 
     @Query(
         """
         SELECT
             filePath AS noteId,
             CASE
-                WHEN title LIKE '%' || :query || '%' THEN '标题'
+                WHEN title LIKE '%' || :likeQuery || '%' ESCAPE '\' THEN '标题'
                 ELSE '正文'
             END AS scope,
             CASE
-                WHEN title LIKE '%' || :query || '%' THEN title
-                WHEN content LIKE '%' || :query || '%' THEN
+                WHEN title LIKE '%' || :likeQuery || '%' ESCAPE '\' THEN title
+                WHEN content LIKE '%' || :likeQuery || '%' ESCAPE '\' THEN
                     (CASE WHEN instr(lower(content), lower(:query)) > 61 THEN '...' ELSE '' END) ||
                     trim(replace(replace(substr(content, max(instr(lower(content), lower(:query)) - 60, 1), 60 + length(:query) + 90), char(13), ' '), char(10), ' ')) ||
                     (CASE WHEN instr(lower(content), lower(:query)) + length(:query) + 90 <= length(content) THEN '...' ELSE '' END)
                 ELSE ''
             END AS snippet,
             CASE
-                WHEN content LIKE '%' || :query || '%' THEN instr(lower(content), lower(:query)) - 1
+                WHEN content LIKE '%' || :likeQuery || '%' ESCAPE '\' THEN instr(lower(content), lower(:query)) - 1
                 ELSE -1
             END AS startOffset
         FROM notes
         WHERE isTrashed = 0
         AND (
-            title LIKE '%' || :query || '%'
-            OR content LIKE '%' || :query || '%'
+            title LIKE '%' || :likeQuery || '%' ESCAPE '\'
+            OR content LIKE '%' || :likeQuery || '%' ESCAPE '\'
         )
         ORDER BY lastModifiedMs DESC
         LIMIT :limit
@@ -112,11 +109,17 @@ interface NoteDao {
     )
     fun searchNoteMatches(
         query: String,
+        likeQuery: String,
         limit: Int,
     ): Flow<List<NoteSearchMatch>>
 
     @Query("SELECT * FROM notes ORDER BY lastModifiedMs DESC")
     fun getAllSearchableNotes(): Flow<List<NoteEntity>>
+
+    @Query(
+        "SELECT filePath, recordId, fileName, folder, title, substr(contentPreview, 1, 200) AS contentPreview, '' AS content, lastModifiedMs, createdAtMs, color, reminder, isPinned, isFavorite, isArchived, isTrashed, deletedAtMs, firstImageReference, yamlTags FROM notes ORDER BY lastModifiedMs DESC",
+    )
+    fun getAllSearchableNoteShells(): Flow<List<NoteEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNote(note: NoteEntity)
@@ -158,6 +161,77 @@ interface NoteDao {
         filePath: String,
         recordId: String,
     )
+
+    @Query(
+        """
+        UPDATE notes
+        SET recordId = CASE WHEN recordId = filePath THEN :newPath ELSE recordId END,
+            filePath = :newPath,
+            fileName = :newFileName,
+            title = :newTitle,
+            lastModifiedMs = :lastModifiedMs
+        WHERE filePath = :oldPath
+        """,
+    )
+    suspend fun renameNotePath(
+        oldPath: String,
+        newPath: String,
+        newFileName: String,
+        newTitle: String,
+        lastModifiedMs: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE notes
+        SET recordId = CASE WHEN recordId = filePath THEN :newPath ELSE recordId END,
+            filePath = :newPath,
+            folder = :newFolder,
+            lastModifiedMs = :lastModifiedMs
+        WHERE filePath = :oldPath AND isTrashed = 0 AND isArchived = 0
+        """,
+    )
+    suspend fun moveNotePath(
+        oldPath: String,
+        newPath: String,
+        newFolder: String,
+        lastModifiedMs: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE notes
+        SET recordId = CASE
+                WHEN recordId = filePath THEN :newFolder || substr(filePath, length(:oldFolder) + 1)
+                ELSE recordId
+            END,
+            filePath = :newFolder || substr(filePath, length(:oldFolder) + 1),
+            folder = :newFolder || substr(folder, length(:oldFolder) + 1)
+        WHERE folder = :oldFolder OR substr(folder, 1, length(:oldFolder) + 1) = :oldFolder || '/'
+        """,
+    )
+    suspend fun renameFolderPaths(
+        oldFolder: String,
+        newFolder: String,
+    ): Int
+
+    @Query(
+        """
+        UPDATE notes
+        SET recordId = CASE
+                WHEN recordId = filePath THEN :newFolder || substr(filePath, length(:oldFolder) + 1)
+                ELSE recordId
+            END,
+            filePath = :newFolder || substr(filePath, length(:oldFolder) + 1),
+            folder = :newFolder || substr(folder, length(:oldFolder) + 1)
+        WHERE isTrashed = 0
+          AND (folder = :oldFolder OR substr(folder, 1, length(:oldFolder) + 1) = :oldFolder || '/')
+        """,
+    )
+    suspend fun moveActiveFolderPaths(
+        oldFolder: String,
+        newFolder: String,
+    ): Int
 
     @Query("UPDATE notes SET isPinned = :isPinned WHERE filePath = :filePath")
     suspend fun updatePinStatus(

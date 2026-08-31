@@ -117,6 +117,9 @@
     <string name="widget_pin_request_failed">未能打开添加界面，请长按桌面空白处，从“小组件”中添加</string>
     <string name="widget_open_permission_settings">去开启</string>
     <string name="widget_permission_settings_failed">无法打开权限设置，请在系统设置中手动打开 KardLeaf 的应用详情</string>
+    <string name="widget_shortcut_permission_title">提示</string>
+    <string name="widget_shortcut_permission_message">未获取桌面快捷方式权限时，无法快捷添加桌面小组件。</string>
+    <string name="widget_shortcut_permission_allow">知道了</string>
 
     <!-- Launcher shortcuts -->
     <string name="shortcut_quick_note_short">新建笔记</string>

@@ -1,5 +1,7 @@
 package com.kangle.kardleaf.ui
 
+import com.kangle.kardleaf.data.utils.NoteFormatUtils
+
 enum class ImageClickSource {
     NativeEditor,
     CodeMirror,
@@ -25,9 +27,6 @@ internal data class MarkdownImageReferenceReplacement(
     val replaceStart: Int,
     val replaceEndExclusive: Int,
 )
-
-private val obsidianImageMatchRegex = Regex("""!\[\[([^|\]\n]+)(?:\|[^\]\n]*)?]]""")
-private val markdownImageMatchRegex = Regex("""!\[([^\]\n]*)]\(\s*(?:<([^>\n]+)>|([^\s)\n]+))[^)\n]*\)""")
 
 internal fun extractMarkdownImageClickTargets(
     markdown: String,
@@ -86,67 +85,29 @@ private fun extractMarkdownImageMatches(
 ): List<MarkdownImageReferenceMatch> {
     if (markdown.isBlank()) return emptyList()
 
-    data class RawMatch(
-        val markdownStart: Int,
-        val markdownEndExclusive: Int,
-        val referenceStart: Int,
-        val referenceEndExclusive: Int,
-        val reference: String,
-    )
-
     val rawMatches =
-        buildList {
-            obsidianImageMatchRegex.findAll(markdown).forEach { match ->
-                val group = match.groups[1] ?: return@forEach
-                val rawReference = group.value
-                val leadingWhitespace = rawReference.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0)
-                val trailingWhitespace = rawReference.indexOfLast { !it.isWhitespace() }.let { if (it < 0) 0 else rawReference.length - it - 1 }
-                val reference = rawReference.trim()
-                if (reference.isLocalImageReference()) {
-                    add(
-                        RawMatch(
-                            markdownStart = match.range.first,
-                            markdownEndExclusive = match.range.last + 1,
-                            referenceStart = group.range.first + leadingWhitespace,
-                            referenceEndExclusive = group.range.last + 1 - trailingWhitespace,
-                            reference = reference,
+        NoteFormatUtils.findMarkdownImageReferences(markdown)
+            .filter { it.reference.isLocalImageReference() }
+            .map { image ->
+                MarkdownImageReferenceMatch(
+                    target =
+                        KardLeafImageClickTarget(
+                            reference = image.reference,
+                            markdownStart = image.start,
+                            markdownEndExclusive = image.endExclusive,
+                            occurrenceIndex = 0,
+                            source = source,
                         ),
-                    )
-                }
+                    referenceStart = image.referenceStart,
+                    referenceEndExclusive = image.referenceEndExclusive,
+                )
             }
-            markdownImageMatchRegex.findAll(markdown).forEach { match ->
-                val group = match.groups[2] ?: match.groups[3] ?: return@forEach
-                val reference = group.value.trim()
-                if (reference.isLocalImageReference()) {
-                    add(
-                        RawMatch(
-                            markdownStart = match.range.first,
-                            markdownEndExclusive = match.range.last + 1,
-                            referenceStart = group.range.first,
-                            referenceEndExclusive = group.range.last + 1,
-                            reference = reference,
-                        ),
-                    )
-                }
-            }
-        }.sortedBy { it.markdownStart }
 
     val occurrences = mutableMapOf<String, Int>()
     return rawMatches.map { match ->
-        val occurrence = occurrences.getOrDefault(match.reference, 0)
-        occurrences[match.reference] = occurrence + 1
-        MarkdownImageReferenceMatch(
-            target =
-                KardLeafImageClickTarget(
-                    reference = match.reference,
-                    markdownStart = match.markdownStart,
-                    markdownEndExclusive = match.markdownEndExclusive,
-                    occurrenceIndex = occurrence,
-                    source = source,
-                ),
-            referenceStart = match.referenceStart,
-            referenceEndExclusive = match.referenceEndExclusive,
-        )
+        val occurrence = occurrences.getOrDefault(match.target.reference, 0)
+        occurrences[match.target.reference] = occurrence + 1
+        match.copy(target = match.target.copy(occurrenceIndex = occurrence))
     }
 }
 

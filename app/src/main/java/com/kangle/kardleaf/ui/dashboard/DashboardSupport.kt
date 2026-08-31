@@ -212,11 +212,17 @@ internal fun dashboardTitle(filter: MainViewModel.NoteFilter): String =
 internal fun dashboardTitleForPath(path: String): String =
     path.substringAfterLast("/").ifBlank { localizedText("全部笔记", "All notes") }
 
+internal data class KardLeafBottomToolbarItem<T>(
+    val id: T,
+    val icon: ImageVector,
+    val contentDescription: String,
+)
+
 @Composable
-internal fun HomeBottomToolbar(
-    items: List<PrefsManager.HomeBottomToolbarItemId>,
+internal fun <T> KardLeafBottomToolbar(
+    items: List<KardLeafBottomToolbarItem<T>>,
     buttonSizeDp: Int,
-    onItemClick: (PrefsManager.HomeBottomToolbarItemId) -> Unit,
+    onItemClick: (T) -> Unit,
 ) {
     val isDracula = LocalKardLeafThemeStyle.current == PrefsManager.AppThemeStyle.DRACULA
     val homeCornerRadiusDp = LocalKardLeafHomeCornerRadiusDp.current.takeIf { it >= 0 }
@@ -295,7 +301,7 @@ internal fun HomeBottomToolbar(
                 horizontalArrangement = Arrangement.spacedBy(itemSpacing, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                items.forEach { itemId ->
+                items.forEach { item ->
                     val itemColor = MaterialTheme.colorScheme.surfaceVariant.copy(
                         alpha = if (isDracula) 0.26f else 0.72f,
                     )
@@ -307,12 +313,12 @@ internal fun HomeBottomToolbar(
                             .size(fitItemSize)
                             .clip(itemShape)
                             .background(itemColor)
-                            .clickable { onItemClick(itemId) },
+                            .clickable { onItemClick(item.id) },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = homeBottomToolbarItemIcon(itemId),
-                            contentDescription = homeBottomToolbarItemLabel(itemId),
+                            imageVector = item.icon,
+                            contentDescription = item.contentDescription,
                             modifier = Modifier.size(iconSize),
                             tint = iconTint,
                         )
@@ -321,6 +327,25 @@ internal fun HomeBottomToolbar(
             }
         }
     }
+}
+
+@Composable
+internal fun HomeBottomToolbar(
+    items: List<PrefsManager.HomeBottomToolbarItemId>,
+    buttonSizeDp: Int,
+    onItemClick: (PrefsManager.HomeBottomToolbarItemId) -> Unit,
+) {
+    KardLeafBottomToolbar(
+        items = items.map { itemId ->
+            KardLeafBottomToolbarItem(
+                id = itemId,
+                icon = homeBottomToolbarItemIcon(itemId),
+                contentDescription = homeBottomToolbarItemLabel(itemId),
+            )
+        },
+        buttonSizeDp = buttonSizeDp,
+        onItemClick = onItemClick,
+    )
 }
 
 internal fun calculateHomeBottomToolbarFitItemSize(

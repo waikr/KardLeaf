@@ -239,6 +239,9 @@ val LocalKardLeafGlobalCornerRadiusDp =
 val LocalKardLeafHomeCornerRadiusDp =
     staticCompositionLocalOf { PrefsManager.THEME_CORNER_RADIUS_FOLLOW }
 
+val LocalKardLeafTaskCornerRadiusDp =
+    staticCompositionLocalOf { PrefsManager.DEFAULT_TASK_CORNER_RADIUS_DP }
+
 private val ModernShapes =
     Shapes(
         extraSmall = RoundedCornerShape(10.dp),
@@ -295,6 +298,7 @@ fun KardLeafTheme(
     val customThemeBackgroundColor = Color(prefsManager.getCustomThemeBackgroundColorArgb())
     val globalCornerRadiusDp = prefsManager.getGlobalCornerRadiusDp()
     val homeCornerRadiusDp = prefsManager.getHomeCornerRadiusDp()
+    val taskCornerRadiusDp = prefsManager.getTaskCornerRadiusDp()
     val effectiveDarkTheme = themeStyle == PrefsManager.AppThemeStyle.DRACULA ||
         themeStyle == PrefsManager.AppThemeStyle.GITHUB_DARK ||
         when (themeMode) {
@@ -379,6 +383,7 @@ fun KardLeafTheme(
         LocalKardLeafThemeMode provides themeMode,
         LocalKardLeafGlobalCornerRadiusDp provides globalCornerRadiusDp,
         LocalKardLeafHomeCornerRadiusDp provides homeCornerRadiusDp,
+        LocalKardLeafTaskCornerRadiusDp provides taskCornerRadiusDp,
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

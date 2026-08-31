@@ -74,6 +74,61 @@ class PrefsManagerCompatibilityTest {
         }
     }
 
+    @Test
+    fun legacyTopToolbarAddsKernelAtItsDefaultPosition() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val current = context.getSharedPreferences("kardleaf_prefs", Context.MODE_PRIVATE)
+        val legacy = context.getSharedPreferences("keepnotes_prefs", Context.MODE_PRIVATE)
+        val currentBackup = current.all.toMap()
+        val legacyBackup = legacy.all.toMap()
+        val oldOrder = listOf(
+            PrefsManager.EditorTopToolbarItemId.SEARCH,
+            PrefsManager.EditorTopToolbarItemId.EDIT,
+            PrefsManager.EditorTopToolbarItemId.OUTLINE,
+            PrefsManager.EditorTopToolbarItemId.REMARKS,
+            PrefsManager.EditorTopToolbarItemId.HISTORY,
+            PrefsManager.EditorTopToolbarItemId.MINDMAP,
+            PrefsManager.EditorTopToolbarItemId.PRIVACY,
+            PrefsManager.EditorTopToolbarItemId.ARCHIVE,
+            PrefsManager.EditorTopToolbarItemId.DELETE,
+            PrefsManager.EditorTopToolbarItemId.MORE,
+            PrefsManager.EditorTopToolbarItemId.LABEL,
+        )
+        val oldMoreItems = setOf(
+            PrefsManager.EditorTopToolbarItemId.HISTORY,
+            PrefsManager.EditorTopToolbarItemId.MINDMAP,
+            PrefsManager.EditorTopToolbarItemId.PRIVACY,
+            PrefsManager.EditorTopToolbarItemId.ARCHIVE,
+            PrefsManager.EditorTopToolbarItemId.DELETE,
+        )
+
+        try {
+            current.edit().clear().commit()
+            legacy.edit().clear().commit()
+            current.edit()
+                .putBoolean("editor_top_toolbar_defaults_v2_migrated", true)
+                .putBoolean("editor_top_toolbar_more_default_migrated", true)
+                .putString("editor_top_toolbar_item_order", oldOrder.joinToString(",") { it.name })
+                .putStringSet("editor_top_toolbar_more_items", oldMoreItems.map { it.name }.toSet())
+                .putStringSet("editor_top_toolbar_hidden_items", setOf(PrefsManager.EditorTopToolbarItemId.LABEL.name))
+                .commit()
+
+            val prefsManager = PrefsManager(context)
+            val order = prefsManager.getEditorTopToolbarItemOrder()
+            val moreItems = prefsManager.getEditorTopToolbarMoreItems()
+
+            assertEquals(2, order.indexOf(PrefsManager.EditorTopToolbarItemId.KERNEL))
+            assertEquals(
+                PrefsManager.EditorTopToolbarItemId.KERNEL,
+                order.first { it in moreItems },
+            )
+            assertEquals(order.joinToString(",") { it.name }, current.getString("editor_top_toolbar_item_order", null))
+        } finally {
+            current.restore(currentBackup)
+            legacy.restore(legacyBackup)
+        }
+    }
+
     private fun SharedPreferences.restore(values: Map<String, *>) {
         val editor = edit().clear()
         values.forEach { (key, value) ->

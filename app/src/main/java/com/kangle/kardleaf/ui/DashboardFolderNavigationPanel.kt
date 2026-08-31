@@ -8,8 +8,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -33,7 +31,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as lazyColumnItems
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -63,6 +64,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -71,10 +73,10 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.data.utils.KardLeafLogTags
-import com.kangle.kardleaf.localizedText
 
 private val FOLDER_NAVIGATION_TRACE_TAG = KardLeafLogTags.FOLDER_NAVIGATION
 
@@ -92,6 +94,11 @@ internal fun FolderNavigationPanel(
     labels: List<String>,
     notes: List<Note>,
     currentFilter: MainViewModel.NoteFilter,
+    showTags: Boolean,
+    editMode: Boolean,
+    onEditModeChange: (Boolean) -> Unit,
+    focusedParentPath: String,
+    onFocusedParentPathChange: (String) -> Unit,
     dragProgress: Float = 1f,
     folderOrderVersion: Int,
     getFolderDisplayOrder: (String) -> List<String>,
@@ -101,6 +108,8 @@ internal fun FolderNavigationPanel(
     onDeleteFolder: (String, () -> Unit, (String) -> Unit) -> Unit,
     onDismiss: () -> Unit,
     onSelect: (MainViewModel.NoteFilter) -> Unit,
+    yamlTags: List<String>,
+    noteCountByYamlTag: Map<String, Int>,
 ) {
     val normalizedLabels = remember(labels) {
         labels
@@ -113,7 +122,6 @@ internal fun FolderNavigationPanel(
         ?.let(::normalizeFolderPathForUi)
         .orEmpty()
     val activeNotes = remember(notes) { notes.filterNot { it.isArchived || it.isTrashed } }
-    val allNotesCount = activeNotes.size
     val folderNoteCounts = remember(normalizedLabels, activeNotes) {
         buildFolderRecursiveNoteCounts(
             labels = normalizedLabels,
@@ -136,8 +144,6 @@ internal fun FolderNavigationPanel(
         label = "FolderNavigationPanelProgress",
     )
     var panelHeightPx by remember { mutableStateOf(0) }
-    var editMode by remember { mutableStateOf(false) }
-    var focusedParentPath by remember { mutableStateOf("") }
     var renameDialog by remember { mutableStateOf<FolderNavigationNameDialogState?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -184,15 +190,15 @@ internal fun FolderNavigationPanel(
 
     LaunchedEffect(focusedParentPath, normalizedLabels) {
         if (focusedParentPath.isNotBlank() && focusedParentPath !in normalizedLabels) {
-            focusedParentPath = ""
+            onFocusedParentPathChange("")
         }
     }
 
-    BackHandler(enabled = editMode || focusedParentPath.isNotBlank()) {
+    BackHandler(enabled = editMode || (!showTags && focusedParentPath.isNotBlank())) {
         if (editMode) {
-            editMode = false
+            onEditModeChange(false)
         } else {
-            focusedParentPath = navigationParentFolderPath(focusedParentPath)
+            onFocusedParentPathChange(navigationParentFolderPath(focusedParentPath))
         }
     }
 
@@ -227,7 +233,7 @@ internal fun FolderNavigationPanel(
             Column(modifier = Modifier.fillMaxSize()) {
                 val haptic = LocalHapticFeedback.current
                 val listState = rememberLazyListState()
-                LaunchedEffect(focusedParentPath) {
+                LaunchedEffect(showTags, focusedParentPath) {
                     listState.scrollToItem(0)
                 }
                 val editItems = remember(normalizedLabels, folderNoteCounts, folderOrderVersion) {
@@ -329,7 +335,9 @@ internal fun FolderNavigationPanel(
                     )
                 }
 
-                val displayedSections = if (editMode) {
+                val displayedSections = if (showTags) {
+                    emptyList()
+                } else if (editMode) {
                     buildFolderNavigationSectionsFromEditItems(
                         items = orderedEditItems,
                         parentPath = focusedParentPath,
@@ -342,60 +350,25 @@ internal fun FolderNavigationPanel(
                         parentPath = focusedParentPath,
                     )
                 }
-                val topRowTitle = if (focusedParentPath.isBlank()) {
-                    localizedText("全部笔记", "All notes")
-                } else {
-                    focusedParentPath.substringAfterLast('/')
-                }
-                val topRowCount = if (focusedParentPath.isBlank()) {
-                    allNotesCount
-                } else {
-                    folderNoteCounts[focusedParentPath] ?: 0
-                }
-                val topRowSelected = if (focusedParentPath.isBlank()) {
-                    currentFilter is MainViewModel.NoteFilter.All
-                } else {
-                    currentPath == focusedParentPath
-                }
+                val currentTag = (currentFilter as? MainViewModel.NoteFilter.YamlTag)?.name
 
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxWidth().weight(1f),
                     state = listState,
-                    contentPadding = PaddingValues(start = 20.dp, top = 12.dp, end = 20.dp, bottom = 18.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    item("navigation_top_${focusedParentPath}") {
-                        FolderNavigationTopRow(
-                            title = topRowTitle,
-                            count = topRowCount,
-                            selected = topRowSelected,
-                            editMode = editMode,
-                            showBack = focusedParentPath.isNotBlank(),
-                            onClick = {
-                                if (!editMode) {
-                                    if (focusedParentPath.isBlank()) {
-                                        onSelect(MainViewModel.NoteFilter.All)
-                                    } else {
-                                        onSelect(MainViewModel.NoteFilter.Label(focusedParentPath))
-                                    }
-                                }
-                            },
-                            onBack = {
-                                focusedParentPath = navigationParentFolderPath(focusedParentPath)
-                            },
-                            onEditToggle = {
-                                val nextEditMode = !editMode
-                                logFolderNavigationTrace {
-                                    "editMode toggle from=$editMode to=$nextEditMode parent=$focusedParentPath " +
-                                        "order=${folderNavigationPathSummary(orderedEditItems.map { it.path })}"
-                                }
-                                editMode = nextEditMode
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            },
-                            onDismiss = onDismiss,
-                        )
+                    if (showTags) {
+                        item("navigation_tags") {
+                            FolderNavigationTagGrid(
+                                tags = yamlTags,
+                                noteCountByTag = noteCountByYamlTag,
+                                selectedTag = currentTag,
+                                onSelectTag = { tag -> onSelect(MainViewModel.NoteFilter.YamlTag(tag)) },
+                            )
+                        }
                     }
-                    if (displayedSections.isEmpty()) {
+                    if (!showTags && displayedSections.isEmpty()) {
                         item("empty_folders_${focusedParentPath}") {
                             Text(
                                 text = "还没有下级分类",
@@ -406,7 +379,7 @@ internal fun FolderNavigationPanel(
                         }
                     }
                     lazyColumnItems(
-                        items = displayedSections,
+                        items = if (showTags) emptyList() else displayedSections,
                         key = { it.path },
                     ) { section ->
                         FolderNavigationSectionView(
@@ -469,7 +442,7 @@ internal fun FolderNavigationPanel(
                             onSelectPath = { path -> onSelect(MainViewModel.NoteFilter.Label(path)) },
                             onRenamePath = ::openRenameDialog,
                             onExpandPath = { path ->
-                                focusedParentPath = path
+                                onFocusedParentPathChange(path)
                             },
                         )
                     }
@@ -507,7 +480,6 @@ private data class FolderNavigationPalette(
     val panel: Color,
     val text: Color,
     val muted: Color,
-    val allNotes: Color,
     val item: Color,
     val section: Color,
     val line: Color,
@@ -515,7 +487,6 @@ private data class FolderNavigationPalette(
     val accent: Color,
     val accentSoft: Color,
     val accentText: Color,
-    val iconBackground: Color,
 )
 
 @Composable
@@ -527,7 +498,6 @@ private fun folderNavigationPalette(): FolderNavigationPalette {
             panel = Color(0xFFFFFFFF),
             text = Color(0xFF20242B),
             muted = Color(0xFF747B86),
-            allNotes = Color(0xFFF7F9FB),
             item = Color(0xFFF3F5F8),
             section = Color(0xFFF8F9FB),
             line = Color(0xFFE7EAF0),
@@ -535,14 +505,12 @@ private fun folderNavigationPalette(): FolderNavigationPalette {
             accent = Color(0xFF357FF3),
             accentSoft = Color(0xFFE9F2FF),
             accentText = Color(0xFF1553A2),
-            iconBackground = Color(0xFFFFFFFF),
         )
     } else {
         FolderNavigationPalette(
             panel = scheme.background,
             text = scheme.onSurface,
             muted = scheme.onSurfaceVariant,
-            allNotes = scheme.surfaceVariant.copy(alpha = 0.34f),
             item = scheme.surfaceVariant.copy(alpha = 0.66f),
             section = scheme.surfaceVariant.copy(alpha = 0.34f),
             line = scheme.outlineVariant,
@@ -550,140 +518,44 @@ private fun folderNavigationPalette(): FolderNavigationPalette {
             accent = scheme.primary,
             accentSoft = scheme.primaryContainer,
             accentText = scheme.onPrimaryContainer,
-            iconBackground = scheme.surface,
         )
     }
 }
 
 @Composable
-private fun FolderNavigationTopRow(
-    title: String,
-    count: Int,
-    selected: Boolean,
+internal fun FolderNavigationToolbarActions(
     editMode: Boolean,
-    showBack: Boolean,
-    onClick: () -> Unit,
-    onBack: () -> Unit,
+    showTags: Boolean,
     onEditToggle: () -> Unit,
-    onDismiss: () -> Unit,
+    onSwitch: () -> Unit,
 ) {
     val palette = folderNavigationPalette()
-    val shape = RoundedCornerShape(18.dp)
-    Surface(
-        shape = shape,
-        color = if (selected) palette.accentSoft else palette.allNotes,
-        contentColor = if (selected) palette.accentText else palette.text,
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 48.dp)
-                .pointerInput(onDismiss) {
-                    val triggerDistancePx = 24.dp.toPx()
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        var pointerPressed = true
-                        while (pointerPressed) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id }
-                            pointerPressed = change?.pressed == true
-                            if (change != null && pointerPressed) {
-                                val dx = kotlin.math.abs(change.position.x - down.position.x)
-                                val dy = change.position.y - down.position.y
-                                if (dy < -triggerDistancePx && kotlin.math.abs(dy) > dx * 1.2f) {
-                                    change.consume()
-                                    onDismiss()
-                                    pointerPressed = false
-                                }
-                            }
-                        }
-                    }
-                }
-                .border(
-                    width = 1.dp,
-                    color = if (selected) palette.selectedLine else palette.line,
-                    shape = shape,
-                ),
+    val haptic = LocalHapticFeedback.current
+    IconButton(
+        onClick = {
+            onEditToggle()
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        },
+        enabled = !showTags,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (showBack) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = palette.iconBackground,
-                    shadowElevation = 1.dp,
-                    modifier =
-                        Modifier
-                            .size(28.dp)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = onBack,
-                            ),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = "‹",
-                            color = palette.accent,
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
-                        )
-                    }
-                }
-            }
-            Box(
-                modifier =
-                    Modifier
-                        .weight(1f)
-                        .heightIn(min = 40.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onClick,
-                        )
-                        .padding(start = if (showBack) 8.dp else 0.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                Text(
-                    text = buildAnnotatedString {
-                        append(title)
-                        append(" ")
-                        withStyle(
-                            SpanStyle(
-                                color = if (selected) palette.accentText else palette.muted,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            ),
-                        ) {
-                            append(count.toString())
-                        }
-                    },
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            TextButton(
-                onClick = onEditToggle,
-                modifier = Modifier.height(40.dp),
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-            ) {
-                Text(
-                    text = if (editMode) "完成" else "编辑",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                    color = palette.accent,
-                )
-            }
-        }
+        Icon(
+            painter = painterResource(R.drawable.ic_folder_navigation_edit),
+            contentDescription = if (editMode) "完成编辑" else "编辑",
+            tint = if (editMode) palette.accent else palette.text,
+        )
+    }
+    IconButton(
+        onClick = {
+            onSwitch()
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        },
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_folder_navigation_switch),
+            contentDescription = if (showTags) "切换到分类" else "切换到标签",
+            modifier = Modifier.width(24.dp).height(18.dp),
+            tint = palette.text,
+        )
     }
 }
 
@@ -694,9 +566,9 @@ private fun FolderNavigationAddButton(
 ) {
     val palette = folderNavigationPalette()
     Surface(
-        shape = RoundedCornerShape(15.dp),
+        shape = RoundedCornerShape(12.dp),
         color = palette.item,
-        modifier = Modifier.size(42.dp),
+        modifier = Modifier.size(34.dp),
     ) {
         Box(
             modifier = Modifier
@@ -711,7 +583,7 @@ private fun FolderNavigationAddButton(
         ) {
             Text(
                 text = "+",
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                style = MaterialTheme.typography.titleMedium.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
                 color = palette.accent,
                 maxLines = 1,
             )
@@ -731,9 +603,9 @@ private fun FolderNavigationEditRow(
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Spacer(modifier = Modifier.width((item.depth * 18).dp))
+        Spacer(modifier = Modifier.width((item.depth * 14).dp))
         FolderNavigationChip(
             text = item.title,
             count = item.count,
@@ -772,7 +644,7 @@ private fun FolderNavigationSectionView(
 ) {
     val palette = folderNavigationPalette()
     val selected = section.path == selectedPath
-    val shape = RoundedCornerShape(20.dp)
+    val shape = RoundedCornerShape(16.dp)
     val avoidanceOffset = folderNavigationAnimatedAvoidanceOffset(
         target = folderNavigationSectionAvoidanceOffset(
             path = section.path,
@@ -817,16 +689,16 @@ private fun FolderNavigationSectionView(
                 }
                 .border(1.dp, palette.line, shape),
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
+        Column(modifier = Modifier.padding(8.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
+                Box(
                     modifier =
                         Modifier
                             .weight(1f)
-                            .heightIn(min = 40.dp)
+                            .heightIn(min = 32.dp)
                             .folderNavigationDragTarget(
                                 enabled = editMode,
                                 path = section.path,
@@ -850,19 +722,8 @@ private fun FolderNavigationSectionView(
                                     }
                                 },
                             ),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    contentAlignment = Alignment.CenterStart,
                 ) {
-                    Box(
-                        modifier =
-                            Modifier
-                                .width(5.dp)
-                                .height(20.dp)
-                                .background(
-                                    color = if (selected) palette.accent else palette.line,
-                                    shape = RoundedCornerShape(99.dp),
-                                ),
-                    )
                     Text(
                         text = buildAnnotatedString {
                             append(section.title)
@@ -870,7 +731,7 @@ private fun FolderNavigationSectionView(
                             withStyle(
                                 SpanStyle(
                                     color = palette.muted,
-                                    fontSize = 14.sp,
+                                    fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold,
                                 ),
                             ) {
@@ -878,41 +739,48 @@ private fun FolderNavigationSectionView(
                             }
                         },
                         style = MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 18.sp,
+                            fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                         ),
                         color = if (selected) palette.accentText else palette.text,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
+                        modifier = Modifier.fillMaxWidth().padding(start = 8.dp),
                     )
                 }
                 if (section.chips.isNotEmpty()) {
-                    TextButton(
-                        onClick = { onExpandPath(section.path) },
-                        modifier = Modifier.height(32.dp),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                    Box(
+                        modifier =
+                            Modifier
+                                .size(32.dp)
+                                .semantics { contentDescription = "展开${section.title}" }
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = { onExpandPath(section.path) },
+                                ),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            text = "展开 ›",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            ),
-                            color = palette.accent,
+                        Icon(
+                            painter = painterResource(R.drawable.ic_folder_navigation_expand),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                            tint = palette.muted,
                         )
                     }
                 }
             }
-            Box(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(palette.line),
-            )
             if (section.chips.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(palette.line),
+                )
+            }
+            if (section.chips.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
                 FolderNavigationChipGrid(
                     items = section.chips,
                     selectedPath = selectedPath,
@@ -956,8 +824,8 @@ private fun FolderNavigationChipGrid(
 ) {
     val siblingPaths = items.map { it.path }
     val density = LocalDensity.current
-    val horizontalSpacingPx = with(density) { 6.dp.toPx() }
-    val verticalSpacingPx = with(density) { 8.dp.toPx() }
+    val horizontalSpacingPx = with(density) { 5.dp.toPx() }
+    val verticalSpacingPx = with(density) { 6.dp.toPx() }
     var chipGridBounds by remember { mutableStateOf(Rect.Zero) }
     val avoidanceOffsetByPath = items.associate { item ->
         item.path to folderNavigationAnimatedAvoidanceOffset(
@@ -981,8 +849,8 @@ private fun FolderNavigationChipGrid(
                 val bounds = coordinates.boundsInRoot()
                 if (chipGridBounds != bounds) chipGridBounds = bounds
             },
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         items.forEach { item ->
             FolderNavigationChip(
@@ -1031,6 +899,40 @@ private fun FolderNavigationChipGrid(
                     }
                 },
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FolderNavigationTagGrid(
+    tags: List<String>,
+    noteCountByTag: Map<String, Int>,
+    selectedTag: String?,
+    onSelectTag: (String) -> Unit,
+) {
+    val visibleTags = tags.filter { it.isNotBlank() }.distinct()
+    if (visibleTags.isEmpty()) {
+        Text(
+            text = "还没有标签",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+        )
+    } else {
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            visibleTags.forEach { tag ->
+                FolderNavigationChip(
+                    text = "#$tag",
+                    count = noteCountByTag[tag] ?: 0,
+                    selected = tag == selectedTag,
+                    onClick = { onSelectTag(tag) },
+                )
+            }
         }
     }
 }
@@ -1164,58 +1066,79 @@ private fun folderNavigationFlowPositions(
 }
 
 @Composable
-private fun FolderNavigationChip(
+internal fun FolderNavigationChip(
     text: String,
     count: Int,
     selected: Boolean,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit,
+    onClick: (() -> Unit)? = null,
+    countBeforeText: Boolean = false,
 ) {
     val palette = folderNavigationPalette()
-    val shape = RoundedCornerShape(15.dp)
+    val shape = RoundedCornerShape(12.dp)
     Surface(
         shape = shape,
         color = if (selected) palette.accentSoft else palette.item,
         contentColor = if (selected) palette.accentText else palette.text,
         modifier =
             modifier
-                .widthIn(max = 200.dp)
-                .heightIn(min = 40.dp)
+                .widthIn(max = 160.dp)
+                .heightIn(min = 32.dp)
                 .border(
                     width = 1.dp,
                     color = if (selected) palette.selectedLine else Color.Transparent,
                     shape = shape,
                 )
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onClick,
+                .then(
+                    if (onClick != null) {
+                        Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onClick,
+                        )
+                    } else {
+                        Modifier
+                    }
                 ),
     ) {
         Text(
             text = buildAnnotatedString {
+                if (countBeforeText) {
+                    withStyle(
+                        SpanStyle(
+                            color = if (selected) palette.accentText else palette.muted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    ) {
+                        append(count.toString())
+                    }
+                    append(" ")
+                }
                 append(text)
-                append(" ")
-                withStyle(
-                    SpanStyle(
-                        color = if (selected) palette.accentText else palette.muted,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                ) {
-                    append(count.toString())
+                if (!countBeforeText) {
+                    append(" ")
+                    withStyle(
+                        SpanStyle(
+                            color = if (selected) palette.accentText else palette.muted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    ) {
+                        append(count.toString())
+                    }
                 }
             },
             style = MaterialTheme.typography.titleSmall.copy(
-                fontSize = 16.sp,
+                fontSize = 14.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
             ),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier =
                 Modifier
-                    .widthIn(max = 180.dp)
-                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                    .widthIn(max = 144.dp)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
         )
     }
 }
@@ -1552,7 +1475,7 @@ private fun navigationDirectChildFolderPaths(
         .toList()
 }
 
-private fun navigationParentFolderPath(path: String): String =
+internal fun navigationParentFolderPath(path: String): String =
     path.substringBeforeLast('/', missingDelimiterValue = "")
 
 private fun navigationJoinFolderPath(

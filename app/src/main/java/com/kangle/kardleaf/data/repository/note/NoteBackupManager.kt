@@ -1,6 +1,7 @@
 package com.kangle.kardleaf.data.repository.note
 
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import com.kangle.kardleaf.data.database.NoteHistoryDao
 import com.kangle.kardleaf.data.database.NoteHistoryEntity
 import com.kangle.kardleaf.data.database.NoteRemarkDao
@@ -17,26 +18,41 @@ internal class NoteBackupManager(
     private val gson = Gson()
 
     private data class UserDataBackup(
+        @field:SerializedName(value = "version", alternate = ["a"])
         val version: Int = 1,
+        @field:SerializedName(value = "favoriteNotePaths", alternate = ["b"])
         val favoriteNotePaths: List<String>? = emptyList(),
+        @field:SerializedName(value = "pinnedNotePaths", alternate = ["c"])
         val pinnedNotePaths: List<String>? = emptyList(),
+        @field:SerializedName(value = "history", alternate = ["d"])
         val history: List<HistoryBackup>? = emptyList(),
+        @field:SerializedName(value = "remarks", alternate = ["e"])
         val remarks: List<RemarkBackup>? = emptyList(),
     )
 
     private data class HistoryBackup(
+        @field:SerializedName(value = "id", alternate = ["a"])
         val id: Long,
+        @field:SerializedName(value = "noteId", alternate = ["b"])
         val noteId: String,
+        @field:SerializedName(value = "title", alternate = ["c"])
         val title: String,
+        @field:SerializedName(value = "content", alternate = ["d"])
         val content: String,
+        @field:SerializedName(value = "savedAtMs", alternate = ["e"])
         val savedAtMs: Long,
     )
 
     private data class RemarkBackup(
+        @field:SerializedName(value = "id", alternate = ["a"])
         val id: Long = 0,
+        @field:SerializedName(value = "noteId", alternate = ["b"])
         val noteId: String,
+        @field:SerializedName(value = "content", alternate = ["c"])
         val content: String,
+        @field:SerializedName(value = "createdAtMs", alternate = ["d"])
         val createdAtMs: Long? = null,
+        @field:SerializedName(value = "updatedAtMs", alternate = ["e"])
         val updatedAtMs: Long,
     )
 

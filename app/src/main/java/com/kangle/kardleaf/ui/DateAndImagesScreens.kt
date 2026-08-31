@@ -89,11 +89,14 @@ fun DateNotesScreen(
     viewModel: MainViewModel,
     onOpenDrawer: () -> Unit,
     onNoteClick: (Note) -> Unit,
+    initialDateMillis: Long? = null,
+    onInitialDateApplied: () -> Unit = {},
 ) {
     val notes by viewModel.allNotes.collectAsState(initial = emptyList())
     val activeNotes = remember(notes) { notes.filter { !it.isTrashed } }
-    var visibleMonth by remember { mutableStateOf(firstDayOfMonth(System.currentTimeMillis())) }
-    var selectedDay by remember { mutableStateOf(startOfDay(System.currentTimeMillis())) }
+    val initialDate = initialDateMillis ?: System.currentTimeMillis()
+    var visibleMonth by remember { mutableStateOf(firstDayOfMonth(initialDate)) }
+    var selectedDay by remember { mutableStateOf(startOfDay(initialDate)) }
     var showMonthPicker by remember { mutableStateOf(false) }
     var showDateScopeMenu by remember { mutableStateOf(false) }
     var lastDateScopeMenuDismissAt by remember { mutableStateOf(0L) }
@@ -112,6 +115,16 @@ fun DateNotesScreen(
         calendarSlideDirection = if (forward) 1 else -1
         visibleMonth = addMonths(visibleMonth, if (forward) 1 else -1)
         dateScopeMode = DateScopeMode.MONTH
+    }
+
+    LaunchedEffect(initialDateMillis) {
+        initialDateMillis?.let { targetDate ->
+            selectedDay = startOfDay(targetDate)
+            visibleMonth = firstDayOfMonth(targetDate)
+            dateScopeMode = DateScopeMode.TODAY
+            showDateScopeMenu = false
+            onInitialDateApplied()
+        }
     }
 
     BackHandler(enabled = showDateScopeMenu || dateScopeMode != DateScopeMode.TODAY) {
