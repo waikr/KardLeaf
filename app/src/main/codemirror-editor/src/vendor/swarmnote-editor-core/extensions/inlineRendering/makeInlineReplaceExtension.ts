@@ -1,5 +1,5 @@
 import { RangeSetBuilder, type Extension } from '@codemirror/state';
-import { ensureSyntaxTree } from '@codemirror/language';
+import { syntaxTree } from '@codemirror/language';
 import {
   Decoration,
   type DecorationSet,
@@ -110,8 +110,8 @@ export function makeInlineReplaceExtension(
 
         // 遍历所有可见区域（支持大文档的分段渲染）
         for (const { from, to } of view.visibleRanges) {
-          // 确保语法树已解析到指定位置
-          ensureSyntaxTree(view.state, to)?.iterate({
+          // Use the background parser's current tree; never parse on a drag.
+          syntaxTree(view.state).iterate({
             from,
             to,
             /**

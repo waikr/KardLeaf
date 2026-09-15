@@ -22,12 +22,17 @@ import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.WebResourceError
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -113,6 +118,23 @@ private fun handlePreviewMainFrameNavigation(
     onInternalLinkOpen: (String) -> Unit,
 ): Boolean {
     if (isAllowedPreviewMainFrameUri(uri)) return false
+    if (LocalPreviewImageResource.isRequest(uri) || LocalPreviewImageResource.isDirectMediaRequest(uri)) {
+        val source = if (LocalPreviewImageResource.isRequest(uri)) {
+            LocalPreviewImageResource.decodeSourceUri(uri)
+        } else {
+            LocalPreviewImageResource.decodeDirectMediaUri(uri)
+        } ?: return true
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(source, LocalPreviewImageResource.mimeType(uri))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newRawUri("附件", source)
+            })
+        }.onFailure {
+            android.widget.Toast.makeText(context, "无法打开附件，请安装支持此格式的应用", android.widget.Toast.LENGTH_LONG).show()
+        }
+        return true
+    }
     when (uri.scheme?.lowercase()) {
         "http", "https" -> {
             runCatching {
@@ -153,6 +175,8 @@ private class PreviewWebViewLifecycleState(
     @Volatile
     var released: Boolean = false
     var active: Boolean? = null
+    var attachments: Map<String, String>? = null
+    var fullscreenDialog: android.app.Dialog? = null
     var renderToken: Long = 0L
     var renderStartedAtMs: Long = 0L
     var renderContentLength: Int = 0
@@ -167,6 +191,7 @@ private class PreviewJavascriptBridge(
     private val mainHandler: Handler,
     private val context: Context,
     private val contentProvider: () -> String,
+    private val attachmentsProvider: () -> Map<String, String>,
     private val webViewProvider: () -> WebView?,
     private val onCheckboxToggled: (Int, Boolean) -> Unit,
     private val onImageClicked: (Int) -> Unit,
@@ -204,6 +229,9 @@ private class PreviewJavascriptBridge(
 
     @JavascriptInterface
     fun getMarkdown(): String = if (dropIfReleased()) "" else contentProvider()
+
+    @JavascriptInterface
+    fun getAttachments(): String = if (dropIfReleased()) "{}" else JSONObject(attachmentsProvider()).toString()
 
     @JavascriptInterface
     fun onCheckboxToggled(index: Int, checked: Boolean) {
@@ -351,6 +379,11 @@ class PreviewWebViewController {
         webView?.clearFocus()
     }
 
+    fun pauseMedia() {
+        webView?.previewLifecycleState()?.fullscreenDialog?.dismiss()
+        webView?.evaluateJavascript("window.pausePreviewMedia && window.pausePreviewMedia()", null)
+    }
+
     fun getFastScrollMetrics(): EditorFastScrollMetrics {
         val view = webView ?: return EditorFastScrollMetrics()
         val maxScrollY = view.maxPreviewScrollY()
@@ -445,6 +478,7 @@ fun PreviewWebView(
     sessionKey: String,
     isDark: Boolean,
     controller: PreviewWebViewController,
+    attachments: Map<String, String> = emptyMap(),
     active: Boolean = true,
     modifier: Modifier = Modifier,
     searchQuery: String = "",
@@ -472,6 +506,16 @@ fun PreviewWebView(
     previewTheme: String = "follow_app",
 ) {
     val contentRef = remember { AtomicReference(content) }
+    val attachmentsRef = remember { AtomicReference(attachments) }
+    attachmentsRef.set(attachments)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, controller) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) controller.pauseMedia()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     contentRef.set(content)
     val previewTokenRef = remember { AtomicLong(1L) }
     val sessionKeyRef = remember { AtomicReference(sessionKey) }
@@ -705,7 +749,9 @@ fun PreviewWebView(
                 settings.allowFileAccessFromFileURLs = false
                 @Suppress("DEPRECATION")
                 settings.allowUniversalAccessFromFileURLs = false
-                settings.allowContentAccess = false
+                // Let the platform content loader seek verified SAF media, matching Joplin's
+                // direct file:// resource loading instead of proxying media through an InputStream.
+                settings.allowContentAccess = true
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 settings.javaScriptCanOpenWindowsAutomatically = false
                 settings.setSupportMultipleWindows(false)
@@ -716,6 +762,7 @@ fun PreviewWebView(
                     mainHandler = mainHandler,
                     context = context.applicationContext,
                     contentProvider = { contentRef.get() },
+                    attachmentsProvider = { attachmentsRef.get() },
                     webViewProvider = { previewWebView },
                     onCheckboxToggled = { index, checked -> currentOnCheckboxToggled.value(index, checked) },
                     onImageClicked = { index -> currentOnImageClicked.value(index) },
@@ -750,6 +797,7 @@ fun PreviewWebView(
                 val lastTapUpMs = AtomicReference(0L)
                 val lastPreviewControlTouchMs = AtomicReference(0L)
                 var gestureDownX = 0f
+                var gestureStartedAtMs = 0L
                 var gestureDownY = 0f
                 var gestureLastX = 0f
                 var horizontalPagerDragActive = false
@@ -829,6 +877,7 @@ fun PreviewWebView(
                         MotionEvent.ACTION_DOWN -> {
                             val now = SystemClock.elapsedRealtime()
                             val previousTap = lastTapUpMs.get()
+                            gestureStartedAtMs = now
                             KardLeafLog.d(
                                 DOUBLE_TAP_TRACE_TAG,
                                 "down sincePreviousUp=${if (previousTap > 0L) now - previousTap else -1L}ms contentLen=${contentRef.get().length}",
@@ -848,7 +897,7 @@ fun PreviewWebView(
                             currentOnUserInteraction.value()
                             lifecycleState.horizontalVelocityTracker?.addMovement(event)
                             val horizontalDrag = currentOnHorizontalPagerDrag.value
-                            if (horizontalDrag != null) {
+                            if (horizontalDrag != null && lastPreviewControlTouchMs.get() < gestureStartedAtMs) {
                                 val totalDeltaX = event.x - gestureDownX
                                 val totalDeltaY = event.y - gestureDownY
                                 if (!horizontalPagerDragActive &&
@@ -952,9 +1001,34 @@ fun PreviewWebView(
 
                 webChromeClient =
                     object : WebChromeClient() {
+                        override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                            if (lifecycleState.active == false || lifecycleState.fullscreenDialog != null) {
+                                callback.onCustomViewHidden()
+                                return
+                            }
+                            val dialog = android.app.Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+                            lifecycleState.fullscreenDialog = dialog
+                            dialog.setContentView(view)
+                            dialog.setOnDismissListener {
+                                lifecycleState.fullscreenDialog = null
+                                callback.onCustomViewHidden()
+                            }
+                            dialog.show()
+                            dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                        }
+
+                        override fun onHideCustomView() {
+                            lifecycleState.fullscreenDialog?.dismiss()
+                        }
+
                         override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                             val message = consoleMessage?.message().orEmpty()
-                            if (message.contains("KardLeafPreviewTableTrace")) {
+                            if (message.contains("KardLeafPreviewMedia")) {
+                                KardLeafLog.d(
+                                    PREVIEW_MEDIA_TRACE_TAG,
+                                    "web console line=${consoleMessage?.lineNumber()} level=${consoleMessage?.messageLevel()} message=$message",
+                                )
+                            } else if (message.contains("KardLeafPreviewTableTrace")) {
                                 KardLeafLog.d(
                                     PREVIEW_TABLE_TRACE_TAG,
                                     "webview console line=${consoleMessage?.lineNumber()} level=${consoleMessage?.messageLevel()} message=$message",
@@ -976,7 +1050,16 @@ fun PreviewWebView(
                             request: WebResourceRequest?,
                         ): WebResourceResponse? {
                             val requestUri = request?.url ?: return super.shouldInterceptRequest(view, request)
-                            return interceptLocalPreviewImage(context, requestUri)
+                            val rangeHeader = request.requestHeaders.entries.firstOrNull { it.key.equals("Range", true) }?.value
+                            if (isPreviewMediaRequest(requestUri)) {
+                                KardLeafLog.d(
+                                    PREVIEW_MEDIA_TRACE_TAG,
+                                    "request method=${request.method} ${previewMediaRequestSummary(requestUri)} " +
+                                        "range=${rangeHeader ?: "none"} mainFrame=${request.isForMainFrame} gesture=${request.hasGesture()}",
+                                )
+                            }
+                            return previewAttachmentResponse(context, requestUri, rangeHeader)
+                                ?: interceptLocalPreviewImage(context, requestUri)
                                 ?: super.shouldInterceptRequest(view, request)
                         }
 
@@ -986,7 +1069,14 @@ fun PreviewWebView(
                             url: String?,
                         ): WebResourceResponse? {
                             val requestUri = url?.let(Uri::parse) ?: return super.shouldInterceptRequest(view, url)
-                            return interceptLocalPreviewImage(context, requestUri)
+                            if (isPreviewMediaRequest(requestUri)) {
+                                KardLeafLog.d(
+                                    PREVIEW_MEDIA_TRACE_TAG,
+                                    "request legacy ${previewMediaRequestSummary(requestUri)} range=unavailable",
+                                )
+                            }
+                            return previewAttachmentResponse(context, requestUri, null)
+                                ?: interceptLocalPreviewImage(context, requestUri)
                                 ?: super.shouldInterceptRequest(view, url)
                         }
 
@@ -1021,6 +1111,36 @@ fun PreviewWebView(
                                 "previewReady flush token=$token len=${contentRef.get().length}",
                             )
                             webView.renderPreviewFromAndroid(isDark, "pageFinished", token)
+                        }
+
+                        override fun onReceivedError(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                            error: WebResourceError?,
+                        ) {
+                            if (request != null && isPreviewMediaRequest(request.url)) {
+                                KardLeafLog.w(
+                                    PREVIEW_MEDIA_TRACE_TAG,
+                                    "web error code=${error?.errorCode} description=${error?.description} " +
+                                        previewMediaRequestSummary(request.url),
+                                )
+                            }
+                            super.onReceivedError(view, request, error)
+                        }
+
+                        override fun onReceivedHttpError(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                            errorResponse: WebResourceResponse?,
+                        ) {
+                            if (request != null && isPreviewMediaRequest(request.url)) {
+                                KardLeafLog.w(
+                                    PREVIEW_MEDIA_TRACE_TAG,
+                                    "web httpError status=${errorResponse?.statusCode} reason=${errorResponse?.reasonPhrase} " +
+                                        previewMediaRequestSummary(request.url),
+                                )
+                            }
+                            super.onReceivedHttpError(view, request, errorResponse)
                         }
 
                         override fun shouldOverrideUrlLoading(
@@ -1059,6 +1179,7 @@ fun PreviewWebView(
             if (!active) view.clearFocus()
             if (lifecycleState.active != active) {
                 lifecycleState.active = active
+                if (!active) controller.pauseMedia()
                 KardLeafLog.d(
                     PREVIEW_SESSION_TRACE_TAG,
                     "modeSurface active=$active viewId=${System.identityHashCode(view)} visibility=${view.visibility} " +
@@ -1067,6 +1188,18 @@ fun PreviewWebView(
                 )
             }
             controller.attach(view)
+            if (lifecycleState.attachments != attachments) {
+                lifecycleState.attachments = attachments
+                val mediaCount = attachments.values.count { value ->
+                    val mime = Uri.parse(value).getQueryParameter("mime")
+                    mime?.startsWith("video/") == true || mime?.startsWith("audio/") == true
+                }
+                KardLeafLog.d(
+                    PREVIEW_MEDIA_TRACE_TAG,
+                    "attachments changed count=${attachments.size} mediaCount=$mediaCount active=$active contentLen=${content.length}",
+                )
+                view.evaluateJavascript("window.attachPreviewMedia && window.attachPreviewMedia()", null)
+            }
             val previewState = PreviewRenderState(
                 contentLength = content.length,
                 contentHash = content.hashCode(),
@@ -1148,6 +1281,7 @@ fun PreviewWebView(
             if (lifecycleState.released) return@AndroidView
             KardLeafLog.d(PREVIEW_SESSION_TRACE_TAG, "event=release_start")
             lifecycleState.released = true
+            lifecycleState.fullscreenDialog?.dismiss()
             lifecycleState.bridge.dispose()
             lifecycleState.mainHandler.removeCallbacksAndMessages(null)
             controller.detach(view)

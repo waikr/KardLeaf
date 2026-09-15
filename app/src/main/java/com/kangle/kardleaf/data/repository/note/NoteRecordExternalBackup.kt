@@ -1,6 +1,7 @@
 package com.kangle.kardleaf.data.repository.note
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.documentfile.provider.DocumentFile
 import androidx.room.withTransaction
 import com.google.gson.Gson
@@ -33,9 +34,11 @@ internal class NoteRecordExternalBackup(
     private val historyDao: NoteHistoryDao,
     private val remarkDao: NoteRemarkDao,
     private val onExternalWrite: () -> Unit,
+    private val externalReadOnly: () -> Boolean = { false },
+    private val externalRefreshPaused: () -> Boolean = { false },
 ) {
     private val gson = Gson()
-    private val mutex = Mutex()
+    private val mutex = s3FileMutex
 
     @Volatile
     private var rootDir: DocumentFile? = null
@@ -102,6 +105,29 @@ internal class NoteRecordExternalBackup(
             mutex.withLock { loadFromExternalStoreLocked() }
         }
 
+    internal suspend fun withS3FileAccess(applying: Boolean, block: suspend () -> Unit) = mutex.withLock {
+        try { block() } finally { if (applying) loadedSignature = null }
+    }
+
+    internal suspend fun refreshAfterS3(): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            // Remote absence of records.json must not trigger legacy Room-to-file migration.
+            try {
+                val root = rootDir ?: return@withLock false
+                val appDir = strictChildren(root).firstOrNull { it.name == BACKUP_DIR_NAME }
+                val children = appDir?.let(::strictChildren).orEmpty()
+                val histories = readAllHistory(children.firstOrNull { it.name == HISTORY_DIR_NAME }?.let(::strictChildren) ?: emptyArray())
+                val remarks = readAllRemarks(children.firstOrNull { it.name == REMARKS_DIR_NAME }?.let(::strictChildren) ?: emptyArray())
+                readStoreMeta(rootDir ?: return@withLock false)
+                validateUniqueIds(histories.map { it.id }, "history")
+                validateUniqueIds(remarks.map { it.id }, "remarks")
+                replaceRoomCache(histories, remarks)
+                loadedSignature = snapshotSignature()
+                true
+            } catch (_: Exception) { loadedSignature = null; false }
+        }
+    }
+
     suspend fun refreshFromExternalIfChanged(): Boolean =
         withContext(Dispatchers.IO) {
             mutex.withLock {
@@ -130,6 +156,7 @@ internal class NoteRecordExternalBackup(
                     writeStoreMeta()
                     loadedSignature = snapshotSignature()
                 } catch (error: Exception) {
+                    loadedSignature = null
                     runCatching { loadFromExternalStoreLocked() }
                     throw error
                 }
@@ -142,11 +169,15 @@ internal class NoteRecordExternalBackup(
     ) {
         val ids = noteIds.filterNotNull().filter { it.isNotBlank() }.distinct()
         if (ids.isEmpty()) return
+        val startedAt = SystemClock.elapsedRealtime()
         mutex.withLock {
             try {
                 ids.forEach { sync(it) }
-                loadedSignature = snapshotSignature()
+                // Each successful publication updates only its own signature. Scanning here
+                // is expensive and would acknowledge unrelated external edits without loading them.
+                KardLeafLog.d(TAG, "record sync count=${ids.size} elapsed=${SystemClock.elapsedRealtime() - startedAt}ms")
             } catch (error: Exception) {
+                loadedSignature = null
                 runCatching { loadFromExternalStoreLocked() }
                 throw error
             }
@@ -154,6 +185,7 @@ internal class NoteRecordExternalBackup(
     }
 
     private suspend fun loadFromExternalStoreLocked(): Boolean {
+        if (externalRefreshPaused()) return false
         val root = rootDir ?: return false
         return try {
             recoverInterruptedWrites(resolveDir(REMARKS_DIR_NAME, create = false))
@@ -161,7 +193,7 @@ internal class NoteRecordExternalBackup(
             val meta = readStoreMeta(root)
             val externalHistory = readAllHistory()
             val externalRemarks = readAllRemarks()
-            val authoritative = meta != null
+            val authoritative = meta != null || externalReadOnly()
             val histories =
                 if (authoritative) {
                     validateUniqueIds(externalHistory.map { it.id }, "history")
@@ -185,6 +217,7 @@ internal class NoteRecordExternalBackup(
             loadedSignature = snapshotSignature()
             true
         } catch (error: Exception) {
+            loadedSignature = null
             KardLeafLog.e(TAG, "External record store load failed root=${root.uri}", error)
             false
         }
@@ -262,7 +295,13 @@ internal class NoteRecordExternalBackup(
         payload: Any,
     ) {
         val dir = resolveDir(subDirName, create = true) ?: throw IOException("Cannot create $subDirName")
-        writeSafely(dir, backupFileName(noteId), gson.toJson(payload).toByteArray(Charsets.UTF_8))
+        val fileName = backupFileName(noteId)
+        val published = writeSafely(dir, fileName, gson.toJson(payload).toByteArray(Charsets.UTF_8))
+        loadedSignature = updatedRecordSignature(
+            loadedSignature,
+            "$subDirName/$fileName",
+            FileSignature(published.lastModified(), published.length()),
+        )
     }
 
     private fun writeStoreMeta() {
@@ -274,44 +313,64 @@ internal class NoteRecordExternalBackup(
         dir: DocumentFile,
         fileName: String,
         bytes: ByteArray,
-    ) {
+    ): DocumentFile {
+        val startedAt = SystemClock.elapsedRealtime()
         require(bytes.size <= MAX_JSON_FILE_BYTES) { "$fileName is too large" }
         recoverFile(dir, fileName)
         val temp =
             dir.createFile(BINARY_MIME, ".$fileName.${UUID.randomUUID()}$TEMP_FILE_SUFFIX")
                 ?: throw IOException("Cannot create temporary file for $fileName")
         val backupName = backupName(fileName)
+        val preparedAt = SystemClock.elapsedRealtime()
+        val writtenAt: Long
+        val verifiedAt: Long
+        val current: DocumentFile?
         try {
             context.contentResolver.openOutputStream(temp.uri, "wt")?.use { it.write(bytes) }
                 ?: throw IOException("Cannot open temporary file for $fileName")
+            writtenAt = SystemClock.elapsedRealtime()
             if (!readBytes(temp).contentEquals(bytes)) throw IOException("Temporary file verification failed for $fileName")
+            verifiedAt = SystemClock.elapsedRealtime()
 
             val staleBackup = dir.findFile(backupName)?.takeIf { it.isFile }
             if (staleBackup != null && !staleBackup.delete()) throw IOException("Cannot remove stale backup for $fileName")
-            val current = dir.findFile(fileName)?.takeIf { it.isFile }
+            current = dir.findFile(fileName)?.takeIf { it.isFile }
             if (current != null && !current.renameTo(backupName)) throw IOException("Cannot back up $fileName")
             if (!temp.renameTo(fileName)) {
-                dir.findFile(backupName)?.renameTo(fileName)
+                current?.renameTo(fileName)
                 throw IOException("Cannot publish $fileName")
             }
-            dir.findFile(backupName)?.delete()
-            onExternalWrite()
         } catch (error: Exception) {
             temp.delete()
             throw error
         }
+        // temp now names the committed file. Post-publication failures must never delete it.
+        current?.delete()
+        onExternalWrite()
+        KardLeafLog.d(
+            TAG,
+            "record publish bytes=${bytes.size} prepare=${preparedAt - startedAt}ms " +
+                "write=${writtenAt - preparedAt}ms verify=${verifiedAt - writtenAt}ms " +
+                "publish=${SystemClock.elapsedRealtime() - verifiedAt}ms total=${SystemClock.elapsedRealtime() - startedAt}ms",
+        )
+        return temp
     }
 
     private fun deleteRecordFile(
         subDirName: String,
         noteId: String,
     ) {
-        val dir = resolveDir(subDirName, create = false) ?: return
         val fileName = backupFileName(noteId)
-        recoverFile(dir, fileName)
-        val file = dir.findFile(fileName)?.takeIf { it.isFile } ?: return
-        if (!file.delete()) throw IOException("Cannot delete $subDirName/$fileName")
-        onExternalWrite()
+        val dir = resolveDir(subDirName, create = false)
+        if (dir != null) {
+            recoverFile(dir, fileName)
+            val file = dir.findFile(fileName)?.takeIf { it.isFile }
+            if (file != null) {
+                if (!file.delete()) throw IOException("Cannot delete $subDirName/$fileName")
+                onExternalWrite()
+            }
+        }
+        loadedSignature = updatedRecordSignature(loadedSignature, "$subDirName/$fileName", null)
     }
 
     private fun pruneStaleFiles(
@@ -341,10 +400,9 @@ internal class NoteRecordExternalBackup(
         return meta
     }
 
-    private fun readAllRemarks(): List<NoteRemarkEntity> {
-        val dir = resolveDir(REMARKS_DIR_NAME, create = false) ?: return emptyList()
-        return dir.listFiles()
-            .filter { it.isFile && it.name.orEmpty().endsWith(JSON_SUFFIX) }
+    private fun readAllRemarks(files: Array<DocumentFile>? = null): List<NoteRemarkEntity> {
+        return (files ?: resolveDir(REMARKS_DIR_NAME, create = false)?.listFiles() ?: return emptyList())
+            .filter { (files != null || it.isFile) && it.name.orEmpty().endsWith(JSON_SUFFIX) }
             .sortedBy { it.name }
             .flatMap { file ->
                 val payload =
@@ -359,10 +417,9 @@ internal class NoteRecordExternalBackup(
             }
     }
 
-    private fun readAllHistory(): List<NoteHistoryEntity> {
-        val dir = resolveDir(HISTORY_DIR_NAME, create = false) ?: return emptyList()
-        return dir.listFiles()
-            .filter { it.isFile && it.name.orEmpty().endsWith(JSON_SUFFIX) }
+    private fun readAllHistory(files: Array<DocumentFile>? = null): List<NoteHistoryEntity> {
+        return (files ?: resolveDir(HISTORY_DIR_NAME, create = false)?.listFiles() ?: return emptyList())
+            .filter { (files != null || it.isFile) && it.name.orEmpty().endsWith(JSON_SUFFIX) }
             .sortedBy { it.name }
             .flatMap { file ->
                 val payload =
@@ -375,6 +432,21 @@ internal class NoteRecordExternalBackup(
                     NoteHistoryEntity(it.id, payload.noteId, it.title, it.content, it.savedAtMs)
                 }
             }
+    }
+
+    private fun strictChildren(dir: DocumentFile): Array<DocumentFile> {
+        val uri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(dir.uri, android.provider.DocumentsContract.getDocumentId(dir.uri))
+        val projection = arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+        return (context.contentResolver.query(uri, projection, null, null, null) ?: throw IOException("Record directory unavailable")).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val child = android.provider.DocumentsContract.buildDocumentUriUsingTree(dir.uri, cursor.getString(0))
+                    val file = DocumentFile.fromSingleUri(context, child) ?: throw IOException("Record file unavailable")
+                    require(file.name != null) { "Record metadata unavailable" }
+                    add(file)
+                }
+            }.toTypedArray()
+        }
     }
 
     private fun validateUniqueIds(
@@ -478,6 +550,7 @@ internal class NoteRecordExternalBackup(
             .joinToString("") { "%02x".format(it) }
 
     private companion object {
+        private val s3FileMutex = Mutex()
         const val TAG = "NoteRecordExternalBackup"
         const val STORE_VERSION = 1
         const val FILE_VERSION = 1
@@ -491,6 +564,15 @@ internal class NoteRecordExternalBackup(
         const val BINARY_MIME = "application/octet-stream"
         const val MAX_JSON_FILE_BYTES = 64 * 1024 * 1024
     }
+}
+
+/** Never turn an unloaded store into a loaded one, or acknowledge untouched external files. */
+internal fun <T : Any> updatedRecordSignature(
+    loaded: Map<String, T>?,
+    key: String,
+    signature: T?,
+): Map<String, T>? = loaded?.toMutableMap()?.apply {
+    if (signature == null) remove(key) else put(key, signature)
 }
 
 internal fun mergeHistoryRecords(

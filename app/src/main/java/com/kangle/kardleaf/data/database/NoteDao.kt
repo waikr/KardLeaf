@@ -89,14 +89,15 @@ interface NoteDao {
                 WHEN title LIKE '%' || :likeQuery || '%' ESCAPE '\' THEN title
                 WHEN content LIKE '%' || :likeQuery || '%' ESCAPE '\' THEN
                     (CASE WHEN instr(lower(content), lower(:query)) > 61 THEN '...' ELSE '' END) ||
-                    trim(replace(replace(substr(content, max(instr(lower(content), lower(:query)) - 60, 1), 60 + length(:query) + 90), char(13), ' '), char(10), ' ')) ||
+                    replace(replace(substr(content, max(instr(lower(content), lower(:query)) - 60, 1), 60 + length(:query) + 90), char(13), ' '), char(10), ' ') ||
                     (CASE WHEN instr(lower(content), lower(:query)) + length(:query) + 90 <= length(content) THEN '...' ELSE '' END)
                 ELSE ''
             END AS snippet,
             CASE
                 WHEN content LIKE '%' || :likeQuery || '%' ESCAPE '\' THEN instr(lower(content), lower(:query)) - 1
                 ELSE -1
-            END AS startOffset
+            END AS startOffset,
+            :query AS matchedText
         FROM notes
         WHERE isTrashed = 0
         AND (

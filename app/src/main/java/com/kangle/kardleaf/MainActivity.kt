@@ -102,6 +102,7 @@ import kotlin.coroutines.resume
 
 private val STARTUP_PERF_TRACE_TAG = KardLeafLogTags.STARTUP_PERF
 private val USER_PERF_TRACE_TAG = KardLeafLogTags.USER_PERF
+private val GESTURE_TRACE_TAG = KardLeafLogTags.GESTURE_TRACE
 private const val BACK_TRACE_TAG = "KardLeafBackTrace"
 private const val WEBDAV_REALTIME_SYNC_TAG = "KardLeafWebDavRealtime"
 private const val WEBDAV_REALTIME_UPLOAD_DELAY_MS = 2_500L
@@ -165,6 +166,16 @@ class MainActivity : FragmentActivity() {
     private var pendingEditorImagePicker: ((Uri) -> Unit)? = null
     private var editorImagePickerLaunchElapsedMs = 0L
     private var webDavRealtimeSyncJob: Job? = null
+    private var s3RealtimeSyncJob: Job? = null
+    private val s3SyncManager by lazy {
+        com.kangle.kardleaf.data.sync.S3CloudSyncManager(applicationContext, prefsManager,
+            localAccess = { applying, block ->
+                check(isRootFolderReady) { "笔记库尚未准备完成" }
+                viewModel.withS3LocalAccess(applying, block)
+            },
+            refresh = { viewModel.refreshAfterS3() },
+        )
+    }
     private var appUpdateCheckJob: Job? = null
     private val automaticUpdateReleaseRequest = MutableStateFlow<AppReleaseInfo?>(null)
     private var sampleVaultCleanupPromptJob: Job? = null
@@ -867,6 +878,9 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                 context = this,
                 scope = lifecycleScope,
                 onChanged = { changedUri ->
+                    prefsManager.getRootUri()?.let { root ->
+                        if (com.kangle.kardleaf.data.sync.S3SyncGate.activeRoot != root) prefsManager.s3Preferences.markDirty(root)
+                    }
                     viewModel.onExternalVaultChanged(
                         forceContentReloadFallback = true,
                         changedUri = changedUri,
@@ -1186,6 +1200,18 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                     }
                     var showCategoryDrawerContent by androidx.compose.runtime.remember {
                         androidx.compose.runtime.mutableStateOf(false)
+                    }
+                    LaunchedEffect(currentScreen, drawerState.currentValue, drawerState.targetValue, showCategoryDrawerContent, isEditorOpen) {
+                        withFrameNanos { }
+                        KardLeafLog.d(
+                            GESTURE_TRACE_TAG,
+                            "mainSurface state screen=$currentScreen drawerCurrent=${drawerState.currentValue} " +
+                                "drawerTarget=${drawerState.targetValue} drawerOpen=${drawerState.isOpen} " +
+                                "categoryOnly=$showCategoryDrawerContent editorOpen=$isEditorOpen " +
+                                "window=${window.decorView.width}x${window.decorView.height} " +
+                                "decorUi=0x${Integer.toHexString(window.decorView.systemUiVisibility)} " +
+                                "navColor=#${Integer.toHexString(window.navigationBarColor).padStart(8, '0')}",
+                        )
                     }
                     var pendingDateViewMillis by androidx.compose.runtime.remember {
                         androidx.compose.runtime.mutableStateOf<Long?>(null)
@@ -1616,9 +1642,9 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                                 openNoteWithSelectedKernel(note, session)
                                             }
                                         },
-                                        onSearchNoteClick = { note, query ->
+                                        onSearchNoteClick = { note, query, match ->
                                             val session = markEditorOpenStart("dashboard_search_note_click", note)
-                                            viewModel.openNoteAtSearchMatch(note, query, session)
+                                            viewModel.openNoteAtSearchMatch(note, query, session, match)
                                         },
                                         onFabClick = {
                                             if (!isDrawerContentBlocked()) {
@@ -1789,6 +1815,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                     onLoadHistoryNoteSummaries = { viewModel.getHistoryNoteSummaries() },
                                     onOpenRecordNote = { noteKey -> openRecordNoteWithSelectedKernel(noteKey) },
                                     onCleanupHistory = { viewModel.cleanupOldHistoryVersions() },
+                                    s3SyncManager = s3SyncManager,
                                     onWebDavVaultChanged = { changedPaths ->
                                         viewModel.onExternalVaultChanged(
                                             forceContentReloadFallback = changedPaths.isEmpty(),
@@ -1942,7 +1969,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
             while (true) {
                 val pollIntervalMs = prefsManager.getWebDavRealtimePollIntervalMs()
                 delay(pollIntervalMs)
-                if (!prefsManager.isWebDavRealtimeSyncEnabled()) {
+                if (!prefsManager.isWebDavRealtimeSyncEnabled() || prefsManager.getRootUri()?.let { prefsManager.s3Preferences.load(it).realtime } == true) {
                     continue
                 }
 
@@ -2028,6 +2055,37 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
         webDavRealtimeSyncJob = null
     }
 
+    private fun startS3RealtimeSyncLoop() {
+        if (s3RealtimeSyncJob?.isActive == true) return
+        s3RealtimeSyncJob = lifecycleScope.launch {
+            var failures = 0
+            var lastRoot: String? = null
+            var nextCheck = 0L
+            var lastAttemptDirty = 0L
+            while (true) {
+                val root = prefsManager.getRootUri()
+                if (root != lastRoot) { lastRoot = root; failures = 0; nextCheck = 0L; lastAttemptDirty = 0L }
+                val settings = root?.let { prefsManager.s3Preferences.load(it) }
+                val dirty = root?.let { prefsManager.s3Preferences.dirtyMs(it) } ?: 0L
+                val localDue = failures == 0 && dirty > lastAttemptDirty && System.currentTimeMillis() - dirty >= 2_000L
+                if (isRootFolderReady && root != null && settings?.realtime == true && (SystemClock.elapsedRealtime() >= nextCheck || localDue)) {
+                    lastAttemptDirty = dirty
+                    try {
+                        s3SyncManager.sync(automatic = true)
+                        failures = 0
+                        nextCheck = SystemClock.elapsedRealtime() + settings.pollSeconds * 1000L
+                    } catch (error: kotlinx.coroutines.CancellationException) { throw error }
+                    catch (error: Exception) {
+                        failures = (failures + 1).coerceAtMost(6)
+                        nextCheck = SystemClock.elapsedRealtime() + (settings.pollSeconds * 1000L * (1L shl failures)).coerceAtMost(300_000L)
+                        prefsManager.s3Preferences.log(root, com.kangle.kardleaf.data.sync.S3CloudSyncManager.readableError(error))
+                    }
+                }
+                delay(2_000L)
+            }
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -2110,6 +2168,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
         KardLeafLog.d(STARTUP_PERF_TRACE_TAG, "activity onResume start firstResume=${!hasCompletedFirstResume}")
         super.onResume()
         startWebDavRealtimeSyncLoop()
+        startS3RealtimeSyncLoop()
         maybeCheckForAppUpdate()
         val persistedRootUri = getPersistedRootUriWithPermission()
         persistedRootUri?.let { uri ->
@@ -2135,6 +2194,8 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
     }
 
     override fun onPause() {
+        s3RealtimeSyncJob?.cancel()
+        s3RealtimeSyncJob = null
         stopWebDavRealtimeSyncLoop()
         NoteListWidgetProvider.refreshAllWidgets(applicationContext)
         TaskListWidgetProvider.refreshAllWidgets(applicationContext)
@@ -2143,6 +2204,7 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
     }
 
     override fun onDestroy() {
+        s3RealtimeSyncJob?.cancel()
         stopWebDavRealtimeSyncLoop()
         vaultChangeObserver?.stop()
         vaultChangeObserver = null

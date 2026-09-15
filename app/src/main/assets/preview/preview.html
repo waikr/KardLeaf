@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <link rel="stylesheet" href="katex.min.css">
     <style>
+        .preview-media { display: block; margin: 8px 0; }
+        .preview-media video { display: block; width: 100%; max-height: 70vh; background: #000; border-radius: 8px; }
+        .preview-media audio { display: block; width: 100%; }
+        .preview-media-status { display: block; color: var(--kl-preview-muted); font-size: 0.85em; }
         :root {
             --kl-preview-bg: transparent;
             --kl-preview-fg: #172033;
@@ -447,16 +451,30 @@
     <script src="katex.min.js"></script>
     <script src="markdown-it-texmath.min.js"></script>
     <script src="markdown-it-task-lists.min.js"></script>
+    <script src="preview-html-sanitizer.js"></script>
+    <script src="preview-media.js"></script>
 
     <script>
         // Initialize MarkdownIt
         const md = window.markdownit({
-            html: false, // Fix XSS by disabling raw HTML
+            html: true, // Raw HTML is filtered by the renderer rules below.
             linkify: true,
             typographer: true,
             breaks: true
         });
+        const sanitizePreviewHtml = window.KardLeafPreviewHtml?.sanitize;
+        if (typeof sanitizePreviewHtml !== 'function') throw new Error('preview HTML sanitizer unavailable');
+        const renderSafeHtml = (tokens, index) => sanitizePreviewHtml(tokens[index].content);
+        md.renderer.rules.html_inline = renderSafeHtml;
+        md.renderer.rules.html_block = renderSafeHtml;
         try { md.enable(['table']); } catch (error) { console.warn('[KardLeafPreview] enable table failed: ' + error); }
+        const defaultAttachmentLinkOpen = md.renderer.rules.link_open;
+        md.renderer.rules.link_open = (tokens, index, options, env, self) => {
+            if (tokens[index].markup !== 'linkify') tokens[index].attrSet('data-preview-attachment', 'true');
+            return defaultAttachmentLinkOpen
+                ? defaultAttachmentLinkOpen(tokens, index, options, env, self)
+                : self.renderToken(tokens, index, options);
+        };
         const defaultValidateLink = md.validateLink.bind(md);
         md.validateLink = function (url) {
             const value = String(url || '').trim();
@@ -625,6 +643,11 @@
                         ' class=' + tracePreviewShortText(heading.className, 120) +
                         ' text=' + tracePreviewShortText(heading.textContent, 160) +
                         ' rect=' + Math.round(rect.width) + 'x' + Math.round(rect.height) +
+                        ' fontFamily=' + tracePreviewShortText(style.fontFamily, 160) +
+                        ' fontSize=' + style.fontSize +
+                        ' fontWeight=' + style.fontWeight +
+                        ' letterSpacing=' + style.letterSpacing +
+                        ' lineHeight=' + style.lineHeight +
                         ' borderBottom=' + style.borderBottom +
                         ' textDecoration=' + style.textDecorationLine + '/' + style.textDecorationStyle + '/' + style.textDecorationThickness +
                         ' backgroundImage=' + tracePreviewShortText(style.backgroundImage, 120) +
@@ -947,6 +970,7 @@
                 clearPreviewStatus();
                 contentDiv.classList.remove('large-plain-preview');
                 contentDiv.innerHTML = html;
+                window.attachPreviewMedia();
                 wrapRenderedTables();
                 attachCheckboxListeners();
                 attachImageClickListeners();

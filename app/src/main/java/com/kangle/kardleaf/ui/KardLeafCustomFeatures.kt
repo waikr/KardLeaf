@@ -11,9 +11,12 @@ import com.kangle.kardleaf.data.repository.PrefsManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 private const val SETTINGS_TRACE_TAG = "KardLeafSettingsTrace"
 private const val DIAGNOSTIC_LOGCAT_MAX_CHARS = 2_000_000
@@ -25,7 +28,9 @@ object KardLeafCustomFeatures {
     const val DefaultUnnamedNoteFileNameTemplate = ""
     val DefaultOpenNoteMode = OpenNoteMode.EDIT
     const val DefaultEditDoubleTapPreview = false
-    val DefaultCustomSymbols = listOf("→", "←", "↑", "↓", "✓", "✗", "★", "☆", "•", "…", "—", "※")
+    const val MaxQuickTextItems = 24
+    const val MaxCustomFunctionItems = 24
+    val DefaultQuickTexts = emptyList<QuickTextItem>()
 
     fun editorKernelIcon(kernel: PrefsManager.EditorKernel): ImageVector = when (kernel) {
         PrefsManager.EditorKernel.AUTO -> Icons.Outlined.Settings
@@ -54,9 +59,19 @@ object KardLeafCustomFeatures {
     private const val KeyOpenNoteMode = "open_note_mode"
     private const val KeyEditDoubleTapPreview = "edit_double_tap_preview"
     private const val KeyToolbarOrder = "toolbar_order"
+    private const val CustomFunctionToolbarKeyPrefix = "CUSTOM_FUNCTION:"
     private const val KeyCustomSymbols = "custom_symbols"
-    private const val MaxCustomSymbols = 24
+    private const val KeyQuickTexts = "quick_texts"
+    private const val KeyQuickTextDefaultsCleared = "quick_text_defaults_cleared"
+    private const val KeyCustomFunctionItems = "custom_function_items"
+    private const val MaxCustomSymbols = MaxQuickTextItems
     private const val MaxCustomSymbolChars = 32
+    private const val MaxQuickTextNameChars = 64
+    private const val MaxQuickTextContentChars = 2_000
+    private val RemovedDefaultQuickTextContents = setOf("→", "←", "↑", "↓", "✓", "✗", "★", "☆", "•", "…", "—", "※")
+    private const val MaxCustomFunctionNameChars = 64
+    private const val MaxCustomFunctionSvgChars = 20_000
+    private const val MaxCustomFunctionContentChars = 2_000
     private const val MaxExternalNoteTitleChars = 120
     private const val MaxExternalNoteFolderChars = 240
     private const val MaxExternalNoteContentChars = 50_000
@@ -70,14 +85,27 @@ object KardLeafCustomFeatures {
         EDIT("Edit"),
     }
 
+    data class QuickTextItem(
+        val name: String = "",
+        val content: String = "",
+    )
+
+    data class CustomFunctionItem(
+        val name: String = "",
+        val svg: String = "",
+        val content: String = "",
+        val id: String = "",
+    )
+
     enum class ToolbarItem(val label: String) {
         PREVIEW("预览"),
         UNDO("撤销"),
         REDO("恢复"),
         IMAGE("图片"),
+        ATTACHMENT("附件"),
         DRAWING("绘图"),
         DATETIME("时间日期"),
-        SYMBOLS("自定义符号"),
+        SYMBOLS("快捷文本"),
         HEADING("标题"),
         HEADING2("二级标题"),
         HEADING3("三级标题"),
@@ -86,6 +114,7 @@ object KardLeafCustomFeatures {
         ITALIC("斜体"),
         UNDERLINE("下划线"),
         STRIKE("删除线"),
+        HIGHLIGHT("高亮"),
         LINK("链接"),
         CODE("行内代码"),
         CODE_BLOCK("代码块"),
@@ -100,21 +129,35 @@ object KardLeafCustomFeatures {
         TABLE("表格"),
     }
 
+    sealed interface EditorToolbarEntry {
+        val key: String
+
+        data class BuiltIn(val item: ToolbarItem) : EditorToolbarEntry {
+            override val key: String = item.name
+        }
+
+        data class CustomFunction(val item: CustomFunctionItem) : EditorToolbarEntry {
+            override val key: String = "CUSTOM_FUNCTION:${item.id}"
+        }
+    }
+
     val DefaultToolbarOrder =
         listOf(
             ToolbarItem.UNDO,
             ToolbarItem.REDO,
             ToolbarItem.IMAGE,
-            ToolbarItem.DRAWING,
-            ToolbarItem.DATETIME,
             ToolbarItem.SYMBOLS,
             ToolbarItem.HEADING,
             ToolbarItem.BOLD,
-            ToolbarItem.ITALIC,
             ToolbarItem.PREVIEW,
+            ToolbarItem.ATTACHMENT,
+            ToolbarItem.DRAWING,
+            ToolbarItem.DATETIME,
+            ToolbarItem.ITALIC,
             ToolbarItem.RULE,
             ToolbarItem.UNDERLINE,
             ToolbarItem.STRIKE,
+            ToolbarItem.HIGHLIGHT,
             ToolbarItem.LINK,
             ToolbarItem.CODE,
             ToolbarItem.CODE_BLOCK,
@@ -302,23 +345,57 @@ object KardLeafCustomFeatures {
     }
 
     fun getToolbarOrder(context: Context): List<ToolbarItem> {
-        val configured =
-            context
-                .getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
-                .getString(KeyToolbarOrder, null)
-                ?.split(",")
-                ?.mapNotNull { name -> runCatching { ToolbarItem.valueOf(name) }.getOrNull() }
-                .orEmpty()
+        val configured = getToolbarOrderTokens(context)
+            .mapNotNull { name -> runCatching { ToolbarItem.valueOf(name) }.getOrNull() }
 
         return (configured + DefaultToolbarOrder)
-            .map { item ->
-                when (item) {
-                    ToolbarItem.HEADING2,
-                    ToolbarItem.HEADING3 -> ToolbarItem.HEADING
-                    else -> item
-                }
-            }
+            .map(::normalizeToolbarItem)
             .distinct()
+    }
+
+    fun getEditorToolbarOrder(
+        context: Context,
+        customFunctionItems: List<CustomFunctionItem>,
+    ): List<EditorToolbarEntry> {
+        val customItemsById = customFunctionItems.associateBy { it.id }
+        val configured = getToolbarOrderTokens(context).mapNotNull { token ->
+            if (token.startsWith(CustomFunctionToolbarKeyPrefix)) {
+                customItemsById[token.removePrefix(CustomFunctionToolbarKeyPrefix)]
+                    ?.let(EditorToolbarEntry::CustomFunction)
+            } else {
+                runCatching { ToolbarItem.valueOf(token) }
+                    .getOrNull()
+                    ?.let { EditorToolbarEntry.BuiltIn(normalizeToolbarItem(it)) }
+            }
+        }
+        return (
+            configured +
+                DefaultToolbarOrder.map { EditorToolbarEntry.BuiltIn(it) } +
+                customFunctionItems.map { EditorToolbarEntry.CustomFunction(it) }
+            )
+            .distinctBy { it.key }
+    }
+
+    fun saveEditorToolbarOrder(
+        context: Context,
+        order: List<EditorToolbarEntry>,
+    ) {
+        context
+            .getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
+            .edit()
+            .putString(
+                KeyToolbarOrder,
+                order
+                    .map { entry ->
+                        when (entry) {
+                            is EditorToolbarEntry.BuiltIn -> normalizeToolbarItem(entry.item).name
+                            is EditorToolbarEntry.CustomFunction -> entry.key
+                        }
+                    }
+                    .distinct()
+                    .joinToString(","),
+            )
+            .apply()
     }
 
     fun saveToolbarOrder(
@@ -331,35 +408,166 @@ object KardLeafCustomFeatures {
             .putString(
                 KeyToolbarOrder,
                 order
-                    .map { item ->
-                        when (item) {
-                            ToolbarItem.HEADING2,
-                            ToolbarItem.HEADING3 -> ToolbarItem.HEADING
-                            else -> item
-                        }
-                    }
+                    .map(::normalizeToolbarItem)
                     .distinct()
                     .joinToString(",") { it.name },
             )
             .apply()
     }
 
-    fun getCustomSymbols(context: Context): List<String> {
-        val stored = context
+    private fun getToolbarOrderTokens(context: Context): List<String> =
+        context
             .getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
-            .getString(KeyCustomSymbols, null)
-        return stored?.let(::normalizeCustomSymbols) ?: DefaultCustomSymbols
+            .getString(KeyToolbarOrder, null)
+            ?.split(",")
+            .orEmpty()
+
+    private fun normalizeToolbarItem(item: ToolbarItem): ToolbarItem =
+        when (item) {
+            ToolbarItem.HEADING2,
+            ToolbarItem.HEADING3 -> ToolbarItem.HEADING
+            else -> item
+        }
+
+    private val gson = Gson()
+    private val quickTextListType = object : TypeToken<List<QuickTextItem?>>() {}.type
+    private val customFunctionListType = object : TypeToken<List<CustomFunctionItem?>>() {}.type
+
+    fun getQuickTexts(context: Context): List<QuickTextItem> {
+        val preferences = context.getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
+        val stored = preferences.getString(KeyQuickTexts, null)
+            ?: preferences.getString(KeyCustomSymbols, null)
+            ?: return DefaultQuickTexts
+        val decoded = runCatching {
+            gson.fromJson<List<QuickTextItem?>>(stored, quickTextListType)
+        }.getOrNull()
+        val items = decoded
+            ?.filterNotNull()
+            ?.let(::normalizeQuickTexts)
+            ?: normalizeCustomSymbols(stored).map { symbol -> QuickTextItem(name = symbol, content = symbol) }
+        if (preferences.getBoolean(KeyQuickTextDefaultsCleared, false)) return items
+        val migratedItems = removeLegacyDefaultQuickTexts(items)
+        preferences.edit()
+            .putBoolean(KeyQuickTextDefaultsCleared, true)
+            .putString(KeyQuickTexts, gson.toJson(migratedItems))
+            .remove(KeyCustomSymbols)
+            .apply()
+        return migratedItems
     }
+
+    fun saveQuickTexts(
+        context: Context,
+        items: List<QuickTextItem>,
+    ) {
+        context
+            .getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KeyQuickTextDefaultsCleared, true)
+            .putString(KeyQuickTexts, gson.toJson(normalizeQuickTexts(items)))
+            .apply()
+    }
+
+    internal fun removeLegacyDefaultQuickTexts(items: List<QuickTextItem>): List<QuickTextItem> =
+        items.filterNot { it.name == it.content && it.content in RemovedDefaultQuickTextContents }
+
+    fun getCustomFunctionItems(context: Context): List<CustomFunctionItem> {
+        val preferences = context.getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
+        val stored = preferences.getString(KeyCustomFunctionItems, null)
+            ?: return emptyList()
+        val decoded = runCatching {
+            gson.fromJson<List<CustomFunctionItem?>>(stored, customFunctionListType)
+        }.getOrNull()
+            ?: return emptyList()
+        val normalized = normalizeCustomFunctionItems(decoded.filterNotNull())
+        val normalizedStored = gson.toJson(normalized)
+        if (stored != normalizedStored) {
+            preferences.edit().putString(KeyCustomFunctionItems, normalizedStored).apply()
+        }
+        return normalized
+    }
+
+    fun saveCustomFunctionItems(
+        context: Context,
+        items: List<CustomFunctionItem>,
+    ) {
+        context
+            .getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KeyCustomFunctionItems, gson.toJson(normalizeCustomFunctionItems(items)))
+            .apply()
+    }
+
+    fun normalizeQuickText(
+        name: String,
+        content: String,
+    ): QuickTextItem? {
+        val normalizedContent = content.take(MaxQuickTextContentChars)
+        if (normalizedContent.isBlank()) return null
+        val defaultName = normalizedContent.trim().replace(Regex("\\s+"), " ")
+        return QuickTextItem(
+            name = name.trim().ifBlank { defaultName }.take(MaxQuickTextNameChars),
+            content = normalizedContent,
+        )
+    }
+
+    fun normalizeQuickTexts(items: List<QuickTextItem>): List<QuickTextItem> =
+        items
+            .mapNotNull { item -> normalizeQuickText(item.name, item.content) }
+            .distinct()
+            .take(MaxQuickTextItems)
+
+    fun normalizeCustomFunctionItem(
+        name: String,
+        svg: String,
+        content: String,
+        id: String = "",
+    ): CustomFunctionItem? {
+        val normalizedContent = content.take(MaxCustomFunctionContentChars)
+        if (normalizedContent.isBlank()) return null
+        val defaultName = normalizedContent.trim().replace(Regex("\\s+"), " ")
+        val normalizedName = name.trim().ifBlank { defaultName }.take(MaxCustomFunctionNameChars)
+        return CustomFunctionItem(
+            name = normalizedName,
+            svg = svg.trim().take(MaxCustomFunctionSvgChars).ifBlank { normalizedName },
+            content = normalizedContent,
+            id = id.trim(),
+        )
+    }
+
+    fun normalizeCustomFunctionItems(items: List<CustomFunctionItem>): List<CustomFunctionItem> {
+        val usedIds = mutableSetOf<String>()
+        return items
+            .mapNotNull { item -> normalizeCustomFunctionItem(item.name, item.svg, item.content, item.id) }
+            .distinctBy { Triple(it.name, it.svg, it.content) }
+            .take(MaxCustomFunctionItems)
+            .map { item ->
+                val id = item.id.takeIf { it.isNotBlank() && ',' !in it && usedIds.add(it) }
+                    ?: nextCustomFunctionId(usedIds)
+                item.copy(id = id)
+            }
+    }
+
+    private fun nextCustomFunctionId(usedIds: MutableSet<String>): String {
+        var id: String
+        do {
+            id = "custom_${UUID.randomUUID()}"
+        } while (!usedIds.add(id))
+        return id
+    }
+
+    fun getCustomSymbols(context: Context): List<String> = getQuickTexts(context).map { it.content }
 
     fun saveCustomSymbols(
         context: Context,
         symbols: List<String>,
     ) {
-        context
-            .getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KeyCustomSymbols, normalizeCustomSymbols(symbols.joinToString("\n")).joinToString("\n"))
-            .apply()
+        val existing = getQuickTexts(context).associateBy { it.content }
+        saveQuickTexts(
+            context,
+            normalizeCustomSymbols(symbols.joinToString("\n")).map { symbol ->
+                existing[symbol] ?: QuickTextItem(name = symbol, content = symbol)
+            },
+        )
     }
 
     fun normalizeCustomSymbols(raw: String): List<String> =

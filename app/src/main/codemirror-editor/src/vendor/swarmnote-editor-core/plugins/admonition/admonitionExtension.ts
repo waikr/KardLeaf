@@ -17,6 +17,9 @@
  * - 未知类型回退到中性的默认配置 —— 导入的 Obsidian 库中的自定义 callout 不会渲染失败
  */
 import { syntaxTree } from '@codemirror/language';
+import { sourceRevealEnabledField } from '../../core/facets';
+import { shouldRebuildBlockDecorations } from '../../core/pluginUpdateHelper';
+import { renderingSelection, selectionRenderingFrozen } from '../../core/mouseSelecting';
 import { type EditorState, type Extension, type Range, StateField } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, WidgetType } from '@codemirror/view';
 import { DEFAULT_ADMONITION_TYPE, GFM_TYPES } from './presets';
@@ -183,7 +186,7 @@ function buildAdmonitionDecorations(
 ): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   // 获取光标所在的行号
-  const cursorLineNum = state.doc.lineAt(state.selection.main.head).number;
+  const cursorLineNum = state.doc.lineAt(renderingSelection(state).main.head).number;
 
   // 遍历语法树
   syntaxTree(state).iterate({
@@ -210,7 +213,7 @@ function buildAdmonitionDecorations(
       // 光标坐落在此 admonition 块内的任意位置时，不发出任何
       // 装饰。结果是纯 `> [!type] / > body...` markdown，带有编辑器的默认 blockquote 样式 —— 完全可编辑。
       // 点击外部（光标离开块）→ 恢复渲染。
-      if (cursorLineNum >= startLineNum && cursorLineNum <= endLineNum) return;
+      if (state.field(sourceRevealEnabledField) && !selectionRenderingFrozen(state) && cursorLineNum >= startLineNum && cursorLineNum <= endLineNum) return;
 
       // 提取类型名和自定义标题
       const typeRaw = match[1];
@@ -363,7 +366,7 @@ export function createAdmonitionExtension(options: AdmonitionOptions = {}): Exte
       return buildAdmonitionDecorations(state, types);
     },
     update(deco, tr) {
-      if (tr.docChanged || tr.reconfigured || tr.selection) {
+      if (shouldRebuildBlockDecorations(tr)) {
         return buildAdmonitionDecorations(tr.state, types);
       }
       return deco;

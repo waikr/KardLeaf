@@ -1,4 +1,4 @@
-import { Facet } from '@codemirror/state';
+import { Facet, StateEffect, StateField } from '@codemirror/state';
 
 /**
  * 实时预览行为的主开关 Facet
@@ -22,4 +22,17 @@ export const collapseOnSelectionFacet = Facet.define<boolean, boolean>({
    * 如果没有配置，默认为 true（启用实时预览）
    */
   combine: (values) => (values.length > 0 ? values[values.length - 1] : true),
+});
+
+/** 隐藏初始选区的源码标记，真实正文选区提交或显式编辑时再开启。 */
+export const setSourceRevealEnabled = StateEffect.define<boolean>();
+
+export const sourceRevealEnabledField = StateField.define<boolean>({
+  create: () => false,
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setSourceRevealEnabled)) return effect.value;
+    }
+    return value;
+  },
 });

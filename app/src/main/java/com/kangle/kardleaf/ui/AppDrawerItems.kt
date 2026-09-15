@@ -1,12 +1,9 @@
 package com.kangle.kardleaf.ui
 
-import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -43,15 +40,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,10 +52,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.RowScope
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.repository.PrefsManager
-import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
 
-private const val FILE_TREE_TRACE_TAG = "KardLeafFileTree"
+@Composable
+internal fun fileTreePressedBackgroundColor(): Color =
+    MaterialTheme.colorScheme.surfaceVariant.copy(
+        alpha = if (LocalKardLeafThemeStyle.current == PrefsManager.AppThemeStyle.DRACULA) {
+            0.76f
+        } else {
+            0.58f
+        },
+    )
+
 @Composable
 internal fun drawerItemColors() =
     NavigationDrawerItemDefaults.colors(
@@ -83,7 +84,8 @@ internal fun ThemedDrawerItem(
     icon: ImageVector?,
     selected: Boolean,
     onClick: () -> Unit,
-    onLongClick: ((Offset) -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
+    longPressActive: Boolean = false,
     content: (@Composable RowScope.() -> Unit)? = null,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
@@ -91,14 +93,16 @@ internal fun ThemedDrawerItem(
 ) {
     val context = LocalContext.current
     val prefsManager = remember(context) { PrefsManager(context) }
-    val currentOnClick = rememberUpdatedState(onClick)
-    val currentOnLongClick = rememberUpdatedState(onLongClick)
     val drawerStyle = prefsManager.getDrawerStyle()
     val themeStyle = LocalKardLeafThemeStyle.current
     val isModern = themeStyle != PrefsManager.AppThemeStyle.CLASSIC
     val isDracula = themeStyle == PrefsManager.AppThemeStyle.DRACULA
     val isCleanList = themeStyle == PrefsManager.AppThemeStyle.CLEAN_LIST
     val cleanListFeatureIconStyle = prefsManager.getCleanListFeatureIconStyle()
+    val interactionSource = remember { MutableInteractionSource() }
+    val interactionPressed by interactionSource.collectIsPressedAsState()
+    val isPressed = interactionPressed || longPressActive
+    val pressedBackgroundColor = fileTreePressedBackgroundColor()
     if (!isModern && (onLongClick != null || content != null)) {
         Row(
             modifier = modifier
@@ -106,36 +110,20 @@ internal fun ThemedDrawerItem(
                 .padding(horizontal = 12.dp)
                 .then(if (compact) Modifier.height(40.dp) else Modifier)
                 .clip(RoundedCornerShape(12.dp))
-                .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
-                .then(
-                    if (onLongClick == null) {
-                        Modifier.combinedClickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onClick,
-                        )
-                    } else {
-                        Modifier.pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    val pressStart = SystemClock.uptimeMillis()
-                                    KardLeafLog.d(
-                                        FILE_TREE_TRACE_TAG,
-                                        "note pressStart labelHash=${label.hashCode()} " +
-                                            "theme=$themeStyle t=$pressStart",
-                                    )
-                                    val released = tryAwaitRelease()
-                                    KardLeafLog.d(
-                                        FILE_TREE_TRACE_TAG,
-                                        "note pressEnd labelHash=${label.hashCode()} " +
-                                            "released=$released elapsed=${SystemClock.uptimeMillis() - pressStart}",
-                                    )
-                                },
-                                onTap = { currentOnClick.value() },
-                                onLongPress = { offset -> currentOnLongClick.value?.invoke(offset) },
-                            )
-                        }
+                .background(
+                    when {
+                        selected -> MaterialTheme.colorScheme.surfaceVariant
+                        isPressed -> pressedBackgroundColor
+                        else -> Color.Transparent
                     },
+                )
+                .then(
+                    Modifier.combinedClickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        onClick = onClick,
+                        onLongClick = onLongClick,
+                    ),
                 )
                 .padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -176,8 +164,6 @@ internal fun ThemedDrawerItem(
         return
     }
 
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
     val itemShape = when (drawerStyle) {
         PrefsManager.DrawerStyle.MINIMAL_TEXT -> RoundedCornerShape(12.dp)
         PrefsManager.DrawerStyle.ICON_BOX -> RoundedCornerShape(if (isDracula) 10.dp else 22.dp)
@@ -217,7 +203,7 @@ internal fun ThemedDrawerItem(
                 else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (isDracula) 0.92f else 0.86f)
             }
         } else if (isPressed) {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDracula) 0.76f else 0.58f)
+            pressedBackgroundColor
         } else {
             Color.Transparent
         },
@@ -241,50 +227,20 @@ internal fun ThemedDrawerItem(
         },
         label = "DrawerItemIconBackground",
     )
-    val pressedScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.985f else 1f,
-        label = "DrawerItemPressedScale",
-    )
     Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = if (compact) 1.dp else if (drawerStyle == PrefsManager.DrawerStyle.MINIMAL_TEXT) 2.dp else 3.dp)
-            .graphicsLayer {
-                scaleX = pressedScale
-                scaleY = pressedScale
-            }
             .clip(itemShape)
             .background(backgroundColor)
             .border(1.dp, borderColor, itemShape)
             .then(
-                if (onLongClick == null) {
-                    Modifier.combinedClickable(
-                        interactionSource = interactionSource,
-                        indication = null,
-                        onClick = onClick,
-                    )
-                } else {
-                    Modifier.pointerInput(Unit) {
-                        detectTapGestures(
-                            onPress = {
-                                val pressStart = SystemClock.uptimeMillis()
-                                KardLeafLog.d(
-                                    FILE_TREE_TRACE_TAG,
-                                    "note pressStart labelHash=${label.hashCode()} " +
-                                        "theme=$themeStyle t=$pressStart",
-                                )
-                                val released = tryAwaitRelease()
-                                KardLeafLog.d(
-                                    FILE_TREE_TRACE_TAG,
-                                    "note pressEnd labelHash=${label.hashCode()} " +
-                                        "released=$released elapsed=${SystemClock.uptimeMillis() - pressStart}",
-                                )
-                            },
-                            onTap = { currentOnClick.value() },
-                            onLongPress = { offset -> currentOnLongClick.value?.invoke(offset) },
-                        )
-                    }
-                },
+                Modifier.combinedClickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                ),
             )
             .padding(horizontal = itemHorizontalPadding, vertical = effectiveItemVerticalPadding),
         verticalAlignment = Alignment.CenterVertically,

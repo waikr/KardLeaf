@@ -11,6 +11,8 @@
  */
 import type { EditorState } from '@codemirror/state';
 import type { RevealStrategy } from './types';
+import { sourceRevealEnabledField } from '../../core/facets';
+import { renderingSelection, selectionGestureActive } from '../../core/mouseSelecting';
 
 /**
  * 判断是否应该显示源码（隐藏装饰）
@@ -27,7 +29,7 @@ import type { RevealStrategy } from './types';
  * @param from - 起始位置
  * @param to - 结束位置
  * @param strategy - 显示策略
- * @returns true 表示应该显示源码（隐藏 widget）
+ * @returns true 表示应该显示源码（隐藏 widget）；原生选区手势期间始终返回 false
  */
 export function shouldReveal(
   state: EditorState,
@@ -35,10 +37,16 @@ export function shouldReveal(
   to: number,
   strategy: RevealStrategy | boolean,
 ): boolean {
+  if (!state.field(sourceRevealEnabledField, false)) return false;
+  // A native text-selection gesture must remain on the rendered surface. The
+  // widget tree is already kept stable by checkUpdateAction; revealing source
+  // here would turn a long-press into a source-mode flash.
+  if (selectionGestureActive(state)) return false;
+
   // 布尔值策略直接返回
   if (typeof strategy === 'boolean') return strategy;
 
-  const selection = state.selection.main;
+  const selection = renderingSelection(state).main;
 
   switch (strategy) {
     case 'line': {

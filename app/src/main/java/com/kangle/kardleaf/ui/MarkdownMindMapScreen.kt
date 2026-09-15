@@ -1475,6 +1475,7 @@ function applyNodeTheme(key) {
       );
     });
     nodes.forEach(prepareNodeMetrics);
+    invalidateLayout('theme-change');
     layoutMindMap();
     render();
     resetView('theme-change');
@@ -1623,6 +1624,7 @@ let lastDropResolution = 'not-resolved';
 let lastSiblingCandidates = 'none';
 let lastChildHits = 'none';
 let animationVersion = 0;
+let layoutVersion = 0;
 let suppressTapUntil = 0;
 let lastBlankTapTime = 0;
 let selectedKey = null;
@@ -1690,6 +1692,21 @@ function nodeVisualWidth(n) { return n && n.width ? n.width : (n && n.root ? min
 function nodeVisualHeight(n) { return n && n.height ? n.height : minNodeHeight; }
 function nodeCenter(n) { return { x: n.x + nodeVisualWidth(n) / 2, y: n.y + nodeVisualHeight(n) / 2 }; }
 function effChildren(n) { return collapsedKeys.has(n.key) ? [] : n.children; }
+function invalidateLayout(reason) {
+  layoutVersion += 1;
+  animationVersion += 1;
+  traceDrag('layout-invalidate reason=' + reason + ' layoutVersion=' + layoutVersion + ' animationVersion=' + animationVersion);
+  return animationVersion;
+}
+function cancelLayoutAnimation() { animationVersion += 1; }
+function applyLayoutPositions() {
+  nodes.forEach(n => {
+    if (Number.isFinite(n.layoutX) && Number.isFinite(n.layoutY)) {
+      n.x = n.layoutX;
+      n.y = n.layoutY;
+    }
+  });
+}
 function isCompactNode(node) {
   return Boolean(activeTheme.compactDescendants && node && !node.root && node.depth > 1);
 }
@@ -1745,7 +1762,7 @@ function paintBranch(node, fill, accent, childFill, branchTextColor) {
 function buildTree(nextRoot, nextNodes) {
   rootData = nextRoot || { text: '未命名节点', line: 1, sourceOffset: 0 };
   nodesData = Array.isArray(nextNodes) ? nextNodes : [];
-  root = { key: 'root', index: 0, depth: 0, text: rootData.text, line: rootData.line, sourceOffset: rootData.sourceOffset, x: 0, y: 0, parent: null, children: [], root: true, direction: 'right', color: activeTheme.rootColor, accent: activeTheme.nodeBorderColor || activeTheme.rootColor };
+  root = { key: 'root', index: 0, depth: 0, text: rootData.text, line: rootData.line, sourceOffset: rootData.sourceOffset, x: 0, y: 0, layoutX: 0, layoutY: 0, parent: null, children: [], root: true, direction: 'right', color: activeTheme.rootColor, accent: activeTheme.nodeBorderColor || activeTheme.rootColor };
   const stack = [root];
   const keyCounts = new Map();
   nodes = [root];
@@ -1756,7 +1773,7 @@ function buildTree(nextRoot, nextNodes) {
     const keyBase = String(item.text || '') + '|' + String(depth);
     const keyCount = (keyCounts.get(keyBase) || 0) + 1;
     keyCounts.set(keyBase, keyCount);
-    const node = { key: keyBase + '|' + keyCount, index: item.index, depth: depth, text: item.text, line: item.line, sourceOffset: item.sourceOffset, x: 0, y: 0, parent: parent, children: [], root: false, direction: 'right', color: activeTheme.rootColor, accent: activeTheme.rootColor };
+    const node = { key: keyBase + '|' + keyCount, index: item.index, depth: depth, text: item.text, line: item.line, sourceOffset: item.sourceOffset, x: 0, y: 0, layoutX: 0, layoutY: 0, parent: parent, children: [], root: false, direction: 'right', color: activeTheme.rootColor, accent: activeTheme.rootColor };
     parent.children.push(node);
     nodes.push(node);
     stack[depth] = node;
@@ -1774,42 +1791,53 @@ function buildTree(nextRoot, nextNodes) {
 }
 function measureSubtree(node) {
   const children = effChildren(node);
+  const height = nodeVisualHeight(node);
   if (!children.length) {
-    node.subtreeHeight = nodeVisualHeight(node);
+    node.topExtent = -height / 2;
+    node.bottomExtent = height / 2;
+    node.childOffsets = [];
+    node.subtreeHeight = height;
     return node.subtreeHeight;
   }
-  const childrenHeight = children.reduce((sum, child) => sum + measureSubtree(child), 0)
-    + siblingGap * Math.max(0, children.length - 1);
-  node.subtreeHeight = Math.max(nodeVisualHeight(node), childrenHeight);
+  children.forEach(measureSubtree);
+  const childOffsets = arrangeChildGroup(children);
+  node.childOffsets = childOffsets;
+  const childTop = Math.min.apply(null, children.map(child => child.layoutOffsetY + child.topExtent));
+  const childBottom = Math.max.apply(null, children.map(child => child.layoutOffsetY + child.bottomExtent));
+  node.topExtent = Math.min(-height / 2, childTop);
+  node.bottomExtent = Math.max(height / 2, childBottom);
+  node.subtreeHeight = node.bottomExtent - node.topExtent;
   return node.subtreeHeight;
+}
+function arrangeChildGroup(children) {
+  if (!children.length) return [];
+  let cursor = 0;
+  const rawCenters = [];
+  children.forEach((child, index) => {
+    const rawCenter = cursor - child.topExtent;
+    rawCenters.push(rawCenter);
+    cursor = rawCenter + child.bottomExtent;
+    if (index < children.length - 1) cursor += siblingGap;
+  });
+  const groupCenter = (rawCenters[0] + rawCenters[rawCenters.length - 1]) / 2;
+  return children.map((child, index) => {
+    const offsetY = rawCenters[index] - groupCenter;
+    child.layoutOffsetY = offsetY;
+    return { key: child.key, offsetY };
+  });
 }
 function assignDirection(node, direction) {
   node.direction = direction;
   node.children.forEach(child => assignDirection(child, direction));
 }
-function shiftSubtreeY(node, delta) {
-  node.y += delta;
-  effChildren(node).forEach(child => shiftSubtreeY(child, delta));
-}
-function layoutBranch(node, depth, top) {
+function layoutBranch(node, parentCenterY) {
   const parent = node.parent || root;
-  node.x = node.direction === 'left'
-    ? parent.x - horizontalGap - nodeVisualWidth(node)
-    : parent.x + nodeVisualWidth(parent) + horizontalGap;
-  const children = effChildren(node);
-  if (!children.length) {
-    node.y = top + (node.subtreeHeight - nodeVisualHeight(node)) / 2;
-    return;
-  }
-  let childTop = top;
-  children.forEach(child => {
-    layoutBranch(child, depth + 1, childTop);
-    childTop += child.subtreeHeight + siblingGap;
-  });
-  const firstCenter = children[0].y + nodeVisualHeight(children[0]) / 2;
-  const lastChild = children[children.length - 1];
-  const lastCenter = lastChild.y + nodeVisualHeight(lastChild) / 2;
-  node.y = (firstCenter + lastCenter) / 2 - nodeVisualHeight(node) / 2;
+  node.layoutX = node.direction === 'left'
+    ? parent.layoutX - horizontalGap - nodeVisualWidth(node)
+    : parent.layoutX + nodeVisualWidth(parent) + horizontalGap;
+  const centerY = parentCenterY + (node.layoutOffsetY || 0);
+  node.layoutY = centerY - nodeVisualHeight(node) / 2;
+  effChildren(node).forEach(child => layoutBranch(child, centerY));
 }
 function collectVisible(node) {
   effChildren(node).forEach(child => {
@@ -1817,51 +1845,49 @@ function collectVisible(node) {
     collectVisible(child);
   });
 }
-function layoutMindMap() {
+function layoutMindMap(applyDisplay = true) {
   if (!root) return;
   const rootChildren = effChildren(root);
   rootChildren.forEach(measureSubtree);
   const left = [];
   const right = [];
-  let leftHeight = 0;
-  let rightHeight = 0;
   rootChildren.forEach((child, childIndex) => {
     if (layoutMode === 'side' || childIndex % 2 === 0) {
       right.push(child);
-      rightHeight += child.subtreeHeight + siblingGap;
     } else {
       left.push(child);
-      leftHeight += child.subtreeHeight + siblingGap;
     }
   });
-  leftHeight = Math.max(0, leftHeight - siblingGap);
-  rightHeight = Math.max(0, rightHeight - siblingGap);
-  const mapHeight = Math.max(nodeVisualHeight(root), leftHeight, rightHeight);
-  root.x = 0;
-  root.y = (mapHeight - nodeVisualHeight(root)) / 2;
-  let leftTop = (mapHeight - leftHeight) / 2;
+  root.layoutX = 0;
+  root.layoutY = -nodeVisualHeight(root) / 2;
+  root.layoutOffsetY = 0;
+  const leftOffsets = arrangeChildGroup(left);
+  const rightOffsets = arrangeChildGroup(right);
+  root.childOffsets = leftOffsets.concat(rightOffsets);
   left.forEach(child => {
     assignDirection(child, 'left');
-    layoutBranch(child, 1, leftTop);
-    leftTop += child.subtreeHeight + siblingGap;
+    layoutBranch(child, 0);
   });
-  let rightTop = (mapHeight - rightHeight) / 2;
   right.forEach(child => {
     assignDirection(child, 'right');
-    layoutBranch(child, 1, rightTop);
-    rightTop += child.subtreeHeight + siblingGap;
+    layoutBranch(child, 0);
   });
-  if (rootChildren.length) {
-    const firstCenter = nodeCenter(rootChildren[0]).y;
-    const lastCenter = nodeCenter(rootChildren[rootChildren.length - 1]).y;
-    root.y = (firstCenter + lastCenter) / 2 - nodeVisualHeight(root) / 2;
-  }
+  const rootCenterY = 0;
+  root.topExtent = -nodeVisualHeight(root) / 2;
+  root.bottomExtent = nodeVisualHeight(root) / 2;
+  rootChildren.forEach(child => {
+    const childCenterY = rootCenterY + (child.layoutOffsetY || 0);
+    root.topExtent = Math.min(root.topExtent, childCenterY + child.topExtent);
+    root.bottomExtent = Math.max(root.bottomExtent, childCenterY + child.bottomExtent);
+  });
+  root.subtreeHeight = root.bottomExtent - root.topExtent;
   visibleNodes = [root];
   collectVisible(root);
   if (selectedKey && !visibleNodes.some(n => n.key === selectedKey)) {
     selectedKey = null;
     updateActionBar();
   }
+  if (applyDisplay) applyLayoutPositions();
 }
 function updateLayoutButton() {
   const isSide = layoutMode === 'side';
@@ -1884,14 +1910,21 @@ function toggleLayoutMode() {
 }
 function capturePositions() {
   const positions = new Map();
-  nodes.forEach(n => positions.set(n.key, { x: n.x, y: n.y }));
+  visibleNodes.forEach(n => {
+    if (Number.isFinite(n.x) && Number.isFinite(n.y)) positions.set(n.key, { x: n.x, y: n.y });
+  });
+  return positions;
+}
+function captureLayoutPositions() {
+  const positions = new Map();
+  nodes.forEach(n => positions.set(n.key, { x: n.layoutX, y: n.layoutY }));
   return positions;
 }
 function animateLayoutFrom(previousPositions, duration, onComplete) {
-  const version = ++animationVersion;
-  layoutMindMap();
-  const targets = new Map();
-  nodes.forEach(n => targets.set(n.key, { x: n.x, y: n.y }));
+  const version = invalidateLayout('animated');
+  layoutMindMap(false);
+  const targetLayoutVersion = layoutVersion;
+  const targets = captureLayoutPositions();
   const starts = new Map();
   nodes.forEach(n => {
     const previous = previousPositions.get(n.key);
@@ -1902,7 +1935,7 @@ function animateLayoutFrom(previousPositions, duration, onComplete) {
   render();
   const startedAt = performance.now();
   function step(now) {
-    if (version !== animationVersion) return;
+    if (version !== animationVersion || targetLayoutVersion !== layoutVersion) return;
     const progress = clamp((now - startedAt) / duration, 0, 1);
     const eased = 1 - Math.pow(1 - progress, 3);
     nodes.forEach(n => {
@@ -1913,7 +1946,11 @@ function animateLayoutFrom(previousPositions, duration, onComplete) {
     });
     render();
     if (progress < 1) requestAnimationFrame(step);
-    else if (onComplete) onComplete();
+    else {
+      applyLayoutPositions();
+      render();
+      if (onComplete) onComplete();
+    }
   }
   requestAnimationFrame(step);
 }
@@ -1925,6 +1962,46 @@ function sameMindMapData(nextRoot, nextNodes) {
     const current = nodesData[index];
     return current && current.index === item.index && current.depth === item.depth &&
       current.text === item.text && current.line === item.line && current.sourceOffset === item.sourceOffset;
+  });
+}
+function nodeStructureSignature(node) {
+  return JSON.stringify([
+    node.depth,
+    node.text,
+    node.children.map(child => nodeStructureSignature(child)),
+  ]);
+}
+function captureNodeState() {
+  const state = [];
+  nodes.forEach(node => {
+    if (collapsedKeys.has(node.key) || selectedKey === node.key) {
+      state.push({
+        signature: nodeStructureSignature(node),
+        collapsed: collapsedKeys.has(node.key),
+        selected: selectedKey === node.key,
+      });
+    }
+  });
+  return state;
+}
+function restoreNodeState(previousState) {
+  collapsedKeys.clear();
+  selectedKey = null;
+  const previousCounts = new Map();
+  previousState.forEach(item => previousCounts.set(item.signature, (previousCounts.get(item.signature) || 0) + 1));
+  const candidates = new Map();
+  nodes.forEach(node => {
+    const signature = nodeStructureSignature(node);
+    const matches = candidates.get(signature) || [];
+    matches.push(node);
+    candidates.set(signature, matches);
+  });
+  previousState.forEach(item => {
+    const matches = candidates.get(item.signature);
+    if (previousCounts.get(item.signature) !== 1 || !matches || matches.length !== 1) return;
+    const node = matches[0];
+    if (item.collapsed) collapsedKeys.add(node.key);
+    if (item.selected) selectedKey = node.key;
   });
 }
 function cancelActivePointerInteraction(reason) {
@@ -1943,7 +2020,7 @@ function cancelActivePointerInteraction(reason) {
   pinch = null;
   dropIntent = null;
   activePointers.clear();
-  animationVersion += 1;
+  cancelLayoutAnimation();
 }
 function applyMindMapData(nextRoot, nextNodes) {
   if (sameMindMapData(nextRoot, nextNodes)) return;
@@ -1960,24 +2037,21 @@ function applyMindMapData(nextRoot, nextNodes) {
   );
   cancelActivePointerInteraction('tree-refresh');
   const previousPositions = hasMindMapData ? capturePositions() : new Map();
+  const previousNodeState = captureNodeState();
   const selectedBefore = selectedKey ? nodes.find(item => item.key === selectedKey) : null;
   const collapsedBeforeIndices = Array.from(collapsedKeys).map(key => {
     const item = nodes.find(candidate => candidate.key === key);
     return item ? item.index : -1;
   }).join(',');
   buildTree(nextRoot, nextNodes);
-  const validKeys = new Set(nodes.map(n => n.key));
-  Array.from(collapsedKeys).forEach(key => { if (!validKeys.has(key)) collapsedKeys.delete(key); });
-  if (selectedKey && !validKeys.has(selectedKey)) {
-    selectedKey = null;
-  }
+  restoreNodeState(previousNodeState);
   const selectedAfter = selectedKey ? nodes.find(item => item.key === selectedKey) : null;
   const collapsedAfterIndices = Array.from(collapsedKeys).map(key => {
     const item = nodes.find(candidate => candidate.key === key);
     return item ? item.index : -1;
   }).join(',');
   traceDrag(
-    'tree-state keyStrategy=text-depth-occurrence' +
+    'tree-state stateMigration=unique-structure' +
       ' selectedBefore=' + (selectedBefore ? selectedBefore.index : 'none') +
       ' selectedAfter=' + (selectedAfter ? selectedAfter.index : 'none') +
       ' selectedBeforeTextLen=' + (selectedBefore ? selectedBefore.text.length : 'none') +
@@ -1989,6 +2063,7 @@ function applyMindMapData(nextRoot, nextNodes) {
   updateActionBar();
   updateCollapseAllButton();
   if (!hasMindMapData) {
+    invalidateLayout('initial');
     layoutMindMap();
     render();
     hasMindMapData = true;
@@ -2583,7 +2658,7 @@ function beginInlineRename(node) {
       ' selectedBefore=' + (selectedKey ? (findNodeByKey(selectedKey) ? findNodeByKey(selectedKey).index : 'stale') : 'none') +
       ' scale=' + scale.toExponential(3),
   );
-  animationVersion += 1;
+  invalidateLayout('rename-begin');
   layoutMindMap();
   selectedKey = node.key;
   editingKey = node.key;
@@ -2665,6 +2740,7 @@ window.KardLeafMindMapSelectNode = index => {
   }
   if (changed) {
     updateCollapseAllButton();
+    invalidateLayout('outline-select');
     layoutMindMap();
   }
   selectNode(node);
@@ -2753,6 +2829,10 @@ function clearDragLongPress(item) {
 }
 function restoreDraggedSubtree(item) {
   if (!item || !Array.isArray(item.subtreeStarts)) return;
+  if (item.layoutVersion !== layoutVersion) {
+    applyLayoutPositions();
+    return;
+  }
   item.subtreeStarts.forEach(start => {
     start.node.x = start.x;
     start.node.y = start.y;
@@ -2795,6 +2875,8 @@ function activateNodeDrag(item) {
   if (!item || item.mode !== 'press' || !item.node || item.node.root) return false;
   clearDragLongPress(item);
   item.mode = 'node';
+  cancelLayoutAnimation();
+  applyLayoutPositions();
   const world = screenToWorld(item.lastX, item.lastY);
   item.worldStartX = world.x;
   item.worldStartY = world.y;
@@ -2803,7 +2885,7 @@ function activateNodeDrag(item) {
   item.subtreeStarts = nodes
     .filter(node => node === item.node || isDescendantOf(node, item.node))
     .map(node => ({ node, x: node.x, y: node.y }));
-  animationVersion += 1;
+  item.layoutVersion = layoutVersion;
   const api = window.KardLeafMindMap;
   if (api && api.onLongPress) api.onLongPress();
   const parent = item.node.parent;
@@ -3159,10 +3241,6 @@ function finishPointer(e) {
     startPanFling(item.velocityX, item.velocityY);
   }
   if (!item.moved && item.mode !== 'node') {
-    if (item.node && !item.node.root) {
-      item.node.x = item.nodeStartX;
-      item.node.y = item.nodeStartY;
-    }
     traceDrag(
       'finish type=' + e.type + ' node=' + (item.node ? item.node.index : 'none') + ' result=tap',
     );

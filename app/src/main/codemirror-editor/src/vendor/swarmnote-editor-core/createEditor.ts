@@ -6,10 +6,14 @@ import { GFM } from '@lezer/markdown';
 import { languages as codeLanguages } from '@codemirror/language-data';
 import { syntaxHighlighting } from '@codemirror/language';
 import { searchKeymap } from '@codemirror/search';
-import { EditorView, drawSelection, dropCursor, highlightActiveLine, keymap } from '@codemirror/view';
+import { EditorView, dropCursor, highlightActiveLine, keymap } from '@codemirror/view';
 import { classHighlighter } from '@lezer/highlight';
 
-import { collapseOnSelectionFacet, mouseSelectingExtension } from './core';
+import {
+  collapseOnSelectionFacet,
+  mouseSelectingExtension,
+  sourceRevealEnabledField,
+} from './core';
 import { EditorControlImpl } from './EditorControl';
 import { editorEventCallback, EditorEventType, type EditorEvent } from './events';
 import { execCommandFacet, type ExecCommandRef } from './pluginHost';
@@ -118,11 +122,13 @@ export function createEditor(
 
   const extensions: Extension[] = [
     collapseOnSelectionFacet.of(true),
+    sourceRevealEnabledField,
     mouseSelectingExtension,
     scrollMarginsCompartment.of(EditorView.scrollMargins.of(() => ({ bottom: 0 }))),
     contentPaddingCompartment.of(EditorView.contentAttributes.of({ style: 'padding-bottom: 32px' })),
     history(),
-    drawSelection(),
+    // Chromium paints the selection natively (compositor thread), so long-press
+    // handle drags do not depend on a replacement DOM selection layer.
     dropCursor(),
     highlightActiveLine(),
     closeBrackets(),

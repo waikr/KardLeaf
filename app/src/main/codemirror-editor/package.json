@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/apply-codemirror-view-patch.mjs",
+    "pretest": "node scripts/apply-codemirror-view-patch.mjs",
+    "test": "node --test test/*.test.mjs",
+    "prebuild": "node scripts/apply-codemirror-view-patch.mjs",
     "build": "esbuild src/editor.ts --bundle --minify --format=iife --target=chrome96 --outfile=../assets/codemirror-editor/editor.js --legal-comments=linked --loader:.css=text"
   },
   "dependencies": {

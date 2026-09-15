@@ -1,0 +1,158 @@
+
+.mobile-selection-toolbar {
+  position: fixed;
+  z-index: 24;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid var(--kl-shell-border, #ddd);
+  border-radius: 10px;
+  background: var(--kl-shell-bg, #fff);
+  box-shadow: 0 3px 12px #0003;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  animation: selection-toolbar-in 120ms ease-out;
+}
+
+@keyframes selection-toolbar-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px) scale(0.98);
+  }
+}
+
+.mobile-selection-toolbar.is-two-row {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.selection-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.selection-pager-button {
+  display: grid;
+  place-items: center;
+  /* Same 44px minimum touch target as every command button: in single-row
+     mode this arrow is the only path into the custom commands. */
+  width: 44px;
+  min-height: 44px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--kl-shell-muted, #666);
+  touch-action: manipulation;
+  transition: background-color 180ms ease-out;
+}
+
+/* Row-start pager (back arrow) hugs the left edge instead. */
+.selection-pager-button:first-child {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.selection-pager-button:active:not(:disabled),
+.selection-pager-button.is-pressed {
+  background: var(--kl-shell-soft, #ddd);
+  transition-duration: 0ms;
+}
+
+.selection-pager-button:disabled {
+  opacity: 0.35;
+}
+
+/* Screen-reader-only page announcement. */
+.selection-page-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+.selection-toolbar-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--kl-shell-fg, #222);
+  touch-action: manipulation;
+  transition: background-color 180ms ease-out;
+}
+
+.selection-toolbar-button:active,
+.selection-toolbar-button.is-pressed {
+  background: var(--kl-shell-soft, #ddd);
+  transition-duration: 0ms;
+}
+
+.selection-toolbar-button:focus-visible {
+  outline: 2px solid var(--kl-shell-fg, #222);
+  outline-offset: -2px;
+}
+
+.selection-toolbar-button:focus-within {
+  outline: 2px solid var(--kl-shell-fg, #222);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-selection-toolbar {
+    animation: none;
+  }
+}
+
+.selection-toolbar-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.selection-toolbar-icon-select-all rect {
+  stroke-dasharray: 2.4 2.4;
+}
+
+.selection-toolbar-icon-format {
+  width: 28px;
+  height: 28px;
+}
+
+.selection-toolbar-icon-pager {
+  width: 20px;
+  height: 20px;
+  color: var(--kl-shell-muted, #858585);
+  stroke-width: 5;
+}
+
+.selection-toolbar-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+  pointer-events: none;
+  touch-action: manipulation;
+}

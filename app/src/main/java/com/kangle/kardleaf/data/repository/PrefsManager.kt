@@ -32,6 +32,7 @@ class PrefsManager(context: Context) {
             }
         }
     private val syncPreferences = SyncPreferences(context, prefs)
+    val s3Preferences = com.kangle.kardleaf.data.repository.prefs.S3Preferences(context)
     private val privacyPreferences = PrivacyPreferences(prefs)
     private val editorPreferences = EditorPreferences(prefs)
     private val dashboardPreferences = DashboardPreferences(prefs)
@@ -310,6 +311,22 @@ class PrefsManager(context: Context) {
     fun getMindMapTheme(): MindMapTheme =
         MindMapTheme.fromKey(prefs.getString(KEY_MIND_MAP_THEME, MindMapTheme.PLAIN.key))
 
+    internal fun getTextSelectionToolbarSettings() = editorPreferences.getTextSelectionToolbarSettings()
+
+    internal fun saveTextSelectionToolbarSettings(enabled: Boolean, rows: Int, commands: List<String>) =
+        editorPreferences.saveTextSelectionToolbarSettings(enabled, rows, commands)
+
+    internal fun observeTextSelectionToolbarSettings(onChange: () -> Unit): () -> Unit {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == com.kangle.kardleaf.ui.editor.selection.TextSelectionToolbarSettings.ENABLED_KEY ||
+                key == com.kangle.kardleaf.ui.editor.selection.TextSelectionToolbarSettings.ROWS_KEY ||
+                key == com.kangle.kardleaf.ui.editor.selection.TextSelectionToolbarSettings.COMMANDS_KEY
+            ) onChange()
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        return { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     fun saveEditorKernel(kernel: EditorKernel) = editorPreferences.saveKernel(kernel)
 
     fun getEditorKernel(): EditorKernel = editorPreferences.getKernel()
@@ -493,7 +510,10 @@ class PrefsManager(context: Context) {
 
     fun saveWebDavRealtimePollIntervalMs(intervalMs: Long) = syncPreferences.saveRealtimePollIntervalMs(intervalMs)
 
-    fun markWebDavRealtimeLocalDirty() = syncPreferences.markRealtimeLocalDirty()
+    fun markWebDavRealtimeLocalDirty() {
+        syncPreferences.markRealtimeLocalDirty()
+        getRootUri()?.let(s3Preferences::markDirty)
+    }
 
     fun getWebDavRealtimeLocalDirtyMs(): Long = syncPreferences.getRealtimeLocalDirtyMs()
 

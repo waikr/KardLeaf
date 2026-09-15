@@ -17,9 +17,11 @@ import type { EditorState } from '@codemirror/state';
 import { EditorView, WidgetType } from '@codemirror/view';
 import type { SyntaxNodeRef } from '@lezer/common';
 import type { InlineRenderingSpec, RevealStrategy } from './types';
+import { runWhenNativeSelectionSettled } from '../../core/mouseSelecting';
 
 /** KaTeX 模块缓存（懒加载） */
 let katexModule: typeof import('katex') | null = null;
+const mathDomCleanups = new WeakMap<HTMLElement, () => void>();
 
 /**
  * 异步加载 KaTeX 模块
@@ -93,14 +95,17 @@ class MathWidget extends WidgetType {
     // 异步加载 KaTeX 并渲染公式
     void loadKaTeX().then((katex) => {
       if (!container.isConnected) return;  // 元素已断开连接，跳过
-      try {
-        // 渲染公式（displayMode: false 表示内联模式）
-        katex.render(this.tex, container, { displayMode: false, throwOnError: false });
-      } catch {
-        // 渲染失败：回退到显示原始 LaTeX 并添加错误样式
-        container.textContent = this.tex;
-        container.classList.add('cm-math-error');
-      }
+      const cleanup = runWhenNativeSelectionSettled(view, container, () => {
+        try {
+          // 渲染公式（displayMode: false 表示内联模式）
+          katex.render(this.tex, container, { displayMode: false, throwOnError: false });
+        } catch {
+          // 渲染失败：回退到显示原始 LaTeX 并添加错误样式
+          container.textContent = this.tex;
+          container.classList.add('cm-math-error');
+        }
+      });
+      mathDomCleanups.set(container, cleanup);
     });
 
     // 加载中显示占位文本（原始 LaTeX）
@@ -122,6 +127,11 @@ class MathWidget extends WidgetType {
     });
 
     return container;
+  }
+
+  destroy(dom: HTMLElement) {
+    mathDomCleanups.get(dom)?.();
+    mathDomCleanups.delete(dom);
   }
 
   /**

@@ -25,6 +25,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
@@ -64,6 +67,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -100,6 +105,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.TextRange
@@ -146,6 +152,22 @@ private fun parseGitChangedFileDetails(raw: String): List<GitChangedFileDetail> 
         )
     }.toList().sortedByDescending { it.modifiedMs }
 
+@Composable
+private fun CloudSyncTabRow(selectedPage: String, onPageSelected: (String) -> Unit) {
+    TabRow(selectedTabIndex = if (selectedPage == "s3") 1 else 0) {
+        Tab(
+            selected = selectedPage == "webDav",
+            onClick = { onPageSelected("webDav") },
+            text = { Text("WebDAV") },
+        )
+        Tab(
+            selected = selectedPage == "s3",
+            onClick = { onPageSelected("s3") },
+            text = { Text("S3") },
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
 @Composable
 fun KardLeafSettingsScreen(
@@ -169,6 +191,7 @@ fun KardLeafSettingsScreen(
     onOpenRecordNote: (String) -> Unit = {},
     onCleanupHistory: () -> Unit = {},
     onWebDavVaultChanged: (List<String>) -> Unit = {},
+    s3SyncManager: com.kangle.kardleaf.data.sync.S3CloudSyncManager? = null,
     onSetPrivacyPassword: suspend (String?, String) -> Result<Unit> = { _, _ -> Result.failure(IllegalStateException("隐私仓库不可用")) },
     onRemovePrivacyPassword: suspend (String) -> Result<Unit> = { Result.failure(IllegalStateException("隐私仓库不可用")) },
     labels: List<String> = emptyList(),
@@ -225,6 +248,7 @@ fun KardLeafSettingsScreen(
                 settingsSearchQuery = ""
                 settingsPage = settingsSearchOriginPage
             }
+            "quickTexts", "customFunctions" -> settingsPage = "toolbar"
             else -> returnToSettingsMain()
         }
     }
@@ -267,6 +291,7 @@ fun KardLeafSettingsScreen(
     val autoFileNameTemplate = autoFileNameTemplateFieldValue.text
     var openNoteMode by remember { mutableStateOf(KardLeafCustomFeatures.getOpenNoteMode(context)) }
     var editorKernel by remember { mutableStateOf(prefsManager.getEditorKernel()) }
+    var textSelectionToolbarEnabled by remember { mutableStateOf(prefsManager.getTextSelectionToolbarSettings().enabled) }
     var previewTheme by remember { mutableStateOf(prefsManager.getPreviewTheme()) }
     var autoCodeMirrorThresholdText by remember { mutableStateOf(prefsManager.getAutoCodeMirrorThresholdChars().toString()) }
     var codeMirrorLivePreviewEnabled by remember { mutableStateOf(prefsManager.isCodeMirrorLivePreviewEnabled()) }
@@ -326,8 +351,10 @@ fun KardLeafSettingsScreen(
     var doubleTapIntervalText by remember { mutableStateOf(prefsManager.getPreviewDoubleTapIntervalMs().toString()) }
     var trashAutoCleanDaysText by remember { mutableStateOf(prefsManager.getTrashAutoCleanDays().toString()) }
     var passwordInputMode by remember { mutableStateOf(prefsManager.getPasswordInputMode()) }
-    var toolbarOrder by remember { mutableStateOf(KardLeafCustomFeatures.getToolbarOrder(context)) }
-    var customSymbolsText by remember { mutableStateOf(KardLeafCustomFeatures.getCustomSymbols(context).joinToString("\n")) }
+    var customFunctionItems by remember { mutableStateOf(KardLeafCustomFeatures.getCustomFunctionItems(context)) }
+    var toolbarOrder by remember {
+        mutableStateOf(KardLeafCustomFeatures.getEditorToolbarOrder(context, customFunctionItems))
+    }
     var editorTopToolbarOrder by remember { mutableStateOf(prefsManager.getEditorTopToolbarItemOrder()) }
     var editorTopToolbarMoreItems by remember { mutableStateOf(prefsManager.getEditorTopToolbarMoreItems()) }
     var editorTopToolbarHiddenItems by remember { mutableStateOf(prefsManager.getEditorTopToolbarHiddenItems()) }
@@ -408,15 +435,16 @@ fun KardLeafSettingsScreen(
         SettingsSearchItem(Icons.Outlined.Folder, settingsText(settingsEnglish, "笔记库", "Vault"), "常规 / General", "笔记库 vault repository", { openSettingsPage("vault") }),
         SettingsSearchItem(Icons.Outlined.Palette, settingsText(settingsEnglish, "主题设置", "Theme"), "常规 / General", "主题 theme 外观 appearance 配色 color", { openSettingsPage("theme") }),
         SettingsSearchItem(Icons.Outlined.Tune, settingsText(settingsEnglish, "应用界面", "Interface"), "常规 / General", "应用界面 interface 布局 layout 排序 sorting 启动分类 icons", { openSettingsPage("interface") }),
-        SettingsSearchItem(Icons.Outlined.ViewAgenda, settingsText(settingsEnglish, "侧边栏", "Sidebar"), "常规 / General", "侧边栏 sidebar 抽屉 drawer", { openSettingsPage("drawerSettings") }),
+        SettingsSearchItem(settingsSidebarIcon, settingsText(settingsEnglish, "侧边栏", "Sidebar"), "常规 / General", "侧边栏 sidebar 抽屉 drawer", { openSettingsPage("drawerSettings") }),
         SettingsSearchItem(Icons.Outlined.Home, settingsText(settingsEnglish, "首页", "Home"), "常规 / General", "首页 home", { openSettingsPage("home") }),
+        SettingsSearchItem(settingsLongPressToolbarIcon, settingsText(settingsEnglish, "文本选择工具栏", "Text selection toolbar"), "编辑器 / Editor", "文本选择工具栏 text selection toolbar MarkText", { openSettingsPage("editorTextSelectionToolbar") }),
         SettingsSearchItem(Icons.Outlined.Visibility, settingsText(settingsEnglish, "默认打开模式", "Default open mode"), "编辑器 / Editor", "默认打开模式 default open mode 编辑 preview", { settingsDialog = "openNote" }),
         SettingsSearchItem(Icons.Outlined.Code, settingsText(settingsEnglish, "编辑器内核", "Editor engine"), "编辑器 / Editor", "编辑器内核 editor engine beta codemirror", { settingsDialog = "editorKernel" }),
-        SettingsSearchItem(Icons.Outlined.ViewHeadline, settingsText(settingsEnglish, "顶部工具栏", "Top toolbar"), "编辑器 / Editor", "顶部工具栏 top toolbar", { openEditorTopToolbarSettings() }),
-        SettingsSearchItem(Icons.Outlined.FormatListBulleted, settingsText(settingsEnglish, "底部工具栏", "Bottom toolbar"), "编辑器 / Editor", "底部工具栏 bottom toolbar", { openSettingsPage("toolbar") }),
+        SettingsSearchItem(settingsTopToolbarIcon, settingsText(settingsEnglish, "顶部工具栏", "Top toolbar"), "编辑器 / Editor", "顶部工具栏 top toolbar", { openEditorTopToolbarSettings() }),
+        SettingsSearchItem(settingsBottomToolbarIcon, settingsText(settingsEnglish, "底部工具栏", "Bottom toolbar"), "编辑器 / Editor", "底部工具栏 bottom toolbar", { openSettingsPage("toolbar") }),
         SettingsSearchItem(Icons.Outlined.FontDownload, settingsText(settingsEnglish, "字体", "Font"), "编辑器 / Editor", "字体 font 字号 typography", { settingsDialog = "editorTypography" }),
         SettingsSearchItem(Icons.Outlined.MoreHoriz, settingsText(settingsEnglish, "更多", "More"), "编辑器 / Editor", "编辑器更多 editor more", { openSettingsPage("editorMore") }),
-        SettingsSearchItem(Icons.Outlined.Backup, settingsText(settingsEnglish, "云同步", "Cloud sync"), "数据与安全 / Data & security", "云同步 cloud sync webdav", { openSettingsPage("webDav") }),
+        SettingsSearchItem(Icons.Outlined.Cloud, settingsText(settingsEnglish, "云同步", "Cloud sync"), "数据与安全 / Data & security", "云同步 cloud sync WebDAV S3 OSS Obsidian Remotely Save 密钥 Bucket Prefix 冲突", { openSettingsPage("webDav") }),
         SettingsSearchItem(Icons.Outlined.History, settingsText(settingsEnglish, "历史版本", "Version history"), "数据与安全 / Data & security", "历史版本 version history", { openSettingsPage("history") }),
         SettingsSearchItem(Icons.Outlined.Description, settingsText(settingsEnglish, "备注", "Remarks"), "数据与安全 / Data & security", "备注 remarks note", { openSettingsPage("remarkRecords") }),
         SettingsSearchItem(Icons.Outlined.Lock, settingsText(settingsEnglish, "安全", "Security"), "数据与安全 / Data & security", "安全 security 密码 password", { openSettingsPage("security") }),
@@ -429,10 +457,10 @@ fun KardLeafSettingsScreen(
         SettingsSearchItem(Icons.Outlined.MoreHoriz, settingsText(settingsEnglish, "更多", "More"), "其他 / Other", "其他更多 other more", { openSettingsPage("otherMore") }),
     ) + listOf(
         pageSearchItem(Icons.Outlined.Language, "首页顶部显示保存网站", "首页 / Home", "首页顶部 保存网站 web clip", "home"),
-        pageSearchItem(Icons.Outlined.ViewHeadline, "首页底部工具栏", "首页 / Home", "首页底部工具栏 新建按钮 home toolbar", "homeBottomToolbar"),
-        pageSearchItem(Icons.Outlined.Reorder, "长按选择栏", "首页 / Home", "选择栏 selection toolbar 长按", "selectionToolbar"),
-        dialogSearchItem(Icons.Outlined.ViewAgenda, "布局模式", "应用界面 / Interface", "布局模式 列表 双列 layout list grid", "layout"),
-        dialogSearchItem(Icons.Outlined.ViewStream, "卡片密度", "应用界面 / Interface", "卡片密度 宽松 紧凑 density", "density"),
+        pageSearchItem(settingsBottomToolbarIcon, "首页底部工具栏", "首页 / Home", "首页底部工具栏 新建按钮 home toolbar", "homeBottomToolbar"),
+        pageSearchItem(settingsLongPressToolbarIcon, "长按选择栏", "首页 / Home", "选择栏 selection toolbar 长按", "selectionToolbar"),
+        dialogSearchItem(settingsSingleColumnIcon, "布局模式", "应用界面 / Interface", "布局模式 列表 双列 layout list grid", "layout"),
+        dialogSearchItem(settingsLooseDensityIcon, "卡片密度", "应用界面 / Interface", "卡片密度 宽松 紧凑 density", "density"),
         pageSearchItem(Icons.Outlined.Label, "宽松卡片显示标签", "应用界面 / Interface", "卡片 标签 YAML tags", "interface"),
         pageSearchItem(Icons.Outlined.Schedule, "显示修改日期", "应用界面 / Interface", "修改日期 卡片时间", "interface"),
         dialogSearchItem(Icons.Outlined.TextFields, "修改日期格式", "应用界面 / Interface", "修改日期格式 date format", "cardModifiedDateFormat"),
@@ -450,10 +478,10 @@ fun KardLeafSettingsScreen(
         pageSearchItem(Icons.Outlined.Apps, "功能项图标", "主题 / Theme", "功能项图标 图标样式", "theme"),
         dialogSearchItem(Icons.Outlined.Palette, "预览主题", "编辑器 / Editor", "预览主题 Markdown GitHub Dracula Nord", "previewTheme"),
         dialogSearchItem(Icons.Outlined.TouchApp, "双击进入编辑间隔", "编辑器 / Editor", "双击 编辑 间隔 毫秒", "doubleTap"),
-        dialogSearchItem(Icons.Outlined.Swipe, "侧滑面板弹出方式", "编辑器 / Editor", "侧滑 面板 手势 顶部工具栏", "sidePanelOpenMode"),
+        dialogSearchItem(settingsSidePanelOpenModeIcon, "侧滑面板弹出方式", "编辑器 / Editor", "侧滑 面板 手势 顶部工具栏", "sidePanelOpenMode"),
         dialogSearchItem(Icons.Outlined.Code, "自动切换字数", "编辑器 / Editor", "自动切换 CodeMirror 字数 阈值", "autoCodeMirrorThreshold"),
         SettingsSearchItem(Icons.Outlined.AutoAwesome, "AI 助手", "编辑器 / Editor", "AI assistant OpenAI API 模型", { openAiSettings() }),
-        pageSearchItem(Icons.Outlined.FormatListBulleted, "编辑底部工具栏常驻", "编辑器 / Editor", "编辑底部工具栏 常驻", "editorMore"),
+        pageSearchItem(settingsEditorBottomToolbarIcon, "编辑底部工具栏常驻", "编辑器 / Editor", "编辑底部工具栏 常驻", "editorMore"),
         pageSearchItem(Icons.Outlined.Visibility, "CodeMirror 实时预览", "编辑器 / Editor", "CodeMirror 实时预览 markdown", "editorMore"),
         pageSearchItem(Icons.Outlined.Image, "编辑状态图片预览", "编辑器 / Editor", "编辑状态 图片预览", "editorMore"),
         dialogSearchItem(Icons.Outlined.FontDownload, "字体大小", "编辑器 / Editor", "字体大小 font size", "editorTypography"),
@@ -461,15 +489,17 @@ fun KardLeafSettingsScreen(
         dialogSearchItem(Icons.Outlined.FormatLineSpacing, "字间距", "编辑器 / Editor", "字间距 letter spacing", "editorTypography"),
         dialogSearchItem(Icons.Outlined.FormatLineSpacing, "段落间距", "编辑器 / Editor", "段落间距 paragraph spacing", "editorTypography"),
         dialogSearchItem(Icons.Outlined.FontDownload, "字体样式", "编辑器 / Editor", "字体样式 font family 自定义字体", "editorTypography"),
-        pageSearchItem(Icons.Outlined.ViewHeadline, "顶部工具栏功能项", "编辑器 / Editor", "顶部工具栏 顶部展示 更多选项 隐藏", "editorTopToolbar"),
-        pageSearchItem(Icons.Outlined.FormatListBulleted, "底部工具栏功能项", "编辑器 / Editor", "底部工具栏 排列", "toolbar"),
-        pageSearchItem(Icons.Outlined.Reorder, "长按选择栏功能项", "编辑器 / Editor", "选择栏 顶部展示 更多选项 隐藏", "selectionToolbar"),
+        pageSearchItem(settingsTopToolbarIcon, "顶部工具栏功能项", "编辑器 / Editor", "顶部工具栏 顶部展示 更多选项 隐藏", "editorTopToolbar"),
+        pageSearchItem(settingsBottomToolbarIcon, "底部工具栏功能项", "编辑器 / Editor", "底部工具栏 排列", "toolbar"),
+        pageSearchItem(Icons.Outlined.TextFields, "管理快捷文本", "编辑器 / Editor", "快捷文本 自定义符号 底部工具栏", "quickTexts"),
+        pageSearchItem(Icons.Outlined.Code, "自定义功能项", "编辑器 / Editor", "自定义功能项 SVG 符号块 底部工具栏", "customFunctions"),
+        pageSearchItem(settingsLongPressToolbarIcon, "长按选择栏功能项", "编辑器 / Editor", "选择栏 顶部展示 更多选项 隐藏", "selectionToolbar"),
         dialogSearchItem(Icons.Outlined.History, "历史版本数量", "数据与安全 / Data & security", "历史版本数量 保留数量", "historyLimit"),
         pageSearchItem(Icons.Outlined.History, "清理旧历史版本", "数据与安全 / Data & security", "清理旧历史版本 历史记录", "history"),
         pageSearchItem(Icons.Outlined.Folder, "回收站文件夹", "数据与安全 / Data & security", "回收站文件夹 垃圾箱", "trash"),
         pageSearchItem(Icons.Outlined.Sort, "回收站排序", "数据与安全 / Data & security", "回收站排序 文件名 删除时间", "trash"),
         dialogSearchItem(Icons.Outlined.DeleteSweep, "自动清理回收站", "数据与安全 / Data & security", "自动清理回收站 自动清理时间", "trashAutoClean"),
-        pageSearchItem(Icons.Outlined.Backup, "WebDAV 同步", "数据与安全 / Data & security", "WebDAV 云同步 服务器 用户名 密码 远程文件夹", "webDav"),
+        pageSearchItem(Icons.Outlined.Cloud, "云同步", "数据与安全 / Data & security", "云同步 cloud sync WebDAV S3 服务器 用户名 密码 远程文件夹 Bucket Prefix 冲突", "webDav"),
         pageSearchItem(Icons.Outlined.Refresh, "实时同步", "数据与安全 / Data & security", "实时同步 检查间隔 轮询", "webDav"),
         pageSearchItem(Icons.Outlined.SwapVert, "同步预览", "数据与安全 / Data & security", "同步预览 冲突 本地 远端", "webDav"),
         pageSearchItem(Icons.Outlined.Search, "测试远端检查", "数据与安全 / Data & security", "测试远端检查 同步记录", "webDav"),
@@ -494,15 +524,15 @@ fun KardLeafSettingsScreen(
         pageSearchItem(Icons.Outlined.FolderOpen, "当前工作区", "其他 / Other", "当前工作区 修改文件", "about"),
         pageSearchItem(Icons.Outlined.Code, "当前分支", "其他 / Other", "当前分支 Git 节点", "about"),
         pageSearchItem(Icons.Outlined.Add, "添加笔记库", "常规 / General", "添加笔记库 新建仓库 vault", "vault"),
-        pageSearchItem(Icons.Outlined.Settings, "侧边栏样式", "常规 / General", "侧边栏样式 布局 数据卡片 极简", "drawerSettings"),
+        pageSearchItem(settingsSidebarIcon, "侧边栏样式", "常规 / General", "侧边栏样式 布局 数据卡片 极简", "drawerSettings"),
         pageSearchItem(Icons.Outlined.Reorder, "侧边栏调整", "常规 / General", "侧边栏调整 显示 隐藏 改名 分组", "drawerEdit"),
-        dialogSearchItem(Icons.Outlined.TouchApp, "侧边栏距离", "常规 / General", "侧边栏距离 划出距离 dp", "drawer"),
+        dialogSearchItem(settingsSidePanelOpenModeIcon, "侧边栏距离", "常规 / General", "侧边栏距离 划出距离 dp", "drawer"),
         pageSearchItem(Icons.Outlined.Reorder, "添加分组线", "常规 / General", "添加分组线 侧边栏分组", "drawerEdit"),
         pageSearchItem(Icons.Outlined.Settings, "全局圆角", "主题 / Theme", "全局圆角 圆角 dp", "theme"),
         pageSearchItem(Icons.Outlined.Settings, "首页圆角", "主题 / Theme", "首页圆角 圆角 dp", "theme"),
         pageSearchItem(Icons.Outlined.Settings, "任务圆角", "主题 / Theme", "任务圆角 圆角 dp", "theme"),
         pageSearchItem(Icons.Outlined.Info, "笔记详情侧滑面板", "编辑器 / Editor", "笔记详情 侧滑面板 开关", "editorMore"),
-        pageSearchItem(Icons.Outlined.ViewHeadline, "显示方式", "首页 / Home", "显示方式 首页底部工具栏 简约新建按钮", "homeBottomToolbar"),
+        pageSearchItem(settingsBottomToolbarIcon, "显示方式", "首页 / Home", "显示方式 首页底部工具栏 简约新建按钮", "homeBottomToolbar"),
         pageSearchItem(Icons.Outlined.Settings, "按钮大小", "首页 / Home", "按钮大小 首页底部工具栏 dp", "homeBottomToolbar"),
         pageSearchItem(Icons.Outlined.Restore, "恢复默认大小", "首页 / Home", "恢复默认大小 按钮大小", "homeBottomToolbar"),
         dialogSearchItem(Icons.Outlined.Visibility, "查看模式", "编辑器 / Editor", "查看模式 预览 preview", "openNote"),
@@ -1075,6 +1105,7 @@ fun KardLeafSettingsScreen(
         autoFileNameTemplateFieldValue = TextFieldValue(KardLeafCustomFeatures.DefaultUnnamedNoteFileNameTemplate)
         openNoteMode = KardLeafCustomFeatures.DefaultOpenNoteMode
         editorKernel = PrefsManager.EditorKernel.QUILLPAD_STYLE
+        textSelectionToolbarEnabled = true
         autoCodeMirrorThresholdText = PrefsManager.DEFAULT_AUTO_CODEMIRROR_THRESHOLD_CHARS.toString()
         codeMirrorLivePreviewEnabled = PrefsManager.DEFAULT_CODEMIRROR_LIVE_PREVIEW_ENABLED
         editingImagePreviewEnabled = PrefsManager.DEFAULT_EDITING_IMAGE_PREVIEW_ENABLED
@@ -1121,8 +1152,8 @@ fun KardLeafSettingsScreen(
         customHiddenFilenameText = customHiddenFilenamePatterns.joinToString("\n")
         historyLimitText = PrefsManager.DEFAULT_HISTORY_VERSION_LIMIT.toString()
         cardDensity = PrefsManager.CardDensity.LOOSE
-        toolbarOrder = KardLeafCustomFeatures.DefaultToolbarOrder
-        customSymbolsText = KardLeafCustomFeatures.DefaultCustomSymbols.joinToString("\n")
+        customFunctionItems = emptyList()
+        toolbarOrder = KardLeafCustomFeatures.DefaultToolbarOrder.map { KardLeafCustomFeatures.EditorToolbarEntry.BuiltIn(it) }
         selectionToolbarOrder = PrefsManager.SelectionToolbarItemId.DEFAULT_ORDER
         selectionToolbarMoreItems = PrefsManager.SelectionToolbarItemId.DEFAULT_MORE_ITEMS
         selectionToolbarHiddenItems = PrefsManager.SelectionToolbarItemId.DEFAULT_HIDDEN_ITEMS
@@ -1138,6 +1169,7 @@ fun KardLeafSettingsScreen(
         KardLeafCustomFeatures.saveUnnamedNoteFileNameTemplate(context, autoFileNameTemplate)
         KardLeafCustomFeatures.saveOpenNoteMode(context, openNoteMode)
         prefsManager.saveEditorKernel(editorKernel)
+        prefsManager.saveTextSelectionToolbarSettings(enabled = true, rows = 1, commands = emptyList())
         prefsManager.saveAutoCodeMirrorThresholdChars(PrefsManager.DEFAULT_AUTO_CODEMIRROR_THRESHOLD_CHARS)
         prefsManager.saveCodeMirrorLivePreviewEnabled(codeMirrorLivePreviewEnabled)
         prefsManager.saveEditingImagePreviewEnabled(editingImagePreviewEnabled)
@@ -1152,8 +1184,9 @@ fun KardLeafSettingsScreen(
         prefsManager.saveHomeWebClipActionVisible(homeWebClipActionVisible)
         prefsManager.saveHomeBottomToolbarItemOrder(homeBottomToolbarOrder)
         prefsManager.saveHomeBottomToolbarHiddenItems(homeBottomToolbarHiddenItems)
-        KardLeafCustomFeatures.saveToolbarOrder(context, toolbarOrder)
-        KardLeafCustomFeatures.saveCustomSymbols(context, KardLeafCustomFeatures.DefaultCustomSymbols)
+        KardLeafCustomFeatures.saveEditorToolbarOrder(context, toolbarOrder)
+        KardLeafCustomFeatures.saveQuickTexts(context, KardLeafCustomFeatures.DefaultQuickTexts)
+        KardLeafCustomFeatures.saveCustomFunctionItems(context, emptyList())
         prefsManager.saveSelectionToolbarItemOrder(selectionToolbarOrder)
         prefsManager.saveSelectionToolbarMoreItems(selectionToolbarMoreItems)
         prefsManager.saveSelectionToolbarHiddenItems(selectionToolbarHiddenItems)
@@ -1483,7 +1516,7 @@ fun KardLeafSettingsScreen(
                     when (dialogPage) {
                         "layout" -> PrefsManager.ViewMode.values().forEach { mode ->
                             SettingsChoiceRow(
-                                icon = if (mode == PrefsManager.ViewMode.LIST) Icons.Outlined.ViewAgenda else Icons.Outlined.ViewModule,
+                                icon = if (mode == PrefsManager.ViewMode.LIST) settingsSingleColumnIcon else settingsGridIcon,
                                 title = if (mode == PrefsManager.ViewMode.LIST) "列表" else "双列",
                                 subtitle = if (mode == PrefsManager.ViewMode.LIST) "单列阅读更清楚" else "双列显示更多",
                                 selected = viewMode == mode,
@@ -1497,7 +1530,7 @@ fun KardLeafSettingsScreen(
                         }
                         "density" -> PrefsManager.CardDensity.values().forEach { density ->
                             SettingsChoiceRow(
-                                icon = if (density == PrefsManager.CardDensity.LOOSE) Icons.Outlined.ViewStream else Icons.Outlined.ViewCompact,
+                                icon = if (density == PrefsManager.CardDensity.LOOSE) settingsLooseDensityIcon else settingsCompactDensityIcon,
                                 title = if (density == PrefsManager.CardDensity.LOOSE) "宽松" else "紧凑",
                                 subtitle = if (density == PrefsManager.CardDensity.LOOSE) "间距更舒展" else "同屏更多笔记",
                                 selected = cardDensity == density,
@@ -1584,7 +1617,7 @@ fun KardLeafSettingsScreen(
                         }
                         "homeActionStyle" -> PrefsManager.HomeActionStyle.values().forEach { style ->
                             SettingsChoiceRow(
-                                icon = if (style == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) Icons.Outlined.ViewHeadline else Icons.Outlined.Add,
+                                icon = if (style == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) settingsBottomToolbarIcon else Icons.Outlined.Add,
                                 title = if (style == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) "底部工具栏" else "简约新建按钮",
                                 subtitle = if (style == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) "底部显示可自定义图标入口" else "保留右下角圆形新建按钮",
                                 selected = homeActionStyle == style,
@@ -1779,7 +1812,7 @@ fun KardLeafSettingsScreen(
                         }
                         "sidePanelOpenMode" -> PrefsManager.NoteSidePanelOpenMode.values().forEach { mode ->
                             SettingsChoiceRow(
-                                icon = if (mode == PrefsManager.NoteSidePanelOpenMode.GESTURE) Icons.Outlined.Swipe else Icons.Outlined.ViewHeadline,
+                                icon = if (mode == PrefsManager.NoteSidePanelOpenMode.GESTURE) settingsSidePanelOpenModeIcon else settingsTopToolbarIcon,
                                 title = if (mode == PrefsManager.NoteSidePanelOpenMode.GESTURE) "手势划出" else "顶部工具栏弹出",
                                 subtitle = if (mode == PrefsManager.NoteSidePanelOpenMode.GESTURE) "左右滑动打开目录和属性备注" else "用顶部按钮打开，禁用左右划出",
                                 selected = noteSidePanelOpenMode == mode,
@@ -2026,9 +2059,10 @@ fun KardLeafSettingsScreen(
     val currentThemeStyle = LocalKardLeafThemeStyle.current
     val isCleanListSettings = currentThemeStyle == PrefsManager.AppThemeStyle.CLEAN_LIST
     val isModernSettings = currentThemeStyle != PrefsManager.AppThemeStyle.CLASSIC
+    val layoutDirection = LocalLayoutDirection.current
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             val colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = if (isModernSettings) {
@@ -2128,7 +2162,11 @@ fun KardLeafSettingsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(
+                    start = innerPadding.calculateStartPadding(layoutDirection),
+                    top = innerPadding.calculateTopPadding(),
+                    end = innerPadding.calculateEndPadding(layoutDirection),
+                )
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             AnimatedContent(
@@ -2206,7 +2244,7 @@ fun KardLeafSettingsScreen(
                             },
                         )
                         SettingsActionRow(
-                            icon = if (homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) Icons.Outlined.ViewHeadline else Icons.Outlined.Add,
+                            icon = if (homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) settingsBottomToolbarIcon else Icons.Outlined.Add,
                             title = settingsText(settingsEnglish, "首页底部工具栏", "Home toolbar"),
                             subtitle = if (homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) {
                                 settingsText(settingsEnglish, "已显示 ${homeBottomToolbarOrder.count { it !in homeBottomToolbarHiddenItems }} 个图标，按钮 ${homeBottomToolbarButtonSizeDp}dp", "${homeBottomToolbarOrder.count { it !in homeBottomToolbarHiddenItems }} icons, ${homeBottomToolbarButtonSizeDp}dp buttons")
@@ -2218,7 +2256,7 @@ fun KardLeafSettingsScreen(
                             },
                         )
                         SettingsActionRow(
-                            Icons.Outlined.Reorder,
+                            settingsLongPressToolbarIcon,
                             settingsText(settingsEnglish, "长按选择栏", "Selection toolbar"),
                             settingsText(settingsEnglish, "调整顶部、更多和隐藏按钮", "Top, more and hidden buttons"),
                             {
@@ -2229,7 +2267,7 @@ fun KardLeafSettingsScreen(
                 }
                 "layout" -> PrefsManager.ViewMode.values().forEach { mode ->
                     SettingsChoiceRow(
-                        icon = Icons.Outlined.Description,
+                        icon = if (mode == PrefsManager.ViewMode.LIST) settingsSingleColumnIcon else settingsGridIcon,
                         title = if (mode == PrefsManager.ViewMode.LIST) "列表" else "双列",
                         subtitle = if (mode == PrefsManager.ViewMode.LIST) "单列阅读更清楚" else "双列显示更多",
                         selected = viewMode == mode,
@@ -2391,7 +2429,7 @@ fun KardLeafSettingsScreen(
                             { openAiSettings() },
                         )
                         SettingsSwitchRow(
-                            icon = Icons.Outlined.FormatListBulleted,
+                            icon = settingsEditorBottomToolbarIcon,
                             title = settingsText(settingsEnglish, "编辑底部工具栏常驻", "Always show edit toolbar"),
                             subtitle = if (editorBottomToolbarAlwaysVisible) settingsText(settingsEnglish, "编辑状态下始终显示底部字符栏", "Always visible while editing") else settingsText(settingsEnglish, "仅输入法弹出时显示底部字符栏", "Only with keyboard"),
                             checked = editorBottomToolbarAlwaysVisible,
@@ -2448,7 +2486,7 @@ fun KardLeafSettingsScreen(
                         )
                         if (noteSidePanelsEnabled) {
                             SettingsActionRow(
-                                icon = if (noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) Icons.Outlined.Swipe else Icons.Outlined.ViewHeadline,
+                                icon = if (noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) settingsSidePanelOpenModeIcon else settingsTopToolbarIcon,
                                 title = settingsText(settingsEnglish, "侧滑面板弹出方式", "Side panel trigger"),
                                 subtitle = if (noteSidePanelOpenMode == PrefsManager.NoteSidePanelOpenMode.GESTURE) {
                                     settingsText(settingsEnglish, "手势划出", "Swipe gesture")
@@ -2518,7 +2556,7 @@ fun KardLeafSettingsScreen(
                 }
                 "density" -> PrefsManager.CardDensity.values().forEach { density ->
                     SettingsChoiceRow(
-                        icon = if (density == PrefsManager.CardDensity.LOOSE) Icons.Outlined.ViewStream else Icons.Outlined.ViewCompact,
+                        icon = if (density == PrefsManager.CardDensity.LOOSE) settingsLooseDensityIcon else settingsCompactDensityIcon,
                         title = if (density == PrefsManager.CardDensity.LOOSE) "宽松" else "紧凑",
                         subtitle = if (density == PrefsManager.CardDensity.LOOSE) "间距更舒展" else "同屏更多笔记",
                         selected = cardDensity == density,
@@ -2673,32 +2711,41 @@ fun KardLeafSettingsScreen(
                     )
                 }
                 "toolbar" -> {
-                    SettingsPageText("长按方块拖动排序")
+                    SettingsPageText("长按方块拖动排序，内置项和自定义功能项可混排")
                     SettingsToolbarGrid(
                         items = toolbarOrder,
                         onOrderChange = { newOrder ->
                             toolbarOrder = newOrder
-                            KardLeafCustomFeatures.saveToolbarOrder(context, toolbarOrder)
+                            KardLeafCustomFeatures.saveEditorToolbarOrder(context, toolbarOrder)
                         },
                     )
                     SettingsSectionDivider()
-                    SettingsSectionTitle("自定义符号")
-                    OutlinedTextField(
-                        value = customSymbolsText,
-                        onValueChange = { value ->
-                            customSymbolsText = value
-                            KardLeafCustomFeatures.saveCustomSymbols(
-                                context,
-                                KardLeafCustomFeatures.normalizeCustomSymbols(value),
-                            )
+                    SettingsSectionTitle("快捷文本与自定义功能项")
+                    SettingsActionRow(
+                        icon = Icons.Outlined.TextFields,
+                        title = "管理快捷文本",
+                        subtitle = "新增、编辑或删除快捷文本",
+                        onClick = { openSettingsPage("quickTexts") },
+                    )
+                    SettingsActionRow(
+                        icon = Icons.Outlined.Code,
+                        title = "自定义功能项",
+                        subtitle = "新增底部工具栏符号块",
+                        onClick = { openSettingsPage("customFunctions") },
+                    )
+                    SettingsPageText("快捷文本从菜单中选择插入；自定义功能项会以独立按钮显示在底部工具栏")
+                }
+                "quickTexts" -> {
+                    QuickTextsSettingsPage(onChanged = onSettingsChanged)
+                }
+                "customFunctions" -> {
+                    CustomFunctionItemsSettingsPage(
+                        onChanged = {
+                            customFunctionItems = KardLeafCustomFeatures.getCustomFunctionItems(context)
+                            toolbarOrder = KardLeafCustomFeatures.getEditorToolbarOrder(context, customFunctionItems)
                             onSettingsChanged()
                         },
-                        label = { Text("每行一个符号") },
-                        minLines = 3,
-                        maxLines = 8,
-                        modifier = Modifier.fillMaxWidth(),
                     )
-                    SettingsPageText("点击编辑器底部的“自定义符号”按钮插入，最多 24 项，每项最多 32 字")
                 }
                 "editorTopToolbar" -> {
                     val availableItems = remember(noteSidePanelOpenMode, noteSidePanelsEnabled) {
@@ -2796,6 +2843,54 @@ fun KardLeafSettingsScreen(
                         )
                     }
                 }
+                "editorTextSelectionToolbar" -> {
+                    var selectionSettings by remember { mutableStateOf(prefsManager.getTextSelectionToolbarSettings()) }
+                    fun saveTextSelectionSettings(
+                        enabled: Boolean = selectionSettings.enabled,
+                        rows: Int = selectionSettings.rows,
+                        commands: List<String> = selectionSettings.commands,
+                    ) {
+                        prefsManager.saveTextSelectionToolbarSettings(enabled, rows, commands)
+                        selectionSettings = prefsManager.getTextSelectionToolbarSettings()
+                        textSelectionToolbarEnabled = selectionSettings.enabled
+                        onSettingsChanged()
+                    }
+                    SettingsSectionTitle("文本选择工具栏")
+                    SettingsSwitchRow(
+                        icon = Icons.Outlined.Visibility,
+                        title = "启用文本选择工具栏",
+                        subtitle = if (selectionSettings.enabled) {
+                            "仅 WebView 内核显示；原生内核不显示此工具栏"
+                        } else {
+                            "已关闭，WebView 使用系统文本选择菜单"
+                        },
+                        checked = selectionSettings.enabled,
+                        onCheckedChange = { enabled -> saveTextSelectionSettings(enabled = enabled) },
+                    )
+                    SettingsPageText("关闭后立即隐藏自定义工具栏，并恢复 WebView 的系统文本选择菜单。")
+                    listOf(1, 2).forEach { rows ->
+                        SettingsChoiceRow(
+                            icon = Icons.Outlined.ViewHeadline,
+                            title = if (rows == 1) "一行" else "两行",
+                            subtitle = if (rows == 1) "翻页查看自定义命令" else "固定剪贴板行，第二行显示自定义命令",
+                            selected = selectionSettings.rows == rows,
+                            onClick = { saveTextSelectionSettings(rows = rows) },
+                        )
+                    }
+                    SettingsSectionTitle("自定义命令")
+                    SettingsPageText("默认仅显示剪切、复制、粘贴、全选。按勾选顺序排列；取消后重新勾选可移到末尾。")
+                    com.kangle.kardleaf.ui.editor.selection.TextSelectionToolbarSettings.labels.forEach { (id, label) ->
+                        SettingsSwitchRow(
+                            icon = Icons.Outlined.Edit,
+                            title = label,
+                            subtitle = selectionSettings.commands.indexOf(id).takeIf { it >= 0 }?.let { "第 ${it + 1} 项" } ?: "未添加",
+                            checked = id in selectionSettings.commands,
+                            onCheckedChange = { checked ->
+                                saveTextSelectionSettings(commands = if (checked) selectionSettings.commands + id else selectionSettings.commands - id)
+                            },
+                        )
+                    }
+                }
                 "selectionToolbar" -> {
                     var itemOrder by remember(settingsPage, selectionToolbarOrder) { mutableStateOf(prefsManager.getSelectionToolbarItemOrder()) }
                     var moreItems by remember(settingsPage, selectionToolbarMoreItems) { mutableStateOf(prefsManager.getSelectionToolbarMoreItems()) }
@@ -2868,7 +2963,7 @@ fun KardLeafSettingsScreen(
                             onClick = { openSettingsPage("drawerEdit") },
                         )
                         SettingsActionRow(
-                            icon = Icons.Outlined.TouchApp,
+                            icon = settingsSidePanelOpenModeIcon,
                             title = "侧边栏距离",
                             subtitle = "设置左侧划出距离",
                             onClick = { settingsDialog = "drawer" },
@@ -2999,7 +3094,7 @@ fun KardLeafSettingsScreen(
                     SettingsSectionTitle("显示方式")
                     PrefsManager.HomeActionStyle.values().forEach { style ->
                         SettingsChoiceRow(
-                            icon = if (style == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) Icons.Outlined.ViewHeadline else Icons.Outlined.Add,
+                            icon = if (style == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) settingsBottomToolbarIcon else Icons.Outlined.Add,
                             title = if (style == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) "首页底部工具栏" else "简约新建按钮",
                             subtitle = if (style == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) "底部显示可自定义图标入口" else "保留右下角圆形新建按钮",
                             selected = homeActionStyle == style,
@@ -3138,7 +3233,12 @@ fun KardLeafSettingsScreen(
                         onRemovePrivacyPassword = onRemovePrivacyPassword,
                     )
                 }
+                "s3" -> {
+                    CloudSyncTabRow(page) { settingsPage = it }
+                    S3SyncSettingsPage(prefsManager, s3SyncManager)
+                }
                 "webDav" -> {
+                    CloudSyncTabRow(page) { settingsPage = it }
                     val webDavSyncManager = remember { WebDavCloudSyncManager(context, prefsManager) }
                     val savedWebDavSettings = prefsManager.getWebDavSettings()
                     var webDavServerUrl by remember { mutableStateOf(savedWebDavSettings.serverUrl) }
@@ -3765,7 +3865,7 @@ fun KardLeafSettingsScreen(
                     SettingsActionRow(
                         icon = Icons.Outlined.Info,
                         title = "版本",
-                        subtitle = versionName.ifBlank { "1.9.0" },
+                        subtitle = versionName.ifBlank { "1.10.0" },
                         onClick = {},
                     )
                     if (BuildConfig.KARDLEAF_DEV_VARIANT || BuildConfig.DEBUG) {
@@ -3822,8 +3922,8 @@ fun KardLeafSettingsScreen(
                 }
                 "interface" -> {
                     SettingsSectionTitle("首页显示")
-                    SettingsActionRow(Icons.Outlined.ViewAgenda, "布局模式", if (viewMode == PrefsManager.ViewMode.LIST) "列表" else "双列", { settingsDialog = "layout" })
-                    SettingsActionRow(Icons.Outlined.ViewStream, "卡片密度", if (cardDensity == PrefsManager.CardDensity.LOOSE) "宽松" else "紧凑", { settingsDialog = "density" })
+                    SettingsActionRow(if (viewMode == PrefsManager.ViewMode.LIST) settingsSingleColumnIcon else settingsGridIcon, "布局模式", if (viewMode == PrefsManager.ViewMode.LIST) "列表" else "双列", { settingsDialog = "layout" })
+                    SettingsActionRow(if (cardDensity == PrefsManager.CardDensity.LOOSE) settingsLooseDensityIcon else settingsCompactDensityIcon, "卡片密度", if (cardDensity == PrefsManager.CardDensity.LOOSE) "宽松" else "紧凑", { settingsDialog = "density" })
                     SettingsSwitchRow(
                         icon = Icons.Outlined.Label,
                         title = "宽松卡片显示标签",
@@ -3935,12 +4035,22 @@ fun KardLeafSettingsScreen(
                             SettingsActionRow(Icons.Outlined.Folder, settingsText(settingsEnglish, "笔记库", "Vault"), "", { openSettingsPage("vault") })
                             SettingsActionRow(Icons.Outlined.Palette, settingsText(settingsEnglish, "主题设置", "Theme"), "", { openSettingsPage("theme") })
                             SettingsActionRow(Icons.Outlined.Tune, settingsText(settingsEnglish, "应用界面", "Interface"), settingsText(settingsEnglish, "布局、排序、启动分类和图标", "Layout, sorting, startup folder and icons"), { openSettingsPage("interface") })
-                            SettingsActionRow(Icons.Outlined.ViewAgenda, settingsText(settingsEnglish, "侧边栏", "Sidebar"), drawerStyleLabel(drawerStyle), { openSettingsPage("drawerSettings") })
+                            SettingsActionRow(settingsSidebarIcon, settingsText(settingsEnglish, "侧边栏", "Sidebar"), drawerStyleLabel(drawerStyle), { openSettingsPage("drawerSettings") })
                             SettingsActionRow(Icons.Outlined.Home, settingsText(settingsEnglish, "首页", "Home"), "", { openSettingsPage("home") })
                         }
                         SettingsSectionDivider()
                         SettingsSectionTitle(settingsText(settingsEnglish, "编辑器", "Editor"))
                         SettingsListGroup(showSubtitles = false) {
+                            SettingsActionRow(
+                                settingsLongPressToolbarIcon,
+                                settingsText(settingsEnglish, "文本选择工具栏", "Text selection toolbar"),
+                                if (textSelectionToolbarEnabled) {
+                                    settingsText(settingsEnglish, "已开启，仅 WebView 内核显示", "Enabled for the WebView editor only")
+                                } else {
+                                    settingsText(settingsEnglish, "已关闭，使用系统文本选择菜单", "Disabled; use the system text selection menu")
+                                },
+                                { openSettingsPage("editorTextSelectionToolbar") },
+                            )
                             SettingsActionRow(Icons.Outlined.Visibility, settingsText(settingsEnglish, "默认打开模式", "Default open mode"), "", { settingsDialog = "openNote" })
                             SettingsActionRow(
                                 KardLeafCustomFeatures.editorKernelIcon(editorKernel),
@@ -3948,11 +4058,11 @@ fun KardLeafSettingsScreen(
                                 "",
                                 { settingsDialog = "editorKernel" },
                             )
-                            SettingsActionRow(Icons.Outlined.ViewHeadline, settingsText(settingsEnglish, "顶部工具栏", "Top toolbar"), "", {
+                            SettingsActionRow(settingsTopToolbarIcon, settingsText(settingsEnglish, "顶部工具栏", "Top toolbar"), "", {
                                 openEditorTopToolbarSettings()
                             })
                             SettingsActionRow(
-                                Icons.Outlined.FormatListBulleted,
+                                settingsBottomToolbarIcon,
                                 settingsText(settingsEnglish, "底部工具栏", "Bottom toolbar"),
                                 "",
                                 { openSettingsPage("toolbar") },
@@ -3968,7 +4078,7 @@ fun KardLeafSettingsScreen(
                         SettingsSectionDivider()
                         SettingsSectionTitle(settingsText(settingsEnglish, "数据与安全", "Data & security"))
                         SettingsListGroup(showSubtitles = false) {
-                            SettingsActionRow(Icons.Outlined.Backup, settingsText(settingsEnglish, "云同步", "Cloud sync"), "", { openSettingsPage("webDav") })
+                            SettingsActionRow(Icons.Outlined.Cloud, settingsText(settingsEnglish, "云同步", "Cloud sync"), "", { openSettingsPage("webDav") })
                             SettingsActionRow(Icons.Outlined.History, settingsText(settingsEnglish, "历史版本", "Version history"), "", { openSettingsPage("history") })
                             SettingsActionRow(Icons.Outlined.Description, settingsText(settingsEnglish, "备注", "Remarks"), "", { openSettingsPage("remarkRecords") })
                             SettingsActionRow(Icons.Outlined.Lock, settingsText(settingsEnglish, "安全", "Security"), "", { openSettingsPage("security") })
@@ -3996,6 +4106,7 @@ fun KardLeafSettingsScreen(
                          }
                  }
                  }
+                        Spacer(modifier = Modifier.height(innerPadding.calculateBottomPadding()))
                  }
                 val pullProgress = settingsPullRefreshState.progress
                 val showInitialPullHint = page == "main" &&

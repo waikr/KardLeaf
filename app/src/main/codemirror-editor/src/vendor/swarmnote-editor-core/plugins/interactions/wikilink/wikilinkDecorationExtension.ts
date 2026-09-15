@@ -19,6 +19,7 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import { checkUpdateAction } from '../../../core/pluginUpdateHelper';
+import { renderingSelection, selectionGestureActive } from '../../../core/mouseSelecting';
 
 const WIKILINK_REGEX = /\[\[([^\[\]\n]+)\]\]/g;
 
@@ -55,7 +56,7 @@ const rightBracketDeco = Decoration.replace({ widget: new WikilinkBracketWidget(
 
 function buildDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  const sel = view.state.selection.main;
+  const sel = renderingSelection(view.state).main;
   const selFrom = Math.min(sel.from, sel.to);
   const selTo = Math.max(sel.from, sel.to);
 
@@ -88,7 +89,7 @@ function buildDecorations(view: EditorView): DecorationSet {
 
       // Reveal: cursor / selection touches the wikilink range → 显示原始 markdown
       // brackets 用 widget replace 显示（覆盖 inline-rendering 对 LinkMark 的 hide）
-      const touches = selTo >= start && selFrom <= end;
+      const touches = !selectionGestureActive(view.state) && selTo >= start && selFrom <= end;
       if (touches) {
         builder.add(start, titleStart, leftBracketDeco);
         builder.add(titleStart, titleEnd, revealedTitleMark);

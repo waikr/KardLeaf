@@ -5,6 +5,7 @@ data class NoteSearchMatch(
     val scope: String,
     val snippet: String,
     val startOffset: Int = -1,
+    val matchedText: String? = null,
 )
 
 data class NoteSearchOptions(

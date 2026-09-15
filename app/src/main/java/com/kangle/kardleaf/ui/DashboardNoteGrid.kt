@@ -128,6 +128,7 @@ fun NoteGrid(
     searchQuery: String,
     listState: LazyStaggeredGridState,
     modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
     loadImageThumbnail: suspend (Note) -> android.graphics.Bitmap? = { null },
     peekImageThumbnail: (Note) -> android.graphics.Bitmap? = { null },
     thumbnailTraceSource: String = "",
@@ -137,8 +138,8 @@ fun NoteGrid(
     onCustomSortOrderChanged: (List<String>) -> Unit = {},
     scrollPerfPath: String = "",
     scrollPerfEnabled: Boolean = true,
-    onSearchJump: (Note) -> Unit = {},
-    onNoteClick: (Note) -> Unit,
+    onSearchJump: (Note, SearchMatch?) -> Unit = { _, _ -> },
+    onNoteClick: (Note, SearchMatch?) -> Unit,
     onNoteLongClick: (Note) -> Unit,
 ) {
     if (isLoading && notesCount == 0) {
@@ -295,7 +296,7 @@ fun NoteGrid(
         LazyVerticalStaggeredGrid(
             columns = StaggeredGridCells.Fixed(columns),
             state = listState,
-            contentPadding = PaddingValues(0.dp),
+            contentPadding = contentPadding,
             verticalItemSpacing = 8.dp,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = modifier.fillMaxSize(),
@@ -388,8 +389,8 @@ fun NoteGrid(
                                                 loadImageThumbnail = loadImageThumbnail,
                                                 peekImageThumbnail = peekImageThumbnail,
                                                 thumbnailTraceSource = thumbnailTraceSource,
-                                                onSearchJump = { onSearchJump(item.note) },
-                                                onClick = { onNoteClick(item.note) },
+                                                onSearchJump = { onSearchJump(item.note, item.searchMatch) },
+                                                onClick = { onNoteClick(item.note, item.searchMatch) },
                                                 onLongClick = { onNoteLongClick(item.note) },
                                             )
                                         }
@@ -450,8 +451,8 @@ fun NoteGrid(
                                             loadImageThumbnail = loadImageThumbnail,
                                             peekImageThumbnail = peekImageThumbnail,
                                             thumbnailTraceSource = thumbnailTraceSource,
-                                            onSearchJump = { onSearchJump(item.note) },
-                                            onClick = { onNoteClick(item.note) },
+                                            onSearchJump = { onSearchJump(item.note, item.searchMatch) },
+                                            onClick = { onNoteClick(item.note, item.searchMatch) },
                                             onLongClick = { onNoteLongClick(item.note) },
                                         )
                                         Box(modifier = Modifier.matchParentSize()) {
@@ -518,8 +519,8 @@ fun NoteGrid(
                                 loadImageThumbnail = loadImageThumbnail,
                                 peekImageThumbnail = peekImageThumbnail,
                                 thumbnailTraceSource = thumbnailTraceSource,
-                                onSearchJump = { onSearchJump(item.note) },
-                                onClick = { onNoteClick(item.note) },
+                                onSearchJump = { onSearchJump(item.note, item.searchMatch) },
+                                onClick = { onNoteClick(item.note, item.searchMatch) },
                                 onLongClick = { onNoteLongClick(item.note) },
                             )
                         }

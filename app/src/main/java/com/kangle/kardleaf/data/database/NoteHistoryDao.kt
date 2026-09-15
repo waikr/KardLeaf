@@ -99,7 +99,7 @@ interface NoteHistoryDao {
     suspend fun pruneOldVersions(
         noteId: String,
         keep: Int,
-    )
+    ): Int
 
     @Query("SELECT DISTINCT noteId FROM note_history")
     suspend fun getAllHistoryNoteIds(): List<String>

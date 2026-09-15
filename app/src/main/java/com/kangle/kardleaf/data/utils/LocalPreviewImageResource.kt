@@ -8,10 +8,10 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Encodes a granted SAF content URI as a same-process HTTPS resource URL for preview WebViews.
+ * Encodes a granted SAF content URI as a signed, same-process HTTPS resource URL for preview WebViews.
  *
- * The URL contains only the URI token and source version metadata. The image bytes remain outside
- * the Markdown/JavaScript bridge and are streamed by EditorPreviewWebView.shouldInterceptRequest.
+ * Image and media bytes remain outside the Markdown/JavaScript bridge. Non-media attachments
+ * can only be opened externally after signature validation, not loaded as active WebView content.
  */
 internal object LocalPreviewImageResource {
     private const val SCHEME = "https"
@@ -46,10 +46,37 @@ internal object LocalPreviewImageResource {
             .toString()
     }
 
+    /**
+     * Media uses the platform content loader so WebView can seek the SAF file itself.
+     * Joplin's mobile viewer follows the same principle with file:// resource URLs.
+     */
+    fun buildMediaUrl(
+        sourceUri: Uri,
+        mimeType: String,
+        lastModified: Long,
+        length: Long,
+    ): String = sourceUri.buildUpon()
+        .appendQueryParameter(MIME_QUERY, mimeType)
+        .appendQueryParameter(VERSION_QUERY, "$lastModified-$length")
+        .build()
+        .toString()
+
     fun isRequest(uri: Uri): Boolean =
         uri.scheme.equals(SCHEME, ignoreCase = true) &&
             uri.host.equals(HOST, ignoreCase = true) &&
             uri.pathSegments.firstOrNull() == IMAGE_PATH
+
+    fun isDirectMediaRequest(uri: Uri): Boolean =
+        uri.scheme.equals("content", ignoreCase = true) &&
+            uri.getQueryParameter(VERSION_QUERY)?.isNotBlank() == true &&
+            isMediaMime(mimeType(uri))
+
+    fun decodeDirectMediaUri(uri: Uri): Uri? {
+        if (!isDirectMediaRequest(uri)) return null
+        return runCatching {
+            uri.buildUpon().clearQuery().fragment(null).build()
+        }.getOrNull()
+    }
 
     fun decodeSourceUri(requestUri: Uri): Uri? {
         if (!isRequest(requestUri)) return null
@@ -72,7 +99,7 @@ internal object LocalPreviewImageResource {
     fun mimeType(requestUri: Uri): String? =
         requestUri.getQueryParameter(MIME_QUERY)
             ?.trim()
-            ?.takeIf { it.startsWith("image/", ignoreCase = true) }
+            ?.takeIf { it.matches(Regex("[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+")) }
 
     fun hasStrongVersion(requestUri: Uri): Boolean =
         requestUri.getQueryParameter(VERSION_QUERY)
@@ -80,6 +107,10 @@ internal object LocalPreviewImageResource {
             ?.toLongOrNull()
             ?.let { it > 0L }
             ?: false
+
+    private fun isMediaMime(mimeType: String?): Boolean =
+        mimeType?.startsWith("video/", ignoreCase = true) == true ||
+            mimeType?.startsWith("audio/", ignoreCase = true) == true
 
     private fun sign(token: String, version: String, mimeType: String): String {
         val mac = Mac.getInstance("HmacSHA256")

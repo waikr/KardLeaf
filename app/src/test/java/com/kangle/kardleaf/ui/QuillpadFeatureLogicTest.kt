@@ -67,6 +67,21 @@ class QuillpadFeatureLogicTest {
     }
 
     @Test
+    fun searchesAndReplacesLiteralMultilineText() {
+        val text = "alpha\nbeta\nalpha\nbeta"
+        val query = "alpha\nbeta"
+
+        assertEquals(
+            listOf(NoteSearchMatchRange(0, 10), NoteSearchMatchRange(11, 21)),
+            buildNoteSearchMatches(text, query, false, true).matches,
+        )
+        assertEquals(
+            "done\ndone",
+            replaceAllNoteSearchMatches(text, query, "done", false, true).text,
+        )
+    }
+
+    @Test
     fun replacesCurrentAndAllMatches() {
         val current = buildCurrentReplacement(
             text = "a1 a2",

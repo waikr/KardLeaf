@@ -34,6 +34,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 internal class NotePrivacyStore(
     private val context: Context,
     private val legacyDao: PrivacyNoteDao,
+    private val onExternalWrite: () -> Unit = {},
 ) {
     data class BiometricUnlockRequest(val vaultId: String, val cipher: Cipher)
 
@@ -52,7 +53,7 @@ internal class NotePrivacyStore(
     )
 
     private val notes = MutableStateFlow<List<PrivacyNoteEntity>>(emptyList())
-    private val mutex = Mutex()
+    private val mutex = s3FileMutex
     private val random = SecureRandom()
     private val localKeys = context.getSharedPreferences(LOCAL_KEYS_PREFS, Context.MODE_PRIVATE)
     private var rootDir: DocumentFile? = null
@@ -60,6 +61,13 @@ internal class NotePrivacyStore(
     private var fileNamesById: Map<Long, Set<String>> = emptyMap()
 
     fun getAll(): Flow<List<PrivacyNoteEntity>> = notes
+
+    internal suspend fun withS3FileAccess(applying: Boolean, block: suspend () -> Unit) = mutex.withLock {
+        if (applying) {
+            check(masterKey == null) { "请先关闭并锁定隐私库，再接收 S3 文件" }
+        }
+        block()
+    }
 
     suspend fun onRootChanged(root: DocumentFile?) =
         mutex.withLock {
@@ -257,6 +265,7 @@ internal class NotePrivacyStore(
                 val notesDir = requireNotesDir()
                 val failed = fileNamesById[id].orEmpty().filter { name -> notesDir.findFile(name)?.delete() == false }
                 if (failed.isNotEmpty()) throw PrivacyVaultException("隐私笔记删除失败")
+                runCatching { onExternalWrite() }
                 reloadUnlockedNotes(notesDir, key)
             }
         }
@@ -478,6 +487,7 @@ internal class NotePrivacyStore(
                 throw IOException("无法原子发布隐私仓库元数据")
             }
             vault.findFile(META_BACKUP_FILE)?.delete()
+            runCatching { onExternalWrite() }
         } catch (e: Exception) {
             temp.delete()
             throw PrivacyVaultException("隐私仓库元数据写入失败", e)
@@ -496,6 +506,7 @@ internal class NotePrivacyStore(
             writeBytes(temp, bytes)
             if (!readBytes(temp, MAX_NOTE_FILE_BYTES).contentEquals(bytes)) throw IOException("临时文件校验失败")
             if (!temp.renameTo(finalName)) throw IOException("同目录重命名失败")
+            runCatching { onExternalWrite() }
             return dir.findFile(finalName)?.takeIf { it.isFile } ?: temp
         } catch (e: Exception) {
             temp.delete()
@@ -619,6 +630,7 @@ internal class NotePrivacyStore(
         const val VAULT_DIR = "Vault"
         const val NOTES_DIR = "notes"
         const val META_FILE = "vault.meta"
+        private val s3FileMutex = Mutex()
         const val META_BACKUP_FILE = "vault.meta.bak"
         const val NOTE_EXTENSION = ".klv"
         const val BINARY_MIME = "application/octet-stream"

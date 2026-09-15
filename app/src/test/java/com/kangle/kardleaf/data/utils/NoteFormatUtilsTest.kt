@@ -80,6 +80,16 @@ class NoteFormatUtilsTest {
     }
 
     @Test
+    fun cleansHighlightAndSpanMarkupFromPlainTextPreview() {
+        assertEquals(
+            "高亮文本\n前中后\n====",
+            NoteFormatUtils.buildPlainTextPreview(
+                "==高亮文本==\n前<span style=\"background-color: yellow\">中</span>后\n====",
+            ),
+        )
+    }
+
+    @Test
     fun rewriteRelativeImageRefsForMoveSkipsExternalAndAbsoluteLinks() {
         val markdown = """
             ![http](http://example.com/a.png)

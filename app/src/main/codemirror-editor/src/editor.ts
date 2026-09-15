@@ -1,7 +1,10 @@
 import katexCss from 'katex/dist/katex.css';
-import { redoDepth, undoDepth } from '@codemirror/commands';
+import { isolateHistory, redoDepth, undoDepth } from '@codemirror/commands';
+import { getSearchQuery, openSearchPanel, replaceAll as replaceAllSearch, replaceNext, setSearchQuery } from '@codemirror/search';
+import { androidSearchQuery, currentSearchHighlight, regexSearchChanges, searchMatches, searchSummary } from './search';
+import { forceParsing, syntaxTree } from '@codemirror/language';
 import {
-  type EditorState,
+  EditorState,
   EditorSelection,
   RangeSetBuilder,
   StateEffect,
@@ -13,6 +16,7 @@ import {
   Decoration,
   type DecorationSet,
   EditorView,
+  type ViewUpdate,
   WidgetType,
 } from '@codemirror/view';
 import {
@@ -36,20 +40,39 @@ import { mermaidPlugin } from './vendor/swarmnote-editor-core/plugins/mermaid';
 import { rawHtmlPlugin } from './vendor/swarmnote-editor-core/plugins/rawHtml';
 import { smartPastePlugin } from './vendor/swarmnote-editor-core/plugins/smartPaste';
 import { tablePlugin } from './vendor/swarmnote-editor-core/plugins/table';
-import { selectionToolbarPlugin } from './vendor/swarmnote-editor-core/plugins/interactions/selectionToolbar';
+import { markTextToolbarPlugin } from './marktext/toolbar';
+import { cycleInlineStyleAtCursor, inlineColorPlugin, setInlineStyleAtCursor } from './marktext/inlineStyleSpans';
+import { isColorHtml, scanColorDocument, type ColorSpan, type InlineStyleProperty } from './marktext/inlineStyles';
 import { slashCommandPlugin } from './vendor/swarmnote-editor-core/plugins/interactions/slash';
 import { wikilinkPlugin } from './vendor/swarmnote-editor-core/plugins/interactions/wikilink';
 import {
   mouseSelectingField,
+  hasNonEmptyNativeSelection,
+  nativeSelectionSettledEvent,
+  nativeSelectionField,
+  runWhenNativeSelectionSettled,
+  setNativeSelectionActive,
   setMouseSelecting,
+  setSourceRevealEnabled,
 } from './vendor/swarmnote-editor-core/core';
+import { renderingSelection, selectionRenderingFrozen } from './vendor/swarmnote-editor-core/core/mouseSelecting';
+import {
+  checkUpdateAction,
+  shouldRebuildBlockDecorations,
+} from './vendor/swarmnote-editor-core/core/pluginUpdateHelper';
 
 type AndroidBridge = Record<string, (...args: unknown[]) => unknown>;
+type CodeMirrorFocusDiagnostics = {
+  cmAndroidFocusWorkaroundCandidateCount: number;
+  cmAndroidFocusWorkaroundExecutedCount: number;
+  cmAndroidFocusWorkaroundSkippedForNativeRangeCount: number;
+};
 
 declare global {
   interface Window {
     KardLeafAndroid?: AndroidBridge;
     KardLeafEditor?: Record<string, unknown>;
+    __KardLeafCodeMirrorSelectionDiagnostics?: CodeMirrorFocusDiagnostics;
   }
 }
 
@@ -64,14 +87,21 @@ let editor: EditorControl | null = null;
 let suppressBridgeDepth = 0;
 const initialLivePreviewEnabled =
   new URLSearchParams(window.location.search).get('livePreview') !== 'false';
+const bootstrapToken = new URLSearchParams(window.location.search).get('bootstrap') ?? '';
+let documentToken = '';
+let initialRenderRequest = '';
+let initialSelectionRequested = false;
+let sourceRevealEnabled = false;
+let lastRuntimeSettings = '';
 let livePreviewEnabled = initialLivePreviewEnabled;
 let readOnly = false;
 let currentFontSize = 16;
 let currentLineHeight = 1.55;
 let currentLetterSpacing = 0;
 let currentParagraphSpacing = 8;
-let currentFontFamily =
-  'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+let currentFontFamily = initialLivePreviewEnabled
+  ? 'system'
+  : 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 let darkMode = false;
 let appThemeColors: Record<string, string> = {};
 let fallbackText = '';
@@ -87,6 +117,15 @@ let scrollSession: {
 let scrollSettleTimer = 0;
 let scrollMetricFrame = 0;
 let selectionRevision = 0;
+let lastSelectionViewTraceAt = 0;
+let lastNativeSelectionTraceAt = 0;
+let lastSelectionGeometryTraceAt = 0;
+let nativeSelectionGestureSerial = 0;
+let nativeSelectionGestureActive = false;
+let nativeSelectionDiagnosticsStart: CodeMirrorFocusDiagnostics | null = null;
+let lastNativeSelectionGestureTraceAt = 0;
+let lastNativeSelectionGestureScrollTraceAt = 0;
+let lastNativeSelectionGestureScrollTop = -1;
 let pointerSelectionTrace: {
   startedAt: number;
   endedAt: number;
@@ -104,7 +143,68 @@ let currentTitleHint = '';
 let titleVisible = true;
 let currentTitleFontSize = 22;
 let suppressTitleBridge = false;
-let tableToolbar: HTMLDivElement | null = null;
+let tableToolbar: EditorTableContextMenuEvent | null = null;
+let styleDocument: EditorState['doc'] | null = null;
+let styleSpans: ColorSpan[] = [];
+let lastContextToolbarState = '';
+let contextToolbarHideTimer: ReturnType<typeof setTimeout> | undefined;
+let inlineColorPicker: HTMLInputElement | null = null;
+
+function notifyContextToolbar() {
+  const view = editor?.view;
+  let kind = '';
+  if (view && livePreviewEnabled && !readOnly) {
+    if (tableToolbar) kind = 'table';
+    else if (view.hasFocus && view.state.selection.main.empty) {
+      if (styleDocument !== view.state.doc) {
+        styleDocument = view.state.doc;
+        styleSpans = scanColorDocument(view.state.doc.toString()).spans;
+      }
+      const cursor = view.state.selection.main.head;
+      if (styleSpans.some(span => Object.keys(span.colors).length > 0 &&
+          span.openTo < span.closeFrom && cursor >= span.openTo && cursor <= span.closeFrom)) kind = 'style';
+    }
+  }
+  const canDeleteRow = kind === 'table' && tableToolbar!.rowIdx >= 0;
+  const canDeleteColumn = kind === 'table' && tableToolbar!.colCount > 1;
+  const state = `${kind}:${canDeleteRow}:${canDeleteColumn}`;
+  clearTimeout(contextToolbarHideTimer);
+  if (state === lastContextToolbarState) return;
+  const publish = () => {
+    lastContextToolbarState = state;
+    callBridge('onContextToolbarChanged', [kind, canDeleteRow, canDeleteColumn]);
+  };
+  // Widget replacement restores its cell on the next frame; do not animate that brief gap.
+  if (!kind) contextToolbarHideTimer = setTimeout(publish, 80);
+  else publish();
+}
+
+function openInlineColorPicker(property: string) {
+  if (property !== 'color' && property !== 'backgroundColor' || !editor?.view || readOnly) return 'missing';
+  inlineColorPicker?.remove();
+  const picker = document.createElement('input');
+  picker.type = 'color';
+  picker.value = property === 'backgroundColor' ? '#ffffff' : '#212121';
+  picker.style.position = 'fixed';
+  picker.style.width = '1px';
+  picker.style.height = '1px';
+  picker.style.opacity = '0';
+  picker.style.pointerEvents = 'none';
+  picker.addEventListener('change', () => {
+    setInlineStyleAtCursor(editor!.view, property as InlineStyleProperty, picker.value);
+    picker.remove();
+    if (inlineColorPicker === picker) inlineColorPicker = null;
+  }, { once: true });
+  document.body.appendChild(picker);
+  inlineColorPicker = picker;
+  try {
+    if (picker.showPicker) picker.showPicker();
+    else picker.click();
+  } catch {
+    picker.click();
+  }
+  return 'ok';
+}
 
 function nowMs() {
   return typeof performance !== 'undefined' && performance.now
@@ -114,6 +214,22 @@ function nowMs() {
 
 function bridge(): AndroidBridge | null {
   return window.KardLeafAndroid ?? null;
+}
+
+function enableSourceReveal(reason: string) {
+  pointerSelectionTrace = null;
+  if (sourceRevealEnabled) return;
+  const view = editor?.view;
+  if (!view) return;
+  sourceRevealEnabled = true;
+  view.dispatch({
+    effects: setSourceRevealEnabled.of(true),
+    annotations: Transaction.addToHistory.of(false),
+  });
+  log(
+    'KardLeafCM6Input',
+    `source reveal enabled reason=${reason} selection=${view.state.selection.main.from}:${view.state.selection.main.to}`,
+  );
 }
 
 function log(tag: string, message: string) {
@@ -146,6 +262,99 @@ function domSelectionTrace() {
   }:${selection.focusOffset} caret=${rect.left.toFixed(1)},${rect.top.toFixed(1)},${rect.bottom.toFixed(1)}`;
 }
 
+function domSelectionRangeTrace() {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return 'dom=none';
+  return `dom=${domNodeTrace(selection.anchorNode)}:${selection.anchorOffset}->${
+    domNodeTrace(selection.focusNode)
+  }:${selection.focusOffset}`;
+}
+
+function readCodeMirrorFocusDiagnostics(): CodeMirrorFocusDiagnostics | null {
+  const diagnostics = window.__KardLeafCodeMirrorSelectionDiagnostics;
+  if (!diagnostics) return null;
+  return {
+    cmAndroidFocusWorkaroundCandidateCount: Number(diagnostics.cmAndroidFocusWorkaroundCandidateCount) || 0,
+    cmAndroidFocusWorkaroundExecutedCount: Number(diagnostics.cmAndroidFocusWorkaroundExecutedCount) || 0,
+    cmAndroidFocusWorkaroundSkippedForNativeRangeCount:
+      Number(diagnostics.cmAndroidFocusWorkaroundSkippedForNativeRangeCount) || 0,
+  };
+}
+
+function traceNativeSelectionGesture(view: EditorView, source: string) {
+  const active = hasNonEmptyNativeSelection(view);
+  const now = nowMs();
+  if (!active) {
+    if (nativeSelectionGestureActive) {
+      nativeSelectionGestureActive = false;
+      lastNativeSelectionGestureScrollTop = -1;
+      const diagnostics = readCodeMirrorFocusDiagnostics();
+      if (diagnostics) {
+        const start = nativeSelectionDiagnosticsStart;
+        log(
+          'KardLeafCM6Gesture',
+          `focusWorkaround ` +
+            `cmAndroidFocusWorkaroundCandidateCount=${diagnostics.cmAndroidFocusWorkaroundCandidateCount -
+              (start?.cmAndroidFocusWorkaroundCandidateCount ?? 0)} ` +
+            `cmAndroidFocusWorkaroundExecutedCount=${diagnostics.cmAndroidFocusWorkaroundExecutedCount -
+              (start?.cmAndroidFocusWorkaroundExecutedCount ?? 0)} ` +
+            `cmAndroidFocusWorkaroundSkippedForNativeRangeCount=${diagnostics.cmAndroidFocusWorkaroundSkippedForNativeRangeCount -
+              (start?.cmAndroidFocusWorkaroundSkippedForNativeRangeCount ?? 0)}`,
+        );
+      }
+      nativeSelectionDiagnosticsStart = null;
+      log(
+        'KardLeafCM6Gesture',
+        `selectionGesture end source=${source} serial=${nativeSelectionGestureSerial} ` +
+          `cm=${view.state.selection.main.from}-${view.state.selection.main.to} scrollTop=${view.scrollDOM.scrollTop.toFixed(1)}`,
+      );
+    }
+    return false;
+  }
+
+  if (!nativeSelectionGestureActive) {
+    nativeSelectionGestureActive = true;
+    nativeSelectionGestureSerial += 1;
+    nativeSelectionDiagnosticsStart = readCodeMirrorFocusDiagnostics();
+    lastNativeSelectionGestureTraceAt = 0;
+    log(
+      'KardLeafCM6Gesture',
+      `selectionGesture start source=${source} serial=${nativeSelectionGestureSerial} ` +
+        `cm=${view.state.selection.main.from}-${view.state.selection.main.to} ` +
+        `scrollTop=${view.scrollDOM.scrollTop.toFixed(1)} ${domSelectionRangeTrace()}`,
+    );
+  }
+
+  if (now - lastNativeSelectionGestureTraceAt >= 48) {
+    lastNativeSelectionGestureTraceAt = now;
+    log(
+      'KardLeafCM6Gesture',
+      `selectionGesture move source=${source} serial=${nativeSelectionGestureSerial} ` +
+        `cm=${view.state.selection.main.from}-${view.state.selection.main.to} ` +
+        `scrollTop=${view.scrollDOM.scrollTop.toFixed(1)} ${domSelectionRangeTrace()}`,
+    );
+  }
+  return true;
+}
+
+function traceNativeSelectionGestureScroll(view: EditorView | null, now: number) {
+  if (!view || !hasNonEmptyNativeSelection(view)) {
+    lastNativeSelectionGestureScrollTop = -1;
+    return;
+  }
+  if (!nativeSelectionGestureActive) traceNativeSelectionGesture(view, 'scroll');
+  if (now - lastNativeSelectionGestureScrollTraceAt < 48) return;
+  lastNativeSelectionGestureScrollTraceAt = now;
+  const top = view.scrollDOM.scrollTop;
+  const delta = lastNativeSelectionGestureScrollTop < 0 ? 0 : top - lastNativeSelectionGestureScrollTop;
+  lastNativeSelectionGestureScrollTop = top;
+  log(
+    'KardLeafCM6Gesture',
+    `selectionGesture scroll serial=${nativeSelectionGestureSerial} top=${top.toFixed(1)} ` +
+      `delta=${delta.toFixed(1)} cmHead=${view.state.selection.main.head}`,
+  );
+}
+
 function scrollTrace(stage: string) {
   const view = editor?.view;
   if (!view) return;
@@ -157,6 +366,10 @@ function scrollTrace(stage: string) {
   log(
     'KardLeafCM6Scroll',
     `${stage} top=${scroller.scrollTop.toFixed(1)} height=${scroller.clientHeight} ` +
+      `scrollHeight=${scroller.scrollHeight} revision=${selectionRevision} ` +
+      `frozen=${selectionRenderingFrozen(view.state)} native=${view.state.field(nativeSelectionField, false)} ` +
+      `renderHead=${renderingSelection(view.state).main.head} ` +
+      `focusResets=${readCodeMirrorFocusDiagnostics()?.cmAndroidFocusWorkaroundExecutedCount ?? 0} ` +
       `active=${domNodeTrace(active)} activeRect=${activeRect ? `${activeRect.top.toFixed(1)}:${activeRect.bottom.toFixed(1)}` : 'none'} ` +
       `cmHead=${head} cmRect=${cmRect ? `${cmRect.top.toFixed(1)}:${cmRect.bottom.toFixed(1)}` : 'none'} ${domSelectionTrace()}`,
   );
@@ -165,12 +378,16 @@ function scrollTrace(stage: string) {
 function revealActiveEditorCaret() {
   const control = editor;
   if (!control) return 'missing';
+  if (hasNonEmptyNativeSelection(control.view)) return 'native-selection';
   const active = document.activeElement;
   if (active instanceof HTMLElement && active !== control.view.contentDOM && active.isContentEditable) {
     active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     return 'contenteditable';
   }
   if (!control.view.hasFocus) return 'ignored';
+  // A long press may release before Chromium publishes its new selection.
+  // Never reveal the old caret just because the IME viewport has changed.
+  if (pointerSelectionTrace && selectionRevision === pointerSelectionTrace.revisionAtStart) return 'pointer-pending';
   control.view.dispatch({ scrollIntoView: true });
   return 'codemirror';
 }
@@ -178,11 +395,19 @@ function revealActiveEditorCaret() {
 function prepareImeReveal(imeInsetPx: unknown) {
   const insetPx = Math.max(0, Number(imeInsetPx) || 0);
   if (insetPx <= 0) return 'hidden';
+  const view = editor?.view;
+  scrollTrace(`ime reveal before insetPx=${insetPx}`);
   const result = revealActiveEditorCaret();
   log(
     'KardLeafCM6Scroll',
-    `ime viewport insetPx=${insetPx} result=${result} head=${editor?.view.state.selection.main.head ?? -1}`,
+    `ime viewport insetPx=${insetPx} result=${result} head=${editor?.view.state.selection.main.head ?? -1} ` +
+      `revision=${selectionRevision} pointerRevision=${pointerSelectionTrace?.revisionAtStart ?? -1} ` +
+      `pointerAge=${pointerSelectionTrace ? Math.round(nowMs() - pointerSelectionTrace.startedAt) : -1}ms`,
   );
+  // Diagnostic only: observe the existing native/CM scroll on the next frame.
+  requestAnimationFrame(() => {
+    if (view && editor?.view === view) scrollTrace(`ime reveal frame result=${result}`);
+  });
   return result;
 }
 
@@ -341,8 +566,12 @@ function decodeURIComponentSafe(value: string) {
 
 function normalizeFontFamily(fontFamily: string) {
   const value = String(fontFamily || '').trim();
+  // Match PreviewWebView's single family name (including escaping), not a CSS font list.
+  if (livePreviewEnabled) {
+    return !value || value.toLowerCase() === 'system' ? 'sans-serif' : `"${value.replace(/"/g, '\\"')}"`;
+  }
   if (!value || value === 'system') {
-    return 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    return 'sans-serif';
   }
   return value;
 }
@@ -402,10 +631,35 @@ function notifyHistoryState(force = false) {
   callBridge('onHistoryStateChanged', [canUndo, canRedo]);
 }
 
-function notifySelection() {
+// While a native selection gesture is active, Chromium fires selectionSet for
+// every handle move. Streaming each one over JNI only adds main-thread hops on
+// the Kotlin side, so coalesce to one trailing call per 120ms window. The
+// trailing timer guarantees the final range still reaches the Kotlin side.
+let selectionNotifyTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushSelectionNotification() {
+  if (selectionNotifyTimer !== null) {
+    clearTimeout(selectionNotifyTimer);
+    selectionNotifyTimer = null;
+  }
   const selection = editor?.view.state.selection.main;
-  if (!selection) return;
-  callBridge('onSelectionChanged', [selection.from, selection.to]);
+  if (selection) callBridge('onSelectionChanged', [selection.from, selection.to]);
+}
+
+function notifySelection() {
+  const view = editor?.view;
+  if (!view) return;
+  if (selectionRenderingFrozen(view.state)) {
+    if (selectionNotifyTimer === null) {
+      selectionNotifyTimer = setTimeout(() => {
+        selectionNotifyTimer = null;
+        const latest = editor?.view.state.selection.main;
+        if (latest) callBridge('onSelectionChanged', [latest.from, latest.to]);
+      }, 120);
+    }
+    return;
+  }
+  flushSelectionNotification();
 }
 
 function setSearchActiveClass(active: boolean) {
@@ -413,20 +667,50 @@ function setSearchActiveClass(active: boolean) {
 }
 
 function setTouchSelecting(view: EditorView, selecting: boolean) {
-  if (view.state.field(mouseSelectingField, false) === selecting) return;
+  const native = hasNonEmptyNativeSelection(view);
+  const mouseSelecting = view.state.field(mouseSelectingField, false);
+  const nativeSelecting = view.state.field(nativeSelectionField, false);
+  if (mouseSelecting === selecting && nativeSelecting === native) return;
+  const effects = [] as ReturnType<typeof setMouseSelecting.of>[];
+  if (mouseSelecting !== selecting) effects.push(setMouseSelecting.of(selecting));
+  if (nativeSelecting !== native) effects.push(setNativeSelectionActive.of(native));
   view.dispatch({
-    effects: setMouseSelecting.of(selecting),
+    effects,
     annotations: Transaction.addToHistory.of(false),
   });
 }
 
-function syncNativeSelectionState(view: EditorView) {
-  const selection = window.getSelection();
-  const selecting = !!selection &&
-    !selection.isCollapsed &&
-    view.contentDOM.contains(selection.anchorNode) &&
-    view.contentDOM.contains(selection.focusNode);
+function syncNativeSelectionState(view: EditorView, touching = false) {
+  const native = hasNonEmptyNativeSelection(view);
+  const selecting = touching || native;
   setTouchSelecting(view, selecting);
+}
+
+function traceSelectionViewUpdate(update: ViewUpdate) {
+  const frozen = selectionRenderingFrozen(update.state);
+  const gestureChanged = frozen !== selectionRenderingFrozen(update.startState) ||
+    update.state.field(nativeSelectionField, false) !== update.startState.field(nativeSelectionField, false);
+  if (!gestureChanged && (!frozen || (!update.selectionSet && !update.viewportChanged))) return;
+  const now = nowMs();
+  // Viewport updates can arrive for every auto-scroll tick while a native
+  // handle is moving. Keep this diagnostic off the layout-critical path.
+  if (!gestureChanged && now - lastSelectionViewTraceAt < 120) return;
+  lastSelectionViewTraceAt = now;
+  const selection = update.state.selection.main;
+  const renderingChanged = !renderingSelection(update.startState).eq(renderingSelection(update.state));
+  const geometry = now - lastSelectionGeometryTraceAt >= 250;
+  if (geometry) lastSelectionGeometryTraceAt = now;
+  log(
+    'KardLeafCM6SelectionTrace',
+    `viewUpdate action=${checkUpdateAction(update)} selection=${selection.from}-${selection.to} head=${selection.head} ` +
+      `frozenStart=${selectionRenderingFrozen(update.startState)} frozenEnd=${frozen} ` +
+      `native=${update.state.field(nativeSelectionField, false)} renderHead=${renderingSelection(update.state).main.head} ` +
+      `scrollTop=${update.view.scrollDOM.scrollTop.toFixed(1)} ` +
+      `selectionSet=${update.selectionSet} viewportChanged=${update.viewportChanged} ` +
+      `docChanged=${update.docChanged} focusChanged=${update.focusChanged} renderingChanged=${renderingChanged} ` +
+      `transactions=${update.transactions.length} active=${domNodeTrace(document.activeElement)} ` +
+      `${geometry ? domSelectionTrace() : 'dom=not-sampled'}`,
+  );
 }
 
 function editorPositionAtPoint(view: EditorView, x: number, y: number) {
@@ -481,6 +765,7 @@ function scheduleScrollMetrics() {
 
 function handleScroll() {
   const timestamp = nowMs();
+  traceNativeSelectionGestureScroll(editor?.view ?? null, timestamp);
   if (!scrollSession) {
     scrollSession = {
       start: timestamp,
@@ -505,7 +790,10 @@ function handleScroll() {
   scrollSettleTimer = window.setTimeout(() => {
     if (!scrollSession) return;
     const elapsed = nowMs() - scrollSession.start;
-    const avg = scrollSession.frames > 0 ? elapsed / scrollSession.frames : 0;
+    // These are scroll-event intervals, not rendered frames. Exclude the
+    // 180ms settle timer from their average and label them accordingly in Android.
+    const activeElapsed = scrollSession.lastFrame - scrollSession.start;
+    const avg = scrollSession.frames > 0 ? activeElapsed / scrollSession.frames : 0;
     emitScrollMetrics(
       'settled',
       elapsed,
@@ -513,7 +801,8 @@ function handleScroll() {
       scrollSession.slowFrames,
       scrollSession.maxFrameMs,
       avg,
-      scrollSession.slowFrames <= Math.max(2, scrollSession.frames * 0.2),
+      scrollSession.frames > 0 && scrollSession.maxFrameMs < 50 &&
+        scrollSession.slowFrames <= Math.floor(scrollSession.frames * 0.2),
     );
     scrollTrace('settled');
     scrollSession = null;
@@ -552,6 +841,16 @@ class WikiImageWidget extends WidgetType {
 
     const frame = document.createElement('span');
     frame.className = 'kl-wiki-image-frame';
+    let disposed = false;
+    let selectionCleanup = () => {};
+
+    const deferDomUpdate = (action: () => void) => {
+      selectionCleanup();
+      if (disposed || !frame.isConnected) return;
+      selectionCleanup = runWhenNativeSelectionSettled(view, container, () => {
+        if (!disposed && frame.isConnected) action();
+      });
+    };
 
     const setFallback = () => {
       frame.textContent = '';
@@ -568,21 +867,27 @@ class WikiImageWidget extends WidgetType {
     img.draggable = false;
     img.onerror = () => {
       log('KardLeafCM6Image', `wiki image load failed src=${this.rawSrc}`);
-      setFallback();
+      deferDomUpdate(setFallback);
     };
 
     Promise.resolve(this.resolver(this.rawSrc))
       .then((resolved) => {
-        if (!frame.isConnected) return;
-        if (resolved) img.src = resolved;
-        else setFallback();
+        deferDomUpdate(() => {
+          if (resolved) img.src = resolved;
+          else setFallback();
+        });
       })
       .catch(() => {
-        if (frame.isConnected) setFallback();
-      });
+        deferDomUpdate(setFallback);
+    });
 
     frame.appendChild(img);
     container.appendChild(frame);
+    wikiImageCleanups.set(container, () => {
+      disposed = true;
+      selectionCleanup();
+      img.onerror = null;
+    });
 
     container.addEventListener('mousedown', (event) => {
       if (!isSafeExternalImageSrc(this.rawSrc)) {
@@ -604,10 +909,17 @@ class WikiImageWidget extends WidgetType {
     return container;
   }
 
+  destroy(dom: HTMLElement) {
+    wikiImageCleanups.get(dom)?.();
+    wikiImageCleanups.delete(dom);
+  }
+
   ignoreEvent(event: Event) {
     return event.type !== 'mousedown';
   }
 }
+
+const wikiImageCleanups = new WeakMap<HTMLElement, () => void>();
 
 function parseWikiImageLine(text: string) {
   const match = /^\s*!\[\[([^\]\n]+)]]\s*$/.exec(text);
@@ -627,7 +939,7 @@ function createWikiImageExtension(
 
   function buildDecorations(state: EditorState): DecorationSet {
     const builder = new RangeSetBuilder<Decoration>();
-    const head = state.selection.main.head;
+    const head = renderingSelection(state).main.head;
     const cursorLine = state.doc.lineAt(head).number;
 
     for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
@@ -635,7 +947,7 @@ function createWikiImageExtension(
       const parsed = parseWikiImageLine(line.text);
       if (!parsed) continue;
 
-      const sourceVisible = cursorLine === line.number;
+      const sourceVisible = !selectionRenderingFrozen(state) && cursorLine === line.number;
       const widget = new WikiImageWidget(
         parsed.rawSrc,
         parsed.alt,
@@ -669,7 +981,7 @@ function createWikiImageExtension(
     update(value, tr) {
       const hasRefresh = tr.effects.some((effect) => effect.is(refreshWikiImagesEffect));
       if (hasRefresh) tick += 1;
-      if (tr.docChanged || tr.selection || hasRefresh) {
+      if (shouldRebuildBlockDecorations(tr) || hasRefresh && !selectionRenderingFrozen(tr.state)) {
         return buildDecorations(tr.state);
       }
       return value;
@@ -692,22 +1004,139 @@ function createKardLeafWikiImagePlugin(): EditorPlugin {
 }
 
 
-function onContentApplied() {
+function onContentApplied(appliedToken = documentToken) {
   const appliedLength = editor?.view.state.doc.length ?? fallbackText.length;
   log('KardLeafCM6Bridge', `content applied len=${appliedLength}`);
-  callBridge('onContentApplied', [appliedLength]);
+  callBridge('onContentApplied', [bootstrapToken, appliedToken, appliedLength]);
+}
+
+async function prepareInitialRender(request: string, anchor: unknown) {
+  const view = editor?.view;
+  if (!view) return;
+  initialRenderRequest = request;
+  const doc = view.state.doc;
+  const contentToken = documentToken;
+  const start = nowMs();
+  let anchorResult = 'ok';
+  log(
+    'KardLeafCM6Perf',
+    `initial render start request=${request} len=${doc.length} anchor=${anchor ? 'yes' : 'no'} sourceReveal=${sourceRevealEnabled}`,
+  );
+  try {
+    while (initialRenderRequest === request && view.state.doc === doc && documentToken === contentToken) {
+      // Let CodeMirror settle its viewport/height map, including hidden but laid-out WebViews.
+      await new Promise<void>((resolve) => view.requestMeasure({ read: () => {}, write: () => resolve() }));
+      if (initialRenderRequest !== request || view.state.doc !== doc || documentToken !== contentToken) return;
+      if (nowMs() - start > 10_000) throw new Error('Initial preview did not finish rendering');
+      if (view.scrollDOM.clientWidth <= 0 || view.scrollDOM.clientHeight <= 0) continue;
+      // Position first so only the destination viewport needs synchronous parsing.
+      // Search navigation has priority over a saved mode-switch anchor.
+      if (anchor && !initialSelectionRequested) {
+        const before = view.scrollDOM.scrollTop;
+        anchorResult = String((window.KardLeafEditor?.scrollViewportToAnchor as (anchor: unknown) => unknown)(anchor));
+        if (!anchorResult.startsWith('ok:')) throw new Error(anchorResult);
+        if (Math.abs(view.scrollDOM.scrollTop - before) > 1) continue;
+      }
+      const treeBefore = syntaxTree(view.state);
+      if (livePreviewEnabled && (!forceParsing(view, view.viewport.to, 8) || treeBefore !== syntaxTree(view.state))) continue;
+      // Images, fonts and asynchronous diagrams keep their own loading/error widgets.
+      // Their network/decoding time must not hold the whole note invisible or disable scrolling.
+      log(
+        'KardLeafCM6Perf',
+        `initial render ready request=${request} len=${doc.length} viewportTo=${view.viewport.to} parsedTo=${syntaxTree(view.state).length} ` +
+          `elapsed=${(nowMs() - start).toFixed(1)}ms anchor=${anchorResult} sourceReveal=${sourceRevealEnabled}`,
+      );
+      callBridge('onInitialRenderReady', [bootstrapToken, contentToken, request, anchorResult]);
+      if (livePreviewEnabled) traceTitleStyle('render-ready');
+      return;
+    }
+  } catch (error) {
+    if (initialRenderRequest !== request) return;
+    log(
+      'KardLeafCM6Perf',
+      `initial render failed request=${request} elapsed=${(nowMs() - start).toFixed(1)}ms: ${String(error)}`,
+    );
+    callBridge('onInitialRenderReady', [bootstrapToken, contentToken, request, 'error']);
+  }
 }
 
 function createKardLeafBridgePlugin(): EditorPlugin {
   return {
     id: 'kardleaf.androidBridge',
     setup(ctx) {
+      let touching = false;
+      let lastSelectionLogAt = 0;
+      const longTasks = typeof PerformanceObserver !== 'undefined' &&
+        PerformanceObserver.supportedEntryTypes?.includes('longtask')
+        ? new PerformanceObserver((entries) => {
+          const view = editor?.view;
+          const selection = view?.state.selection.main;
+          if (!view || !selection || selection.empty) return;
+          for (const entry of entries.getEntries()) {
+            log('KardLeafCM6Perf', `selection longTask start=${entry.startTime.toFixed(1)}ms duration=${entry.duration.toFixed(1)}ms ` +
+              `from=${selection.from} to=${selection.to} head=${selection.head} docLen=${view.state.doc.length} ` +
+              `domFocus=${domNodeTrace(window.getSelection()?.focusNode ?? null)}`);
+          }
+        })
+        : null;
+      longTasks?.observe({ entryTypes: ['longtask'] });
       const handleNativeSelectionChange = () => {
-        if (editor?.view) syncNativeSelectionState(editor.view);
+        const view = editor?.view;
+        if (!view) return;
+        syncNativeSelectionState(view, touching);
+        const active = traceNativeSelectionGesture(view, 'selectionchange');
+        const selection = window.getSelection();
+        const now = nowMs();
+        if (selection && !selection.isCollapsed && now - lastNativeSelectionTraceAt >= 120) {
+          lastNativeSelectionTraceAt = now;
+          log(
+            'KardLeafCM6SelectionTrace',
+            `nativeSelection change touching=${touching} cm=${view.state.selection.main.from}-${view.state.selection.main.to} ` +
+              `active=${domNodeTrace(document.activeElement)} ${domSelectionTrace()}`,
+          );
+        }
+        if (!active) {
+          flushSelectionNotification();
+          document.dispatchEvent(new Event(nativeSelectionSettledEvent));
+        }
       };
-      document.addEventListener('selectionchange', handleNativeSelectionChange);
+      // Capture also sees independent contenteditable widgets, whose events
+      // are deliberately ignored by CodeMirror's DOM event handlers.
+      const handleNativeTouchStart = (event: TouchEvent) => {
+        const view = editor?.view;
+        if (!view || !(event.target instanceof Node) || !view.contentDOM.contains(event.target)) return;
+        touching = true;
+        setTouchSelecting(view, true);
+      };
+      const handleNativeTouchEnd = () => {
+        touching = false;
+        handleNativeSelectionChange();
+      };
+      // Capture before CodeMirror's DOMObserver. Android emits the native
+      // range first; if CM flushes it before this listener, a source-reveal
+      // rebuild can win the same frame as the long-press.
+      document.addEventListener('selectionchange', handleNativeSelectionChange, true);
+      document.addEventListener('touchstart', handleNativeTouchStart, { capture: true, passive: true });
+      document.addEventListener('touchend', handleNativeTouchEnd, { capture: true, passive: true });
+      document.addEventListener('touchcancel', handleNativeTouchEnd, { capture: true, passive: true });
       ctx.registerCmExtensions([
+        currentSearchHighlight,
+        EditorState.transactionExtender.of(tr => tr.isUserEvent('input.replace')
+          ? { annotations: isolateHistory.of('full') } : null),
+        EditorState.transactionExtender.of(tr => !sourceRevealEnabled && tr.selection && tr.isUserEvent('select')
+          ? { effects: setSourceRevealEnabled.of(true) } : null),
         EditorView.updateListener.of((update) => {
+          if (!sourceRevealEnabled && update.transactions.some(tr =>
+            tr.effects.some(effect => effect.is(setSourceRevealEnabled) && effect.value))) {
+            sourceRevealEnabled = true;
+            log('KardLeafCM6Input', `source reveal enabled reason=selection selection=${update.state.selection.main.from}:${update.state.selection.main.to}`);
+          }
+          traceSelectionViewUpdate(update);
+          if (update.docChanged || update.selectionSet || update.focusChanged) notifyContextToolbar();
+          if ((getSearchQuery(update.state).search || getSearchQuery(update.startState).search) &&
+              (update.docChanged || update.selectionSet || update.transactions.some(tr => tr.effects.some(e => e.is(setSearchQuery))))) {
+            queueSearchSummary();
+          }
           if (suppressBridgeDepth <= 0 && update.docChanged) {
             const patches: Array<{
               start: number;
@@ -742,13 +1171,16 @@ function createKardLeafBridgePlugin(): EditorPlugin {
               ? pointer.position
               : null;
             const pointerSelection = pointerPos !== null && selection.head === pointerPos;
-            log(
-              'KardLeafCM6Input',
-              `selection revision=${selectionRevision} from=${selection.from} to=${selection.to} head=${selection.head} ` +
-                `pointer=${pointerSelection} pointerPos=${pointerPos ?? -1} pointerAge=${pointerAge}ms ` +
-                `active=${domNodeTrace(document.activeElement)} ` +
-                `${pointerSelection ? domSelectionTrace() : 'dom=not-sampled'}`,
-            );
+            if (selection.empty || pointerSelection || nowMs() - lastSelectionLogAt >= 250) {
+              lastSelectionLogAt = nowMs();
+              log(
+                'KardLeafCM6Input',
+                `selection revision=${selectionRevision} from=${selection.from} to=${selection.to} head=${selection.head} ` +
+                  `pointer=${pointerSelection} pointerPos=${pointerPos ?? -1} pointerAge=${pointerAge}ms ` +
+                  `active=${domNodeTrace(document.activeElement)} ` +
+                  `${pointerSelection ? domSelectionTrace() : 'dom=not-sampled'}`,
+              );
+            }
             if (pointerSelection) {
               pointerSelectionTrace = null;
             }
@@ -758,7 +1190,6 @@ function createKardLeafBridgePlugin(): EditorPlugin {
         }),
         EditorView.domEventHandlers({
           touchstart(event) {
-            if (editor?.view) setTouchSelecting(editor.view, true);
             callBridge('onUserInteraction');
             const touch = event.touches[0];
             const view = editor?.view;
@@ -767,6 +1198,12 @@ function createKardLeafBridgePlugin(): EditorPlugin {
             const editableTarget = target?.closest('[contenteditable]');
             const ignoredTarget = target?.closest('button,a,input,textarea,select') ||
               editableTarget && editableTarget !== editor?.view.contentDOM;
+            // Establish the DOM caret before Chromium starts its first long-press
+            // selection session. Focusing afterwards can lose the native handles.
+            if (view && !view.hasFocus && event.touches.length === 1 && !ignoredTarget &&
+                editableTarget === view.contentDOM && target?.closest('.cm-line')) {
+              view.focus();
+            }
             pointerSelectionTrace = touch && !ignoredTarget
               ? {
                   startedAt: nowMs(),
@@ -808,7 +1245,7 @@ function createKardLeafBridgePlugin(): EditorPlugin {
             const pointer = pointerSelectionTrace;
             if (pointer) {
               pointer.endedAt = nowMs();
-              pointer.position = view
+              pointer.position = view && pointer.endedAt - pointer.startedAt <= 280 && pointer.maxMove <= 8
                 ? editorPositionAtPoint(view, pointer.x, pointer.y)
                 : pointer.position;
               const selection = view?.state.selection.main;
@@ -823,10 +1260,12 @@ function createKardLeafBridgePlugin(): EditorPlugin {
                 window.setTimeout(() => {
                   const view = editor?.view;
                   if (!view || pointerSelectionTrace !== pointer || selectionRevision !== pointer.revisionAtStart) return;
+                  if (!view.state.selection.main.empty || window.getSelection()?.isCollapsed === false) return;
                   const pos = pointer.position;
                   if (typeof pos !== 'number') return;
                   view.dispatch({
                     selection: EditorSelection.cursor(pos),
+                    userEvent: 'select.pointer',
                     annotations: Transaction.addToHistory.of(false),
                   });
                   view.focus();
@@ -848,6 +1287,11 @@ function createKardLeafBridgePlugin(): EditorPlugin {
           mousedown() {
             callBridge('onUserInteraction');
           },
+          keydown() {
+            enableSourceReveal('keydown');
+            callBridge('onUserInteraction');
+            return false;
+          },
         }),
       ]);
 
@@ -864,11 +1308,39 @@ function createKardLeafBridgePlugin(): EditorPlugin {
             });
           },
         },
+        {
+          id: 'cycleInlineStyleAtCursor',
+          run({ view }, property) {
+            if (property === 'color' || property === 'backgroundColor' || property === 'fontSize') {
+              return cycleInlineStyleAtCursor(view, property);
+            }
+            return false;
+          },
+        },
+        {
+          id: 'setInlineStyleAtCursor',
+          run({ view }, property, value) {
+            if (property === 'color' || property === 'backgroundColor' || property === 'fontSize') {
+              return setInlineStyleAtCursor(view, property, typeof value === 'string' && value ? value : null);
+            }
+            return false;
+          },
+        },
+        {
+          id: 'openInlineColorPicker',
+          run(_context, property) {
+            return openInlineColorPicker(String(property ?? '')) === 'ok';
+          },
+        },
       ]);
 
       return {
         dispose() {
-          document.removeEventListener('selectionchange', handleNativeSelectionChange);
+          longTasks?.disconnect();
+          document.removeEventListener('selectionchange', handleNativeSelectionChange, true);
+          document.removeEventListener('touchstart', handleNativeTouchStart, true);
+          document.removeEventListener('touchend', handleNativeTouchEnd, true);
+          document.removeEventListener('touchcancel', handleNativeTouchEnd, true);
         },
       };
     },
@@ -888,44 +1360,23 @@ function buildPlugins(): EditorPlugin[] {
             maxLoadAttempts: 1,
             onImageClick: notifyLocalImageClicked,
           }),
-          rawHtmlPlugin(),
+          rawHtmlPlugin({ handlesEditableHtml: isColorHtml }),
+          inlineColorPlugin(),
           createKardLeafWikiImagePlugin(),
         ]
       : []),
     smartPastePlugin(),
     slashCommandPlugin(),
     wikilinkPlugin(),
-    selectionToolbarPlugin(),
+    markTextToolbarPlugin((id) => { editor?.execCommand(id); }),
     createKardLeafBridgePlugin(),
   ];
 }
 
 function hideTableToolbar() {
-  tableToolbar?.remove();
+  const wasVisible = tableToolbar !== null;
   tableToolbar = null;
-}
-
-function tableToolbarButton(
-  label: string,
-  enabled: boolean,
-  action: () => void,
-): HTMLButtonElement {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.textContent = label;
-  button.disabled = !enabled;
-  button.addEventListener('pointerdown', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  });
-  button.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (button.disabled) return;
-    hideTableToolbar();
-    action();
-  });
-  return button;
+  if (wasVisible) notifyContextToolbar();
 }
 
 function showTableToolbar(event: EditorTableContextMenuEvent) {
@@ -934,83 +1385,53 @@ function showTableToolbar(event: EditorTableContextMenuEvent) {
     return;
   }
 
-  injectStyle(
-    'kardleaf-table-toolbar-style',
-    `
-      .kl-table-toolbar {
-        position: fixed;
-        left: max(10px, env(safe-area-inset-left));
-        right: max(10px, env(safe-area-inset-right));
-        bottom: 8px;
-        z-index: 2147483000;
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 5px;
-        align-items: center;
-        padding: 6px;
-        border: 1px solid var(--kl-shell-border);
-        border-radius: 12px;
-        background: var(--kl-shell-bg);
-        color: var(--kl-shell-fg);
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
-      }
-      .kl-table-toolbar button {
-        flex: 1 1 auto;
-        min-width: 0;
-        min-height: 36px;
-        padding: 6px 6px;
-        border: 1px solid var(--kl-shell-border);
-        border-radius: 8px;
-        background: var(--kl-shell-soft);
-        color: var(--kl-shell-fg);
-        font: inherit;
-        font-size: 13px;
-        white-space: nowrap;
-        touch-action: manipulation;
-      }
-      .kl-table-toolbar button:disabled {
-        opacity: 0.4;
-      }
-    `,
-  );
+  tableToolbar = event;
+  notifyContextToolbar();
+}
 
-  hideTableToolbar();
-  const toolbar = document.createElement('div');
-  toolbar.className = 'kl-table-toolbar';
-  toolbar.setAttribute('role', 'toolbar');
-  toolbar.setAttribute('aria-label', '表格编辑');
+function runTableToolbarAction(action: string) {
+  const event = tableToolbar;
+  if (!event || readOnly || !livePreviewEnabled) return 'missing';
 
-  const nextAlignment =
-    event.alignment === null
-      ? 'left'
-      : event.alignment === 'left'
-        ? 'center'
-        : event.alignment === 'center'
-          ? 'right'
-          : null;
-  const alignmentLabel =
-    event.alignment === 'left'
-      ? '左对齐'
-      : event.alignment === 'center'
-        ? '居中'
-        : event.alignment === 'right'
-          ? '右对齐'
-          : '默认对齐';
-
-  toolbar.append(
-    tableToolbarButton('+ 行', true, () => event.actions.addRowAt(event.rowIdx, 'below')),
-    tableToolbarButton('+ 列', true, () => event.actions.addColumnAt(event.colIdx, 'right')),
-    tableToolbarButton('- 行', event.rowIdx >= 0, () => event.actions.deleteRow(event.rowIdx)),
-    tableToolbarButton('- 列', event.colCount > 1, () => event.actions.deleteColumn(event.colIdx)),
-    tableToolbarButton(alignmentLabel, true, () =>
-      event.actions.setAlignment(event.colIdx, nextAlignment),
-    ),
-    tableToolbarButton('源码', true, () => event.actions.toggleSource()),
-  );
-
-  document.body.appendChild(toolbar);
-  tableToolbar = toolbar;
+  switch (action) {
+    case 'addRow':
+      hideTableToolbar();
+      event.actions.addRowAt(event.rowIdx, 'below');
+      return 'ok';
+    case 'addColumn':
+      hideTableToolbar();
+      event.actions.addColumnAt(event.colIdx, 'right');
+      return 'ok';
+    case 'deleteRow':
+      if (event.rowIdx < 0) return 'disabled';
+      hideTableToolbar();
+      event.actions.deleteRow(event.rowIdx);
+      return 'ok';
+    case 'deleteColumn':
+      if (event.colCount <= 1) return 'disabled';
+      hideTableToolbar();
+      event.actions.deleteColumn(event.colIdx);
+      return 'ok';
+    case 'alignment': {
+      const nextAlignment =
+        event.alignment === null
+          ? 'left'
+          : event.alignment === 'left'
+            ? 'center'
+            : event.alignment === 'center'
+              ? 'right'
+              : null;
+      hideTableToolbar();
+      event.actions.setAlignment(event.colIdx, nextAlignment);
+      return 'ok';
+    }
+    case 'sourcePreview':
+      hideTableToolbar();
+      event.actions.toggleSource();
+      return 'ok';
+    default:
+      return 'missing';
+  }
 }
 
 function handleEditorEvent(event: EditorEvent) {
@@ -1035,21 +1456,90 @@ function handleEditorEvent(event: EditorEvent) {
 
 document.addEventListener('focusin', (event) => {
   const target = event.target;
+  // Table selection sync briefly focuses the CM root; it is not a new user target.
+  if (target === editor?.view.contentDOM) return;
   if (
     !(target instanceof Element) ||
-    !target.closest('.cm-table-widget, .kl-table-toolbar')
+    !target.closest('.cm-table-widget')
   ) {
     hideTableToolbar();
   }
 });
 
+document.addEventListener('pointerdown', (event) => {
+  if (!(event.target instanceof Element) || !event.target.closest('.cm-table-widget')) hideTableToolbar();
+}, true);
+
+document.addEventListener('keydown', (event) => {
+  if (event.target === editor?.view.contentDOM) hideTableToolbar();
+});
+
 document.addEventListener('touchmove', hideTableToolbar, { passive: true });
 
 function titleHeaderHeightPx() {
-  return Math.ceil(currentTitleFontSize * 1.5 + 8);
+  return Math.ceil(currentTitleFontSize * 1.272727 + 8);
 }
 
-function applyTitleHeaderState() {
+function traceTitleStyle(stage: string) {
+  if (!titleHeader || !titleInput) {
+    log(
+      'KardLeafCM6Trace',
+      `title style stage=${stage} input=missing titleLen=${currentTitle.length} ` +
+        `titleVisible=${titleVisible} titleFontSize=${currentTitleFontSize}px`,
+    );
+    return;
+  }
+  const inputStyle = window.getComputedStyle(titleInput);
+  const inputRect = titleInput.getBoundingClientRect();
+  const headerRect = titleHeader.getBoundingClientRect();
+  const rootStyle = window.getComputedStyle(document.documentElement);
+  const scroller = editor?.view.scrollDOM;
+  const content = editor?.view.contentDOM;
+  const contentStyle = content ? getComputedStyle(content) : null;
+  const scrollerStyle = scroller ? getComputedStyle(scroller) : null;
+  const contentRect = content?.getBoundingClientRect();
+  log(
+    'KardLeafCM6Trace',
+    `title style stage=${stage} page=${bootstrapToken} request=${initialRenderRequest} t=${nowMs().toFixed(1)} ` +
+      `titleLen=${currentTitle.length} titleVisible=${titleVisible} ` +
+      `hidden=${titleHeader.hidden} readOnly=${titleInput.readOnly} ` +
+      `fontFamily=${inputStyle.fontFamily} fontSize=${inputStyle.fontSize} ` +
+      `fontWeight=${inputStyle.fontWeight} letterSpacing=${inputStyle.letterSpacing} ` +
+      `lineHeight=${inputStyle.lineHeight} input=${inputRect.width.toFixed(1)}x${inputRect.height.toFixed(1)} ` +
+      `header=${headerRect.width.toFixed(1)}x${headerRect.height.toFixed(1)} ` +
+      `inputXY=${inputRect.x.toFixed(2)},${inputRect.y.toFixed(2)} headerXY=${headerRect.x.toFixed(2)},${headerRect.y.toFixed(2)} ` +
+      `bodyXY=${contentRect?.x.toFixed(2)},${contentRect?.y.toFixed(2)} scroll=${scroller?.scrollLeft},${scroller?.scrollTop} ` +
+      `viewport=${scroller?.clientWidth}x${scroller?.clientHeight} dpr=${devicePixelRatio} scale=${window.visualViewport?.scale} ` +
+      `bodyFont=${contentStyle?.fontFamily} bodySize=${contentStyle?.fontSize} bodyLine=${contentStyle?.lineHeight} ` +
+      `bodySpacing=${contentStyle?.letterSpacing} bodyWeight=${contentStyle?.fontWeight} ` +
+      `scrollerFont=${scrollerStyle?.fontFamily} scrollerLine=${scrollerStyle?.lineHeight} ` +
+      `requestedFont=${normalizeFontFamily(currentFontFamily)} requestedSize=${currentFontSize} ` +
+      `requestedLine=${currentLineHeight} requestedSpacing=${currentLetterSpacing} sourceReveal=${sourceRevealEnabled} ` +
+      `cssHeaderHeight=${rootStyle.getPropertyValue('--kl-title-header-height').trim()} ` +
+      `fonts=${document.fonts?.status ?? 'unknown'}`,
+  );
+}
+
+function traceInitialSurface() {
+  if (!livePreviewEnabled) return;
+  const token = documentToken;
+  const request = initialRenderRequest;
+  // Bounded observation only: never move the title/scroll position or gate rendering on a timer.
+  for (const delay of [0, 100, 300, 700, 1500]) {
+    window.setTimeout(() => {
+      if (documentToken === token && initialRenderRequest === request) traceTitleStyle(`visible+${delay}ms`);
+    }, delay);
+  }
+}
+
+function scheduleTitleStyleTrace(stage: string) {
+  requestAnimationFrame(() => {
+    traceTitleStyle(`${stage}:raf1`);
+    requestAnimationFrame(() => traceTitleStyle(`${stage}:raf2`));
+  });
+}
+
+function applyTitleHeaderState(stage = 'apply') {
   document.documentElement.style.setProperty(
     '--kl-title-header-height',
     `${titleVisible ? titleHeaderHeightPx() : 0}px`,
@@ -1068,6 +1558,7 @@ function applyTitleHeaderState() {
     titleInput.value = currentTitle;
     suppressTitleBridge = false;
   }
+  traceTitleStyle(stage);
 }
 
 function installTitleHeader() {
@@ -1090,7 +1581,9 @@ function installTitleHeader() {
     currentTitle = titleInput.value;
     callBridge('onTitleChanged', [currentTitle]);
   });
-  titleInput.addEventListener('focus', () => callBridge('onUserInteraction'));
+  titleInput.addEventListener('focus', () => {
+    callBridge('onUserInteraction');
+  });
   titleInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -1100,7 +1593,8 @@ function installTitleHeader() {
 
   titleHeader.appendChild(titleInput);
   scroller.insertBefore(titleHeader, scroller.firstChild);
-  applyTitleHeaderState();
+  applyTitleHeaderState('install');
+  scheduleTitleStyleTrace('install');
 }
 
 function setTitleState(
@@ -1115,13 +1609,16 @@ function setTitleState(
   if (Number.isFinite(Number(fontSize))) {
     currentTitleFontSize = Math.max(16, Math.min(34, Number(fontSize)));
   }
-  applyTitleHeaderState();
+  applyTitleHeaderState('setState');
+  scheduleTitleStyleTrace('setState');
   return 'ok';
 }
 
 function createEditorInstance(initialText = '', initialSelection?: { anchor: number; head: number }) {
   if (!root) throw new Error('Missing #editorRoot');
   root.textContent = '';
+  root.classList.toggle('kl-live-preview', livePreviewEnabled);
+  const settings = buildSettings();
   editor = createSwarmEditor(root, {
     initialText,
     initialSelection: initialSelection
@@ -1132,7 +1629,7 @@ function createEditorInstance(initialText = '', initialSelection?: { anchor: num
           to: Math.max(initialSelection.anchor, initialSelection.head),
         }
       : undefined,
-    settings: buildSettings(),
+    settings,
     host: {
       resolveImage(src) {
         return resolveImageSource(src);
@@ -1157,6 +1654,7 @@ function createEditorInstance(initialText = '', initialSelection?: { anchor: num
     plugins: buildPlugins(),
     onEvent: handleEditorEvent,
   });
+  lastRuntimeSettings = JSON.stringify(settings);
   editor.view.scrollDOM.addEventListener('scroll', handleScroll, { passive: true });
   installTitleHeader();
   notifyHistoryState(true);
@@ -1164,30 +1662,19 @@ function createEditorInstance(initialText = '', initialSelection?: { anchor: num
   setStatus('');
   log(
     'KardLeafCM6',
-    `editor ready version=${VERSION} livePreview=${livePreviewEnabled} renderPlugins=${livePreviewEnabled}`,
+    `editor ready version=${VERSION} livePreview=${livePreviewEnabled} renderPlugins=${livePreviewEnabled} ` +
+      `docLen=${editor.view.state.doc.length} selection=${editor.view.state.selection.main.from}:${editor.view.state.selection.main.to} ` +
+      `sourceReveal=${sourceRevealEnabled}`,
   );
-  callBridge('onEditorReady', [VERSION, editor.view.state.doc.length]);
 }
 
 function updateRuntimeSettings() {
   if (!editor) return;
-  editor.updateSettings({
-    readonly: readOnly,
-    editable: !readOnly,
-    theme: {
-      appearance: darkMode ? 'dark' : 'light',
-      fontSize: currentFontSize,
-      fontFamily: normalizeFontFamily(currentFontFamily),
-      lineHeight: currentLineHeight,
-      letterSpacing: currentLetterSpacing,
-      paragraphSpacing: currentParagraphSpacing,
-      colors: editorThemeColors(),
-    },
-    features: {
-      markdownDecorations: livePreviewEnabled,
-      inlineRendering: livePreviewEnabled,
-    },
-  });
+  const settings = buildSettings();
+  const signature = JSON.stringify(settings);
+  if (signature === lastRuntimeSettings) return;
+  editor.updateSettings(settings);
+  lastRuntimeSettings = signature;
 }
 
 function dispatchFullDocument(
@@ -1195,6 +1682,7 @@ function dispatchFullDocument(
   selectionStart?: unknown,
   selectionEnd?: unknown,
   addToHistory = false,
+  contentToken = documentToken,
 ) {
   if (!editor) {
     fallbackText = String(content ?? '');
@@ -1204,6 +1692,7 @@ function dispatchFullDocument(
 
   const text = String(content ?? '');
   const start = nowMs();
+  documentToken = contentToken;
 
   try {
     const view = editor.view;
@@ -1224,7 +1713,7 @@ function dispatchFullDocument(
       'KardLeafCM6Perf',
       `setContent done len=${text.length} elapsed=${(nowMs() - start).toFixed(1)}ms`,
     );
-    window.requestAnimationFrame(() => onContentApplied());
+    window.requestAnimationFrame(() => onContentApplied(contentToken));
     return 'ok';
   } catch (error) {
     reportError(`setContent failed len=${text.length}`, error);
@@ -1245,6 +1734,7 @@ function replaceRangeFromAndroid(
 ) {
   const view = editor?.view;
   if (!view) return 'missing';
+  enableSourceReveal('replace-range');
   const length = view.state.doc.length;
   const start = Math.max(0, Math.min(length, Number(from) || 0));
   const end = Math.max(start, Math.min(length, Number(to) || start));
@@ -1264,6 +1754,8 @@ function replaceRangeFromAndroid(
 function selectEditorRangeAndReveal(start: unknown, end: unknown) {
   const view = editor?.view;
   if (!view) return 'missing';
+  enableSourceReveal('select-range');
+  initialSelectionRequested = true;
   const selection = clampSelection(start, end, view.state.doc.length);
   const target = Math.min(selection.anchor, selection.head);
   view.dispatch({
@@ -1316,30 +1808,94 @@ function setAndroidSearchState(
   const queryText = String(query ?? '');
   const reason = String(source ?? 'android');
   if (queryText.length === 0) return clearAndroidSearchState(reason);
-  const parsedActive = Number(activeMatchIndex);
-  const parsedTotal = Number(totalMatches);
+  enableSourceReveal('search');
   try {
-    editor.setSearchState(
-      {
-        query: queryText,
-        replaceQuery: '',
-        caseSensitive: !!matchCase,
-        wholeWord: false,
-        regexp: !!useRegex,
-        // The Compose search bar owns the visible UI. CodeMirror's panel is
-        // kept open internally because its search highlighter requires it.
-        isOpen: true,
-        activeMatchIndex: Number.isFinite(parsedActive) ? Math.max(0, Math.floor(parsedActive)) : null,
-        totalMatches: Number.isFinite(parsedTotal) ? Math.max(0, Math.floor(parsedTotal)) : 0,
-      },
-      reason,
-    );
+    const view = editor.view;
+    const next = androidSearchQuery(queryText, !!useRegex, !!matchCase);
+    if (!getSearchQuery(view.state).eq(next)) view.dispatch({ effects: setSearchQuery.of(next) });
+    // SwarmNote supplies the existing invisible panel required by the official highlighter.
+    openSearchPanel(view);
     setSearchActiveClass(true);
+    queueSearchSummary();
     return 'ok';
   } catch (error) {
     reportError(`set search failed source=${reason} queryLen=${queryText.length}`, error);
     return 'error';
   }
+}
+
+let searchSummaryQueued = false;
+function queueSearchSummary() {
+  if (searchSummaryQueued) return;
+  searchSummaryQueued = true;
+  queueMicrotask(() => {
+    searchSummaryQueued = false;
+    if (editor) callBridge('onSearchStateChanged', [JSON.stringify(searchSummary(editor.view.state))]);
+  });
+}
+
+function navigateAndroidSearch(direction: number, preferredStart = -1) {
+  const view = editor?.view;
+  if (!view) return 'missing';
+  const matches = searchMatches(view.state);
+  if (!matches.length) { queueSearchSummary(); return 'empty'; }
+  const selection = view.state.selection.main;
+  const current = matches.findIndex(m => selection.from >= m.from && selection.to <= m.to && selection.from < m.to);
+  let index: number;
+  if (direction === 0) {
+    const start = preferredStart >= 0 ? preferredStart : selection.from;
+    index = matches.findIndex(m => m.to > start);
+    if (index < 0) index = 0;
+  } else if (current >= 0) {
+    index = (current + direction + matches.length) % matches.length;
+  } else if (direction > 0) {
+    index = matches.findIndex(m => m.from >= selection.to);
+    if (index < 0) index = 0;
+  } else {
+    index = -1;
+    for (let i = matches.length - 1; i >= 0; i--) {
+      if (matches[i].to <= selection.from) { index = i; break; }
+    }
+    if (index < 0) index = matches.length - 1;
+  }
+  const match = matches[index];
+  initialSelectionRequested = true;
+  view.dispatch({ selection: EditorSelection.single(match.from, match.to),
+    effects: EditorView.scrollIntoView(match.from, { y: 'center', yMargin: 96 }),
+    annotations: Transaction.addToHistory.of(false) });
+  return 'ok';
+}
+
+function replaceAndroidSearch(all: boolean, replacement: unknown) {
+  const view = editor?.view;
+  if (!view || readOnly) return 'missing';
+  const query = getSearchQuery(view.state);
+  if (!query.valid) return 'invalid';
+  view.dispatch({ effects: setSearchQuery.of(androidSearchQuery(query.search, query.regexp, query.caseSensitive, String(replacement ?? ''))) });
+  if (query.regexp) {
+    const changes = regexSearchChanges(view.state);
+    const selection = view.state.selection.main;
+    const current = changes.find(m => selection.from >= m.from && selection.to <= m.to && selection.from < m.to)
+      ?? changes.find(m => m.from >= selection.from) ?? changes[0];
+    if (!current) return 'empty';
+    const after = current.from + current.insert.length;
+    view.dispatch({ changes: all ? changes : [current],
+      selection: all ? undefined : EditorSelection.cursor(after), userEvent: all ? 'input.replace.all' : 'input.replace' });
+    if (!all) {
+      const remaining = searchMatches(view.state);
+      const next = remaining.find(m => m.from >= after) ?? remaining[0];
+      if (next) navigateAndroidSearch(0, next.from);
+    }
+  } else if (all) replaceAllSearch(view);
+  else {
+    const summary = searchSummary(view.state);
+    // The search field retains focus; select the actual match before the official replacement transaction.
+    navigateAndroidSearch(0, summary.currentStart);
+    replaceNext(view);
+  }
+  notifyHistoryState(true);
+  queueSearchSummary();
+  return 'ok';
 }
 
 function refreshImages() {
@@ -1515,27 +2071,39 @@ function installFallbackApi() {
 function installEditorApi() {
   window.KardLeafEditor = {
     version: VERSION,
+    prepareInitialRender(request: string, anchor: unknown) {
+      void prepareInitialRender(request, anchor);
+      return 'pending';
+    },
+    setTypography(fontSize: unknown, style: unknown) {
+      if (Number.isFinite(Number(fontSize))) currentFontSize = Math.max(12, Math.min(30, Number(fontSize)));
+      applyTypographyStyle(style);
+      updateRuntimeSettings();
+      if (livePreviewEnabled) scheduleTitleStyleTrace('typography');
+      return 'ok';
+    },
+    traceInitialSurface,
     prepareImeReveal(imeInsetPx: unknown) {
       return prepareImeReveal(imeInsetPx);
     },
     setTitleState(title: unknown, hint: unknown, visible: unknown, fontSize: unknown) {
       return setTitleState(title, hint, visible, fontSize);
     },
-    setDocument(content: unknown, selectionStart: unknown, selectionEnd: unknown, fontSize: unknown, nextDarkMode: unknown, typographyStyle?: unknown) {
+    setDocument(content: unknown, selectionStart: unknown, selectionEnd: unknown, fontSize: unknown, nextDarkMode: unknown, typographyStyle?: unknown, contentToken?: string) {
       if (Number.isFinite(Number(fontSize))) {
         currentFontSize = Math.max(12, Math.min(30, Number(fontSize)));
       }
       applyTypographyStyle(typographyStyle);
       if (typeof nextDarkMode === 'boolean') setDocumentTheme(nextDarkMode);
       updateRuntimeSettings();
-      return dispatchFullDocument(content, selectionStart, selectionEnd, false);
+      return dispatchFullDocument(content, selectionStart, selectionEnd, false, contentToken);
     },
     setContent(content: unknown) {
       const length = String(content ?? '').length;
       return dispatchFullDocument(content, length, length, false);
     },
-    setContentFromAndroid(content: unknown, selectionStart: unknown, selectionEnd: unknown) {
-      return dispatchFullDocument(content, selectionStart, selectionEnd, false);
+    setContentFromAndroid(content: unknown, selectionStart: unknown, selectionEnd: unknown, contentToken?: string) {
+      return dispatchFullDocument(content, selectionStart, selectionEnd, false, contentToken);
     },
     replaceRangeFromAndroid(from: unknown, to: unknown, replacement: unknown, selectionStart: unknown, selectionEnd: unknown) {
       return replaceRangeFromAndroid(from, to, replacement, selectionStart, selectionEnd);
@@ -1548,11 +2116,13 @@ function installEditorApi() {
     },
     focusEditor() {
       if (!editor) return 'missing';
+      enableSourceReveal('focus-editor');
       editor.focus();
       return 'ok';
     },
     focus() {
       if (!editor) return 'missing';
+      enableSourceReveal('focus');
       editor.focus();
       return 'ok';
     },
@@ -1706,9 +2276,11 @@ function installEditorApi() {
       return getMetrics ? getMetrics() : { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
     },
     undo() {
+      enableSourceReveal('undo');
       return editor?.execCommand('undo') ? 'ok' : 'empty';
     },
     redo() {
+      enableSourceReveal('redo');
       return editor?.execCommand('redo') ? 'ok' : 'empty';
     },
     selectRange(start: unknown, end: unknown) {
@@ -1739,11 +2311,23 @@ function installEditorApi() {
     execCommand(name: unknown, ...args: unknown[]) {
       if (!editor || typeof name !== 'string') return 'missing';
       if (name === 'selectRange') return selectEditorRangeAndReveal(args[0], args[1]);
+      if (name === 'tableToolbarAction') return runTableToolbarAction(String(args[0] ?? ''));
       if (name === 'scrollToOffset') return selectEditorRangeAndReveal(args[0], args[0]);
       if (name === 'setSearchState') {
-        return setAndroidSearchState(args[0], args[1], args[2], args[3], args[4], 'android-execCommand');
+        const result = setAndroidSearchState(args[0], args[1], args[2], args[3], args[4], 'android-execCommand');
+        if (result === 'ok' && args[6]) navigateAndroidSearch(0, Number(args[5] ?? -1));
+        return result;
       }
       if (name === 'clearSearchState') return clearAndroidSearchState(args[0] ?? 'android-execCommand');
+      if (name === 'navigateSearch') {
+        if (args.length > 2) setAndroidSearchState(args[2], args[3], args[4], -1, 0);
+        return navigateAndroidSearch(Number(args[0]) || 0, Number(args[1] ?? -1));
+      }
+      if (name === 'replaceSearch') {
+        if (args.length > 2) setAndroidSearchState(args[2], args[3], args[4], -1, 0);
+        return replaceAndroidSearch(!!args[0], args[1]);
+      }
+      enableSourceReveal(`command:${name}`);
       return editor.execCommand(name, ...args) ?? 'ok';
     },
     destroy() {
@@ -1789,9 +2373,35 @@ function main() {
 
   try {
     const start = nowMs();
-    createEditorInstance();
+    let initialText = '';
+    let initialSelection: { anchor: number; head: number } | undefined;
+    if (bootstrapToken) {
+      const payload = callBridge('consumeDocumentPayload', [bootstrapToken]);
+      if (typeof payload !== 'string') throw new Error('Missing bootstrap configuration');
+      const config = JSON.parse(payload);
+      documentToken = config.documentToken;
+      const content = callBridge('consumeDocumentPayload', [documentToken]);
+      if (typeof content !== 'string') throw new Error('Missing initial document');
+      initialText = content;
+      // Match the existing setDocument path: CodeMirror folds CRLF before clamping the supplied UTF-16 selection.
+      initialSelection = clampSelection(config.selectionStart, config.selectionEnd, initialText.replace(/\r\n/g, '\n').length);
+      setDocumentTheme(!!config.darkMode);
+      applyThemeColors(config.themeColors);
+      currentFontSize = Math.max(12, Math.min(30, Number(config.fontSize) || 16));
+      applyTypographyStyle(config.typography);
+      setTitleState(config.title, config.titleHint, config.titleVisible, config.titleFontSize);
+    } else if (bridge()) {
+      throw new Error('Missing bootstrap token');
+    }
+    createEditorInstance(initialText, initialSelection);
     installEditorApi();
-    log('KardLeafCM6Perf', `startup elapsed=${(nowMs() - start).toFixed(1)}ms`);
+    callBridge('onEditorReady', [VERSION, editor!.view.state.doc.length, bootstrapToken]);
+    onContentApplied();
+    log(
+      'KardLeafCM6Perf',
+      `startup elapsed=${(nowMs() - start).toFixed(1)}ms docLen=${initialText.length} ` +
+        `selection=${initialSelection?.anchor ?? 0}:${initialSelection?.head ?? 0} sourceReveal=${sourceRevealEnabled}`,
+    );
   } catch (error) {
     reportError('startup failed', error);
     createFallbackTextArea(error instanceof Error ? error.message : String(error));

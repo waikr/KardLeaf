@@ -21,7 +21,14 @@
  * - 编辑模式（光标在代码块内）：不显示 widget，直接编辑源码
  * - 预览和编辑模式互斥，不会同时存在
  */
-import { ensureSyntaxTree } from '@codemirror/language';
+import { syntaxTree } from '@codemirror/language';
+import { sourceRevealEnabledField } from '../../core/facets';
+import { shouldRebuildBlockDecorations } from '../../core/pluginUpdateHelper';
+import {
+  renderingSelection,
+  runWhenNativeSelectionSettled,
+  selectionRenderingFrozen,
+} from '../../core/mouseSelecting';
 import {
   type EditorState,
   type Extension,
@@ -47,6 +54,7 @@ let mermaidInitializedTheme: MermaidTheme | null = null;
 
 /** 渲染缓存：主题 + Mermaid 源码 -> SVG。 */
 const mermaidRenderCache = new Map<string, string>();
+const mermaidDomCleanups = new WeakMap<HTMLElement, () => void>();
 
 /**
  * 清除 Mermaid 渲染缓存的 Effect
@@ -232,7 +240,7 @@ class BlockMermaidWidget extends WidgetType {
     card.appendChild(zoomBtn);
 
     // 异步加载 Mermaid 并渲染图表
-    void this.renderDiagram(diagram, view);
+    void this.renderDiagram(diagram, view, card);
 
     // 点击源码图标：选中源码区域，进入编辑模式
     const enterSource = (event: Event) => {
@@ -290,7 +298,7 @@ class BlockMermaidWidget extends WidgetType {
    * @param container - 图表容器元素
    * @param view - 编辑器视图
    */
-  private async renderDiagram(container: HTMLElement, view: EditorView) {
+  private async renderDiagram(container: HTMLElement, view: EditorView, card: HTMLElement) {
     try {
       const theme = getMermaidTheme();
       const cacheKey = getRenderCacheKey(theme, this.source);
@@ -310,21 +318,30 @@ class BlockMermaidWidget extends WidgetType {
         mermaidRenderCache.set(cacheKey, svg);
       }
 
-      // 渲染 SVG
-      container.innerHTML = svg;
+      // 渲染 SVG；原生手柄选区期间保留当前 DOM，待选区结束再写入。
+      if (!card.isConnected) return;
+      const cleanup = runWhenNativeSelectionSettled(view, card, () => {
+        if (container.isConnected) container.innerHTML = svg!;
+      });
+      mermaidDomCleanups.set(card, cleanup);
       
     } catch (error) {
       // 渲染失败：显示错误信息
       console.error('Mermaid render error:', error);
-      container.innerHTML = `
-        <div class="cm-mermaid-error">
-          <div style="color: #c83c3c; font-size: 0.9em; margin-bottom: 4px;">
-            ⚠️ Mermaid 渲染失败
+      if (!card.isConnected) return;
+      const cleanup = runWhenNativeSelectionSettled(view, card, () => {
+        if (!container.isConnected) return;
+        container.innerHTML = `
+          <div class="cm-mermaid-error">
+            <div style="color: #c83c3c; font-size: 0.9em; margin-bottom: 4px;">
+              ⚠️ Mermaid 渲染失败
+            </div>
+            <pre style="color: #666; font-size: 0.85em; white-space: pre-wrap; word-break: break-word;">${this.escapeHtml(this.source)}</pre>
           </div>
-          <pre style="color: #666; font-size: 0.85em; white-space: pre-wrap; word-break: break-word;">${this.escapeHtml(this.source)}</pre>
-        </div>
-      `;
-      container.classList.add('cm-mermaid-error');
+        `;
+        container.classList.add('cm-mermaid-error');
+      });
+      mermaidDomCleanups.set(card, cleanup);
     }
   }
 
@@ -350,6 +367,11 @@ class BlockMermaidWidget extends WidgetType {
    */
   ignoreEvent() {
     return true;
+  }
+
+  destroy(dom: HTMLElement) {
+    mermaidDomCleanups.get(dom)?.();
+    mermaidDomCleanups.delete(dom);
   }
 
   /**
@@ -381,11 +403,10 @@ class BlockMermaidWidget extends WidgetType {
  */
 function buildBlockMermaidDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  // 确保语法树已构建（最多等待 100ms）
-  const tree = ensureSyntaxTree(state, state.doc.length, 100);
-  if (!tree) return builder.finish();
+  // Reuse the available tree; rebuild when CodeMirror advances the background parser.
+  const tree = syntaxTree(state);
 
-  const sel = state.selection.main;
+  const sel = renderingSelection(state).main;
   const cursorLine = state.doc.lineAt(sel.head).number;
   const renderVersion = state.field(mermaidCacheVersionField);
 
@@ -408,9 +429,9 @@ function buildBlockMermaidDecorations(state: EditorState): DecorationSet {
       const selToLine = state.doc.lineAt(sel.to).number;
       
       // 判断选区是否与代码块相交
-      const intersects =
+      const intersects = !selectionRenderingFrozen(state) && (
         (cursorLine >= fromLine && cursorLine <= toLine) ||
-        (selFromLine <= toLine && selToLine >= fromLine);
+        (selFromLine <= toLine && selToLine >= fromLine));
 
       // 提取 Mermaid 源码（去除开头和结尾的 ```）
       const lines = codeText.split('\n');
@@ -437,7 +458,7 @@ function buildBlockMermaidDecorations(state: EditorState): DecorationSet {
         renderVersion,
       );
 
-      if (intersects) {
+      if (state.field(sourceRevealEnabledField) && intersects) {
         // 光标在块内 → 不渲染 widget，让用户直接编辑源码
         // （不做任何操作，跳过这个代码块）
       } else {
@@ -464,7 +485,7 @@ const blockMermaidField = StateField.define<DecorationSet>({
   create: (state) => buildBlockMermaidDecorations(state),
   update(prev, tr) {
     const hasCacheClear = tr.effects.some((effect) => effect.is(clearMermaidCacheEffect));
-    if (tr.docChanged || tr.selection || hasCacheClear) {
+    if (shouldRebuildBlockDecorations(tr) || hasCacheClear) {
       return buildBlockMermaidDecorations(tr.state);
     }
     return prev;

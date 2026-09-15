@@ -40,6 +40,8 @@ object NoteFormatUtils {
     private val taskPrefixRegex = Regex("""^\s*[-*+]\s+\[[ xX]]\s+""")
     private val bulletPrefixRegex = Regex("""^\s*[-*+]\s+""")
     private val orderedListPrefixRegex = Regex("""^\s*\d+\.\s+""")
+    private val highlightTokenRegex = Regex("""(?<![=])==(?!=)(.+?)(?<![=])==(?![=])""")
+    private val spanTagRegex = Regex("""</?span\b[^>]*>""", RegexOption.IGNORE_CASE)
     private val markdownTokenRegex = Regex("""[*_`~>#]""")
 
     data class FrontMatterData(
@@ -269,6 +271,8 @@ object NoteFormatUtils {
             .replace(taskPrefixRegex, "")
             .replace(bulletPrefixRegex, "")
             .replace(orderedListPrefixRegex, "")
+            .replace(highlightTokenRegex, "$1")
+            .replace(spanTagRegex, "")
             .replace(markdownTokenRegex, "")
             .trim()
     }

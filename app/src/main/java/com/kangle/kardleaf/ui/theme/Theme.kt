@@ -21,9 +21,21 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.kangle.kardleaf.data.repository.PrefsManager
+import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.KardLeafLogTags
 import com.kangle.kardleaf.ui.KardLeafCustomFeatures
+
+private val GESTURE_TRACE_TAG = KardLeafLogTags.GESTURE_TRACE
+
+private fun androidx.core.graphics.Insets?.gestureTraceValue(): String =
+    this?.let { "${it.left},${it.top},${it.right},${it.bottom}" } ?: "null"
+
+private fun gestureTraceColor(color: Int): String =
+    "#${Integer.toHexString(color).padStart(8, '0')}"
 
 private val DarkColorScheme =
     darkColorScheme(
@@ -370,11 +382,51 @@ fun KardLeafTheme(
     }
 
     val view = LocalView.current
-    if (!view.isInEditMode && styleSystemBars) {
+    val lastGestureSystemBarTrace = remember(view) { arrayOfNulls<String>(1) }
+    if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.background.toArgb() // OR surface.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !effectiveDarkTheme
+            val insetsController = WindowCompat.getInsetsController(window, view)
+            if (styleSystemBars) {
+                window.statusBarColor = colorScheme.background.toArgb() // OR surface.toArgb()
+                window.navigationBarColor = Color.Transparent.toArgb()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    window.isNavigationBarContrastEnforced = false
+                }
+                insetsController.isAppearanceLightStatusBars = !effectiveDarkTheme
+                insetsController.isAppearanceLightNavigationBars = colorScheme.background.luminance() > 0.5f
+            }
+            val rootInsets = ViewCompat.getRootWindowInsets(view)
+            val navBars = rootInsets?.getInsets(WindowInsetsCompat.Type.navigationBars())
+            val navBarsIgnoringVisibility = rootInsets?.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars())
+            val systemGestures = rootInsets?.getInsets(WindowInsetsCompat.Type.systemGestures())
+            val mandatorySystemGestures = rootInsets?.getInsets(WindowInsetsCompat.Type.mandatorySystemGestures())
+            val navDividerColor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                gestureTraceColor(window.navigationBarDividerColor)
+            } else {
+                "unsupported"
+            }
+            val navContrastEnforced = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                window.isNavigationBarContrastEnforced.toString()
+            } else {
+                "unsupported"
+            }
+            val trace =
+                "themeSystemBars applied=$styleSystemBars style=${themeStyle.name} mode=${themeMode.name} " +
+                    "dark=$effectiveDarkTheme background=${gestureTraceColor(colorScheme.background.toArgb())} " +
+                    "surface=${gestureTraceColor(colorScheme.surface.toArgb())} " +
+                    "statusColor=${gestureTraceColor(window.statusBarColor)} " +
+                    "navColor=${gestureTraceColor(window.navigationBarColor)} divider=$navDividerColor " +
+                    "navContrastEnforced=$navContrastEnforced lightStatus=${insetsController.isAppearanceLightStatusBars} " +
+                    "lightNav=${insetsController.isAppearanceLightNavigationBars} " +
+                    "navBars=${navBars.gestureTraceValue()} navBarsIgnoringVisibility=${navBarsIgnoringVisibility.gestureTraceValue()} " +
+                    "systemGestures=${systemGestures.gestureTraceValue()} mandatoryGestures=${mandatorySystemGestures.gestureTraceValue()} " +
+                    "view=${view.width}x${view.height} root=${view.rootView.width}x${view.rootView.height} " +
+                    "decorUi=0x${Integer.toHexString(window.decorView.systemUiVisibility)}"
+            if (lastGestureSystemBarTrace[0] != trace) {
+                lastGestureSystemBarTrace[0] = trace
+                KardLeafLog.d(GESTURE_TRACE_TAG, trace)
+            }
         }
     }
 

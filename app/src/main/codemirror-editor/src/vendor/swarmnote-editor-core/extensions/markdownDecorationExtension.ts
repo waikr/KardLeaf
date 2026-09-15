@@ -11,7 +11,8 @@
  * - Decoration.line/mark：行级和内联装饰
  */
 import { RangeSetBuilder, type Extension } from '@codemirror/state';
-import { ensureSyntaxTree } from '@codemirror/language';
+import { syntaxTree } from '@codemirror/language';
+import { checkUpdateAction } from '../core/pluginUpdateHelper';
 import {
   Decoration,
   type DecorationSet,
@@ -101,18 +102,15 @@ const markdownTheme = EditorView.theme({
   },
   '.cm-h1': {
     fontSize: '1.9em',
-    letterSpacing: '-0.03em',
     paddingTop: '12px',
     paddingBottom: '4px',
   },
   '.cm-h2': {
     fontSize: '1.55em',
-    letterSpacing: '-0.02em',
     paddingTop: '12px',
   },
   '.cm-h3': {
     fontSize: '1.35em',
-    letterSpacing: '-0.01em',
     paddingTop: '12px',
   },
   '.cm-h4, .cm-h5, .cm-h6': {
@@ -274,7 +272,7 @@ function computeDecorations(view: EditorView): DecorationSet {
 
   // 遍历所有可见区域
   for (const { from, to } of view.visibleRanges) {
-    ensureSyntaxTree(view.state, to)?.iterate({
+    syntaxTree(view.state).iterate({
       from,
       to,
       enter(node) {
@@ -375,8 +373,8 @@ const markdownDecorationPlugin = ViewPlugin.fromClass(
      * @param update - 视图更新对象
      */
     update(update: ViewUpdate) {
-      // 仅在文档或视口变化时重新计算
-      if (update.docChanged || update.viewportChanged) {
+      // Background parsing can complete without a document/viewport change.
+      if (checkUpdateAction(update) === 'rebuild') {
         this.decorations = computeDecorations(update.view);
       }
     }

@@ -833,7 +833,7 @@ class WebDavCloudSyncManager(
     }
 
     companion object {
-        private val syncMutex = Mutex()
+        private val syncMutex = S3SyncGate.cloudMutex
 
         fun readableError(error: Throwable, fallback: String): String {
             val root = error.cause ?: error

@@ -13,7 +13,14 @@
  *
  * 内联数学公式（`$...$`）仍然由 `replaceMathFormulas` 处理，因为它保持在单行上。
  */
-import { ensureSyntaxTree } from '@codemirror/language';
+import { syntaxTree } from '@codemirror/language';
+import { sourceRevealEnabledField } from '../../core/facets';
+import { shouldRebuildBlockDecorations } from '../../core/pluginUpdateHelper';
+import {
+  renderingSelection,
+  runWhenNativeSelectionSettled,
+  selectionRenderingFrozen,
+} from '../../core/mouseSelecting';
 import {
   type EditorState,
   type Extension,
@@ -33,6 +40,7 @@ import 'katex/dist/katex.css';
 
 /** KaTeX 模块缓存 */
 let katexModule: typeof import('katex') | null = null;
+const mathBlockDomCleanups = new WeakMap<HTMLElement, () => void>();
 
 /**
  * 懒加载 KaTeX 模块
@@ -121,15 +129,18 @@ class BlockMathWidget extends WidgetType {
     void loadKaTeX().then((katex) => {
       // 检查元素是否仍然连接到 DOM
       if (!formula.isConnected) return;
-      try {
-        formula.textContent = '';  // 清空占位文本
-        // 使用 KaTeX 渲染公式（displayMode: true 表示块级模式）
-        katex.render(this.tex, formula, { displayMode: true, throwOnError: false });
-      } catch {
-        // 渲染失败：回退到显示原始 LaTeX 并添加错误样式
-        formula.textContent = this.tex;
-        formula.classList.add('cm-math-error');
-      }
+      const cleanup = runWhenNativeSelectionSettled(view, card, () => {
+        try {
+          formula.textContent = '';  // 清空占位文本
+          // 使用 KaTeX 渲染公式（displayMode: true 表示块级模式）
+          katex.render(this.tex, formula, { displayMode: true, throwOnError: false });
+        } catch {
+          // 渲染失败：回退到显示原始 LaTeX 并添加错误样式
+          formula.textContent = this.tex;
+          formula.classList.add('cm-math-error');
+        }
+      });
+      mathBlockDomCleanups.set(card, cleanup);
     });
 
     // 进入源码模式的处理函数
@@ -149,6 +160,11 @@ class BlockMathWidget extends WidgetType {
     card.addEventListener('mousedown', enterSource);
 
     return card;
+  }
+
+  destroy(dom: HTMLElement) {
+    mathBlockDomCleanups.get(dom)?.();
+    mathBlockDomCleanups.delete(dom);
   }
 
   /**
@@ -181,11 +197,10 @@ class BlockMathWidget extends WidgetType {
  */
 function buildBlockMathDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  // 确保语法树已构建（最多等待 100ms）
-  const tree = ensureSyntaxTree(state, state.doc.length, 100);
-  if (!tree) return builder.finish();
+  // Reuse the available tree; rebuild when CodeMirror advances the background parser.
+  const tree = syntaxTree(state);
 
-  const sel = state.selection.main;
+  const sel = renderingSelection(state).main;
   const cursorLine = state.doc.lineAt(sel.head).number;  // 光标所在行号
 
   // 遍历语法树
@@ -200,9 +215,9 @@ function buildBlockMathDecorations(state: EditorState): DecorationSet {
       const selToLine = state.doc.lineAt(sel.to).number;
       
       // 判断选区是否与公式块相交
-      const intersects =
+      const intersects = !selectionRenderingFrozen(state) && (
         (cursorLine >= fromLine && cursorLine <= toLine) ||  // 光标在块内
-        (selFromLine <= toLine && selToLine >= fromLine);     // 选区与块重叠
+        (selFromLine <= toLine && selToLine >= fromLine));     // 选区与块重叠
 
       // 提取文本并解析 $$ 分隔符
       const text = state.sliceDoc(node.from, node.to);
@@ -222,7 +237,7 @@ function buildBlockMathDecorations(state: EditorState): DecorationSet {
       // 创建数学公式 Widget
       const widget = new BlockMathWidget(inner, contentFrom, contentTo);
 
-      if (intersects) {
+      if (state.field(sourceRevealEnabledField) && intersects) {
         // 光标在块内 → 保持源码可见，并在闭合 $$ 行后立即显示渲染后的预览
         // side:1 将 widget 放置在后面
         builder.add(node.to, node.to, Decoration.widget({ widget, block: true, side: 1 }));
@@ -248,7 +263,7 @@ function buildBlockMathDecorations(state: EditorState): DecorationSet {
 const blockMathField = StateField.define<DecorationSet>({
   create: (state) => buildBlockMathDecorations(state),
   update(prev, tr) {
-    if (tr.docChanged || tr.selection) {
+    if (shouldRebuildBlockDecorations(tr)) {
       return buildBlockMathDecorations(tr.state);
     }
     return prev;

@@ -3,17 +3,60 @@
  *
  * - 单击 markdown 链接 `[text](url)`，且 cursor 不在该链接范围内 → 跳转
  * - cursor 已在链接范围内（reveal 编辑模式）→ 让 CM6 默认处理（设置 cursor）
- * - 移动端长按 500ms 触发跳转
+ * - 移动端仅短按跳转；长按与拖动保留浏览器原生选择
  *
  * `.cm-ext-link` 已经在 `addFormattingClasses` 内设 `cursor: pointer`，
  * 视觉提示用户可点击；这里只负责 click 事件路由。
  */
-import type { Extension } from '@codemirror/state';
+import type { EditorState, Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { findLinkAtPosition } from './linkUtils';
 
 /** 链接打开回调函数类型 */
 export type OnLinkOpen = (url: string) => void;
+
+// Both link types must distinguish a tap from a long press, a cancelled scroll,
+// and selection-handle movement. Do not install a navigation timer on long press.
+export function createTouchLinkExtension(
+  findLink: (pos: number, state: EditorState) => { from: number; to: number; target: string } | null,
+  onLinkOpen: OnLinkOpen,
+): Extension {
+  let tap: { x: number; y: number; time: number; doc: EditorState['doc']; target: string } | null = null;
+  return EditorView.domEventHandlers({
+    touchstart(event, view) {
+      tap = null;
+      if (event.touches.length !== 1 || !view.state.selection.main.empty ||
+        window.getSelection()?.isCollapsed === false) return false;
+      const touch = event.touches[0];
+      const pos = view.posAtCoords({ x: touch.clientX, y: touch.clientY });
+      const link = pos === null ? null : findLink(pos, view.state);
+      if (link && pos! > link.from && pos! < link.to) {
+        tap = { x: touch.clientX, y: touch.clientY, time: performance.now(), doc: view.state.doc, target: link.target };
+      }
+      return false;
+    },
+    touchmove(event) {
+      const touch = event.touches[0];
+      if (tap && (!touch || event.touches.length !== 1 ||
+        Math.hypot(touch.clientX - tap.x, touch.clientY - tap.y) > 8)) tap = null;
+      return false;
+    },
+    touchend(event, view) {
+      const start = tap;
+      tap = null;
+      const touch = event.changedTouches[0];
+      if (!start || !touch || performance.now() - start.time > 280 || view.state.doc !== start.doc ||
+        Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > 8 ||
+        !view.state.selection.main.empty || window.getSelection()?.isCollapsed === false) return false;
+      onLinkOpen(start.target);
+      return true;
+    },
+    touchcancel() {
+      tap = null;
+      return false;
+    },
+  });
+}
 
 export function createCtrlClickLinksExtension(onLinkOpen: OnLinkOpen): Extension {
   return [
@@ -22,6 +65,8 @@ export function createCtrlClickLinksExtension(onLinkOpen: OnLinkOpen): Extension
       mousedown(event, view) {
         if (event.button !== 0) return false;
         if (event.shiftKey || event.altKey) return false;
+        if ((event as MouseEvent & { sourceCapabilities?: { firesTouchEvents: boolean } }).sourceCapabilities?.firesTouchEvents) return false;
+        if (!event.ctrlKey && !event.metaKey && window.getSelection()?.isCollapsed === false) return false;
 
         // 点击在行右侧空白（行 padding / line end 之后）：target 是 .cm-line
         // 本身而非任何字符 span。CM6 posAtCoords 会"找最近字符 pos"返回
@@ -61,46 +106,9 @@ export function createCtrlClickLinksExtension(onLinkOpen: OnLinkOpen): Extension
       },
     }),
 
-    // 移动：500ms 长按
-    EditorView.domEventHandlers({
-      touchstart(event, view) {
-        if (event.touches.length !== 1) return false;
-        const touch = event.touches[0];
-        const startX = touch.clientX;
-        const startY = touch.clientY;
-
-        const controller = new AbortController();
-        const { signal } = controller;
-        const timer = setTimeout(() => {
-          controller.abort();
-          const pos = view.posAtCoords({ x: startX, y: startY });
-          if (pos === null) return;
-          const link = findLinkAtPosition(pos, view.state);
-          if (link) {
-            event.preventDefault();
-            onLinkOpen(link.url);
-          }
-        }, 500);
-
-        view.dom.addEventListener(
-          'touchend',
-          () => {
-            clearTimeout(timer);
-            controller.abort();
-          },
-          { once: true, signal },
-        );
-        view.dom.addEventListener(
-          'touchmove',
-          () => {
-            clearTimeout(timer);
-            controller.abort();
-          },
-          { once: true, signal },
-        );
-
-        return false;
-      },
-    }),
+    createTouchLinkExtension((pos, state) => {
+      const link = findLinkAtPosition(pos, state);
+      return link ? { ...link, target: link.url } : null;
+    }, onLinkOpen),
   ];
 }

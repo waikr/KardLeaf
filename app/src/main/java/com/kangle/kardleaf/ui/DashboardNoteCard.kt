@@ -61,6 +61,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.R
 import com.kangle.kardleaf.data.model.Note
+import com.kangle.kardleaf.data.model.NoteSearchOptions
+import com.kangle.kardleaf.ui.editor.buildNoteSearchMatches
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
@@ -185,7 +187,7 @@ fun NoteCard(
     }
     val imageReference = note.firstImageReference?.takeIf { it.isNotBlank() }
     val shouldLoadThumbnail = showImagePreview && searchMatch == null && imageReference != null
-    val showSearchJump = searchQuery.isNotBlank() && searchMatch != null && searchMatch.startOffset >= 0 && onSearchJump != null
+    val showSearchJump = searchQuery.isNotEmpty() && searchMatch != null && searchMatch.startOffset >= 0 && onSearchJump != null
     // 首帧同步读内存缓存，命中时直接出图，消除卡片重建后的灰色占位
     var thumbnailBitmap by remember(note.file.path, imageReference) {
         mutableStateOf(if (shouldLoadThumbnail) peekImageThumbnail(note) else null)
@@ -331,8 +333,8 @@ fun NoteCard(
                     displayTitle?.let { title ->
                         Text(
                             text =
-                                if (searchQuery.isNotBlank()) {
-                                    highlightedText(title, searchQuery)
+                                if (searchQuery.isNotEmpty()) {
+                                    highlightedText(title, searchMatch?.query ?: searchQuery, searchMatch?.options ?: NoteSearchOptions())
                                 } else {
                                     buildAnnotatedString { append(title) }
                                 },
@@ -357,7 +359,11 @@ fun NoteCard(
                             modifier = Modifier.padding(bottom = 4.dp),
                         )
                         Text(
-                            text = highlightedText(searchMatch.snippet, searchQuery),
+                            text = highlightedText(
+                                searchMatch.snippet,
+                                searchMatch.matchedText?.replace('\r', ' ')?.replace('\n', ' ') ?: searchMatch.query ?: searchQuery,
+                                if (searchMatch.matchedText != null) searchMatch.options.copy(useRegex = false) else searchMatch.options,
+                            ),
                             style = contentStyle,
                             maxLines = if (isCompact) 4 else 7,
                             overflow = TextOverflow.Ellipsis,
@@ -550,26 +556,13 @@ private fun NoteCardTagChip(text: String) {
 private fun highlightedText(
     text: String,
     query: String,
+    options: NoteSearchOptions,
 ) = buildAnnotatedString {
-    if (query.isBlank()) {
-        append(text)
-        return@buildAnnotatedString
+    append(text)
+    for (match in buildNoteSearchMatches(text, query, options.useRegex, options.matchCase).matches) {
+        addStyle(SpanStyle(color = MaterialTheme.colorScheme.onPrimaryContainer,
+            background = MaterialTheme.colorScheme.primaryContainer), match.start, match.end)
     }
-    val index = text.indexOf(query, ignoreCase = true)
-    if (index < 0) {
-        append(text)
-        return@buildAnnotatedString
-    }
-    append(text.substring(0, index))
-    withStyle(
-        SpanStyle(
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-            background = MaterialTheme.colorScheme.primaryContainer,
-        ),
-    ) {
-        append(text.substring(index, index + query.length))
-    }
-    append(text.substring(index + query.length))
 }
 
 

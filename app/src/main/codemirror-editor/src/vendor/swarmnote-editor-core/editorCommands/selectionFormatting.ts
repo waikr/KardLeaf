@@ -4,7 +4,7 @@
  * **功能：**
  * 检测当前选区或光标位置的 Markdown 格式状态，用于 UI 按钮的高亮显示。
  */
-import { ensureSyntaxTree } from '@codemirror/language';
+import { syntaxTree } from '@codemirror/language';
 import type { EditorState } from '@codemirror/state';
 import { DEFAULT_SELECTION_FORMATTING, type SelectionFormatting } from '../types';
 
@@ -25,8 +25,7 @@ export function computeSelectionFormatting(state: EditorState): SelectionFormatt
   const result = { ...DEFAULT_SELECTION_FORMATTING };
   const pos = state.selection.main.from;
 
-  const tree = ensureSyntaxTree(state, pos);
-  if (!tree) return result;
+  const tree = syntaxTree(state);
 
   let cursor: ReturnType<typeof tree.resolveInner> | null = tree.resolveInner(pos, -1);
 

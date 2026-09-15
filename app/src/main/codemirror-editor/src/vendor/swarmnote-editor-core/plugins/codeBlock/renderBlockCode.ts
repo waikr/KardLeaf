@@ -38,6 +38,7 @@ import {
 } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, WidgetType } from '@codemirror/view';
 import { shouldShowSource } from '../../core';
+import { shouldRebuildBlockDecorations } from '../../core/pluginUpdateHelper';
 import type { CodeBlockMode } from '../../types';
 
 // ─── 辅助函数 ────────────────────────────────────────────────────
@@ -73,6 +74,23 @@ function extractCodeContent(state: EditorState, codeBlockFrom: number, codeBlock
     return lines.slice(1, -1).join('\n');
   }
   return '';
+}
+
+// Android WebView may synthesize a mousedown after touchstart. Treat that
+// event as part of native text selection instead of turning a long press into
+// an explicit "show source" command.
+let lastTouchStartAt = -Infinity;
+
+function isTouchGeneratedMouseDown(event: MouseEvent): boolean {
+  const sourceCapabilities = (event as MouseEvent & {
+    sourceCapabilities?: { firesTouchEvents?: boolean };
+  }).sourceCapabilities;
+  return sourceCapabilities?.firesTouchEvents === true ||
+    performance.now() - lastTouchStartAt < 1000;
+}
+
+function noteTouchStart() {
+  lastTouchStartAt = performance.now();
 }
 
 // ─── Toggle 模式的源码可见性追踪 ────────────────────────────────
@@ -325,8 +343,10 @@ class CodeBlockHeaderWidget extends WidgetType {
     container.appendChild(copyBtn);
 
     // 点击头部空白区域时，将光标移动到代码第一行
+    container.addEventListener('touchstart', noteTouchStart, { passive: true });
     container.addEventListener('mousedown', (e) => {
       if (e.target === copyBtn) return;  // 点击按钮不处理
+      if (isTouchGeneratedMouseDown(e)) return;
       e.preventDefault();
       const firstCodeLine = view.state.doc.lineAt(this.codeFrom);
       const nextLine =
@@ -493,8 +513,10 @@ class CodeBlockCardWidget extends WidgetType {
 
     // auto mode: clicking body moves cursor in (so the card collapses).
     if (this.mode === 'auto') {
+      container.addEventListener('touchstart', noteTouchStart, { passive: true });
       body.addEventListener('mousedown', (e) => {
         if (e.target === copyBtn) return;
+        if (isTouchGeneratedMouseDown(e)) return;
         e.preventDefault();
         const firstCodeLine = view.state.doc.lineAt(this.codeFrom);
         const nextLine =
@@ -936,10 +958,8 @@ export function createBlockCodeExtension(options: BlockCodeOptions = {}): Extens
     update(deco, tr) {
       // 检查是否有 toggle 模式的源码切换
       const hasModeToggle = tr.effects.some((e) => e.is(setCodeBlockSourceMode));
-      const syntaxTreeChanged = syntaxTree(tr.startState) !== syntaxTree(tr.state);
-
-      // 后台解析补全后也要重建，否则长文后半段代码块会缺少工具栏。
-      if (tr.docChanged || tr.reconfigured || tr.selection || hasModeToggle || syntaxTreeChanged) {
+      // 后台解析补全仍刷新；原生选区存续时延后，避免替换手柄所在的 DOM。
+      if (shouldRebuildBlockDecorations(tr) || hasModeToggle) {
         return buildDecorations(tr.state, mode);
       }
       // 否则保持原装饰

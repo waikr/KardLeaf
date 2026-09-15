@@ -7,7 +7,7 @@
  *
  * 触发方式同 `ctrlClickLinksExtension`：
  * - 桌面：Ctrl（Win/Linux）/ Cmd（macOS）+ 点击
- * - 移动：500ms 长按
+ * - 移动：短按跳转，长按保留文本选择
  *
  * 找到 wikilink 后调 `onLinkOpen(target)` —— target 是 `[[]]` 中的原始文本
  * （不含 `[[` `]]` 标记）。Host 端根据 url 形态决定打开外部链接还是跳转笔记。
@@ -15,7 +15,7 @@
 import type { EditorState, Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
-import type { OnLinkOpen } from './ctrlClickLinksExtension';
+import { createTouchLinkExtension, type OnLinkOpen } from './ctrlClickLinksExtension';
 
 /**
  * 在 `pos` 位置查找 wikilink。返回 target + 文档范围，未找到返回 null。
@@ -67,6 +67,8 @@ export function createWikilinkClickExtension(onLinkOpen: OnLinkOpen): Extension 
       mousedown(event, view) {
         if (event.button !== 0) return false;
         if (event.shiftKey || event.altKey) return false;
+        if ((event as MouseEvent & { sourceCapabilities?: { firesTouchEvents: boolean } }).sourceCapabilities?.firesTouchEvents) return false;
+        if (!event.ctrlKey && !event.metaKey && window.getSelection()?.isCollapsed === false) return false;
 
         // 行 padding 空白点击过滤：避免 posAtCoords "找最近字符"误触发
         const target = event.target;
@@ -96,27 +98,6 @@ export function createWikilinkClickExtension(onLinkOpen: OnLinkOpen): Extension 
       },
     }),
 
-    // 移动端单击直接跳转，避免要求用户长按或触发二次导航。
-    EditorView.domEventHandlers({
-      touchstart(event, view) {
-        if (event.touches.length !== 1) return false;
-        const touch = event.touches[0];
-        const startX = touch.clientX;
-        const startY = touch.clientY;
-        const onTouchEnd = (endEvent: TouchEvent) => {
-          const endTouch = endEvent.changedTouches[0];
-          if (!endTouch || Math.hypot(endTouch.clientX - startX, endTouch.clientY - startY) > 12) return;
-          const pos = view.posAtCoords({ x: endTouch.clientX, y: endTouch.clientY });
-          if (pos === null) return;
-          const hit = findWikilinkAtPosition(pos, view.state);
-          if (hit && pos > hit.from && pos < hit.to) {
-            endEvent.preventDefault();
-            onLinkOpen(hit.target);
-          }
-        };
-        view.dom.addEventListener('touchend', onTouchEnd, { once: true });
-        return false;
-      },
-    }),
+    createTouchLinkExtension(findWikilinkAtPosition, onLinkOpen),
   ];
 }

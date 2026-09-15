@@ -1,0 +1,172 @@
+diff --git a/app/src/main/codemirror-editor/node_modules/@codemirror/view/dist/index.js b/app/src/main/codemirror-editor/node_modules/@codemirror/view/dist/index.js
+--- a/app/src/main/codemirror-editor/node_modules/@codemirror/view/dist/index.js
++++ b/app/src/main/codemirror-editor/node_modules/@codemirror/view/dist/index.js
+@@ -33,4 +33,12 @@ var browser = {
+     tabSize: doc.documentElement.style.tabSize != null ? "tab-size" : "-moz-tab-size"
+ };
+ 
++const kardLeafAndroidFocusDiagnostics = typeof globalThis == "undefined" ? null :
++    globalThis.__KardLeafCodeMirrorSelectionDiagnostics ||
++        (globalThis.__KardLeafCodeMirrorSelectionDiagnostics = {
++            cmAndroidFocusWorkaroundCandidateCount: 0,
++            cmAndroidFocusWorkaroundExecutedCount: 0,
++            cmAndroidFocusWorkaroundSkippedForNativeRangeCount: 0
++        });
++
+ function combineAttrs(source, target) {
+@@ -459,4 +467,36 @@ function hasSelection(dom, selection) {
+         return false;
+     }
+ }
++function hasNonEmptyNativeSelection(dom, root) {
++    try {
++        let selection = getSelection(root);
++        return !!selection && selection.rangeCount > 0 && !selection.isCollapsed &&
++            !!selection.anchorNode && !!selection.focusNode &&
++            contains(dom, selection.anchorNode) && contains(dom, selection.focusNode);
++    }
++    catch (_) {
++        return false;
++    }
++}
++function hasNativeSelectionInManagedTable(dom, root) {
++    try {
++        // Independent cell edit hosts own collapsed carets as well as ranges.
++        // Let explicit view.focus() leave the cell before CM resumes DOM sync.
++        let active = root.activeElement;
++        if (active && active.matches('td[contenteditable="true"], th[contenteditable="true"]') &&
++            dom.contains(active) && active.closest(".cm-table-widget"))
++            return true;
++        let selection = getSelection(root);
++        if (!selection || selection.rangeCount == 0 || selection.isCollapsed)
++            return false;
++        let range = selection.getRangeAt(0);
++        for (let table of dom.querySelectorAll(".cm-table-widget"))
++            if (range.intersectsNode(table))
++                return true;
++    }
++    catch (_) {
++        return false;
++    }
++    return false;
++}
+ function clientRectsFor(dom) {
+@@ -3038,2 +3038,4 @@ class DocView {
+         let { dom } = this.tile;
++        if (hasNativeSelectionInManagedTable(dom, this.view.root))
++            return;
+         let activeElt = this.view.root.activeElement, focused = activeElt == dom;
+@@ -3049,8 +3051,15 @@ class DocView {
+                 // inside an uneditable node, and not bring it back when we
+                 // move the cursor to its proper position. This tries to
+                 // restore the keyboard by cycling focus.
+                 if (browser.android && browser.chrome && dom.contains(domSel.focusNode) &&
+                     inUneditable(domSel.focusNode, dom)) {
+-                    dom.blur();
+-                    dom.focus({ preventScroll: true });
++                    kardLeafAndroidFocusDiagnostics && kardLeafAndroidFocusDiagnostics.cmAndroidFocusWorkaroundCandidateCount++;
++                    if (!this.hasComposition && hasNonEmptyNativeSelection(dom, this.view.root)) {
++                        kardLeafAndroidFocusDiagnostics && kardLeafAndroidFocusDiagnostics.cmAndroidFocusWorkaroundSkippedForNativeRangeCount++;
++                    }
++                    else {
++                    dom.blur();
++                    dom.focus({ preventScroll: true });
++                        kardLeafAndroidFocusDiagnostics && kardLeafAndroidFocusDiagnostics.cmAndroidFocusWorkaroundExecutedCount++;
++                    }
+                 }
+@@ -3073,2 +3116,9 @@ class DocView {
++                else if (browser.android && browser.chrome && !this.hasComposition && rawSel.setBaseAndExtent &&
++                    hasNonEmptyNativeSelection(dom, this.view.root)) {
++                    // Keep native handles alive when normalizing list/decoration boundaries.
++                    // collapse() followed by extend() briefly empties the selection and can
++                    // tear down Android's handle PopupWindows during an ongoing drag.
++                    rawSel.setBaseAndExtent(anchor.node, anchor.offset, head.node, head.offset);
++                }
+                 else if (rawSel.extend) {
+                     // Selection.extend can be used to create an 'inverted' selection
+diff --git a/app/src/main/codemirror-editor/node_modules/@codemirror/view/dist/index.cjs b/app/src/main/codemirror-editor/node_modules/@codemirror/view/dist/index.cjs
+--- a/app/src/main/codemirror-editor/node_modules/@codemirror/view/dist/index.cjs
++++ b/app/src/main/codemirror-editor/node_modules/@codemirror/view/dist/index.cjs
+@@ -35,4 +35,12 @@ var browser = {
+     tabSize: doc.documentElement.style.tabSize != null ? "tab-size" : "-moz-tab-size"
+ };
+ 
++const kardLeafAndroidFocusDiagnostics = typeof globalThis == "undefined" ? null :
++    globalThis.__KardLeafCodeMirrorSelectionDiagnostics ||
++        (globalThis.__KardLeafCodeMirrorSelectionDiagnostics = {
++            cmAndroidFocusWorkaroundCandidateCount: 0,
++            cmAndroidFocusWorkaroundExecutedCount: 0,
++            cmAndroidFocusWorkaroundSkippedForNativeRangeCount: 0
++        });
++
+ function combineAttrs(source, target) {
+@@ -462,4 +470,36 @@ function hasSelection(dom, selection) {
+         return false;
+     }
+ }
++function hasNonEmptyNativeSelection(dom, root) {
++    try {
++        let selection = getSelection(root);
++        return !!selection && selection.rangeCount > 0 && !selection.isCollapsed &&
++            !!selection.anchorNode && !!selection.focusNode &&
++            contains(dom, selection.anchorNode) && contains(dom, selection.focusNode);
++    }
++    catch (_) {
++        return false;
++    }
++}
++function hasNativeSelectionInManagedTable(dom, root) {
++    try {
++        // Independent cell edit hosts own collapsed carets as well as ranges.
++        // Let explicit view.focus() leave the cell before CM resumes DOM sync.
++        let active = root.activeElement;
++        if (active && active.matches('td[contenteditable="true"], th[contenteditable="true"]') &&
++            dom.contains(active) && active.closest(".cm-table-widget"))
++            return true;
++        let selection = getSelection(root);
++        if (!selection || selection.rangeCount == 0 || selection.isCollapsed)
++            return false;
++        let range = selection.getRangeAt(0);
++        for (let table of dom.querySelectorAll(".cm-table-widget"))
++            if (range.intersectsNode(table))
++                return true;
++    }
++    catch (_) {
++        return false;
++    }
++    return false;
++}
+ function clientRectsFor(dom) {
+@@ -3042,2 +3042,4 @@ class DocView {
+         let { dom } = this.tile;
++        if (hasNativeSelectionInManagedTable(dom, this.view.root))
++            return;
+         let activeElt = this.view.root.activeElement, focused = activeElt == dom;
+@@ -3053,8 +3055,15 @@ class DocView {
+                 // inside an uneditable node, and not bring it back when we
+                 // move the cursor to its proper position. This tries to
+                 // restore the keyboard by cycling focus.
+                 if (browser.android && browser.chrome && dom.contains(domSel.focusNode) &&
+                     inUneditable(domSel.focusNode, dom)) {
+-                    dom.blur();
+-                    dom.focus({ preventScroll: true });
++                    kardLeafAndroidFocusDiagnostics && kardLeafAndroidFocusDiagnostics.cmAndroidFocusWorkaroundCandidateCount++;
++                    if (!this.hasComposition && hasNonEmptyNativeSelection(dom, this.view.root)) {
++                        kardLeafAndroidFocusDiagnostics && kardLeafAndroidFocusDiagnostics.cmAndroidFocusWorkaroundSkippedForNativeRangeCount++;
++                    }
++                    else {
++                    dom.blur();
++                    dom.focus({ preventScroll: true });
++                        kardLeafAndroidFocusDiagnostics && kardLeafAndroidFocusDiagnostics.cmAndroidFocusWorkaroundExecutedCount++;
++                    }
+                 }
+@@ -3077,2 +3120,9 @@ class DocView {
++                else if (browser.android && browser.chrome && !this.hasComposition && rawSel.setBaseAndExtent &&
++                    hasNonEmptyNativeSelection(dom, this.view.root)) {
++                    // Keep native handles alive when normalizing list/decoration boundaries.
++                    // collapse() followed by extend() briefly empties the selection and can
++                    // tear down Android's handle PopupWindows during an ongoing drag.
++                    rawSel.setBaseAndExtent(anchor.node, anchor.offset, head.node, head.offset);
++                }
+                 else if (rawSel.extend) {
+                     // Selection.extend can be used to create an 'inverted' selection

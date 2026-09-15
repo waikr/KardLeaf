@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -105,6 +106,7 @@ fun SearchTextField(
     Row(
         modifier =
             modifier
+                .height(50.dp)
                 .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -116,7 +118,8 @@ fun SearchTextField(
                     .weight(1f)
                     .focusRequester(focusRequester)
                     .padding(horizontal = 8.dp),
-            singleLine = true,
+            singleLine = false,
+            maxLines = Int.MAX_VALUE,
             textStyle =
                 MaterialTheme.typography.bodyLarge.copy(
                     color = MaterialTheme.colorScheme.onSurface,
@@ -131,7 +134,7 @@ fun SearchTextField(
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         )
                     }
-                    innerTextField()
+                    Box(Modifier.verticalScroll(rememberScrollState())) { innerTextField() }
                 }
             },
         )
@@ -158,7 +161,7 @@ fun SearchFilterToolbar(
     val options by viewModel.searchOptions.collectAsState()
     val tags by viewModel.yamlTags.collectAsState()
     var showTagMenu by remember { mutableStateOf(false) }
-    val invalidRegex = options.useRegex && query.isNotBlank() && runCatching { Regex(query) }.isFailure
+    val invalidRegex = options.useRegex && query.isNotEmpty() && runCatching { Regex(query) }.isFailure
 
     Surface(
         modifier = Modifier.fillMaxWidth().height(52.dp),

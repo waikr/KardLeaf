@@ -1150,6 +1150,7 @@ class TaskMarkdownStore(
 
         // ponytail: One process-wide lock is enough while there is only one managed task file.
         private val writeMutex = Mutex()
+        internal suspend fun withS3FileAccess(block: suspend () -> Unit) = writeMutex.withLock { block() }
         private val repositoryMutex = Mutex()
 
         @Volatile

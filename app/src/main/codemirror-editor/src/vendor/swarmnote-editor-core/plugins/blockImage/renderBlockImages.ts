@@ -19,7 +19,14 @@
  * **技术限制：**
  * CM6 要求 block 级 decoration 必须来自 StateField（不能来自 ViewPlugin）。
  */
-import { ensureSyntaxTree } from '@codemirror/language';
+import { syntaxTree } from '@codemirror/language';
+import { sourceRevealEnabledField } from '../../core/facets';
+import { shouldRebuildBlockDecorations } from '../../core/pluginUpdateHelper';
+import {
+  renderingSelection,
+  runWhenNativeSelectionSettled,
+  selectionRenderingFrozen,
+} from '../../core/mouseSelecting';
 import {
   type EditorState,
   RangeSetBuilder,
@@ -363,6 +370,10 @@ function dispatchLinkOpen(view: EditorView, url: string): void {
  * （仅块级需要高度缓存）上有所不同，因此由调用者提供。
  */
 interface ImageLoadingOpts {
+  /** 当前编辑器视图，用于避开原生选区期间的 DOM 改写 */
+  view: EditorView;
+  /** 受保护的 widget 根节点 */
+  guardTarget: HTMLElement;
   /** img 元素 */
   img: HTMLImageElement;
   /** 原始 src */
@@ -379,6 +390,8 @@ interface ImageLoadingOpts {
   onPermanentFail: () => void;
 }
 
+const imageLoadingCleanups = new WeakMap<HTMLElement, () => void>();
+
 /**
  * 附加图片加载逻辑
  * 
@@ -391,9 +404,20 @@ interface ImageLoadingOpts {
  * 
  * @param opts - 加载选项
  */
-function attachImageLoading(opts: ImageLoadingOpts): void {
-  const { img, rawSrc, resolver, maxAttempts, isAlive, onLoad, onPermanentFail } = opts;
+function attachImageLoading(opts: ImageLoadingOpts): () => void {
+  const { img, rawSrc, resolver, maxAttempts, isAlive, onLoad, onPermanentFail, view, guardTarget } = opts;
   let attempt = 0;
+  img.dataset.loading = 'true';
+  let deferredCleanup = () => {};
+  const retryTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  const afterSelection = (action: () => void) => {
+    deferredCleanup();
+    deferredCleanup = runWhenNativeSelectionSettled(view, guardTarget, () => {
+      deferredCleanup = () => {};
+      if (isAlive()) action();
+    });
+  };
 
   /** 解析 URL 并设置 src */
   const resolve = async () => {
@@ -401,35 +425,44 @@ function attachImageLoading(opts: ImageLoadingOpts): void {
       // 使用解析器（如果有）
       const resolved = resolver ? await resolver(rawSrc) : rawSrc;
       if (!isAlive()) return;  // Widget 已销毁，中止
-      img.src = resolved;
+      afterSelection(() => { img.src = resolved; });
     } catch {
       // 解析失败，使用原始 src
       if (!isAlive()) return;
-      img.src = rawSrc;
+      afterSelection(() => { img.src = rawSrc; });
     }
   };
 
-  if (onLoad) {
-    img.onload = () => {
-      attempt = 0;
-      onLoad();
-    };
-  }
+  img.onload = () => {
+    delete img.dataset.loading;
+    attempt = 0;
+    if (onLoad) afterSelection(onLoad);
+  };
 
   img.onerror = () => {
     if (!isAlive()) return;
     attempt += 1;
     if (attempt <= maxAttempts) {
       // 500ms, 1s, 2s, 4s, ...
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        retryTimers.delete(timer);
         if (isAlive()) resolve();
       }, 2 ** (attempt - 1) * 500);
+      retryTimers.add(timer);
       return;
     }
-    onPermanentFail();
+    delete img.dataset.loading;
+    afterSelection(onPermanentFail);
   };
 
   resolve();
+  return () => {
+    deferredCleanup();
+    for (const timer of retryTimers) clearTimeout(timer);
+    retryTimers.clear();
+    img.onload = null;
+    img.onerror = null;
+  };
 }
 
 
@@ -583,7 +616,9 @@ class ImageWidget extends WidgetType {
     img.draggable = false;  // 禁止拖拽
 
     // 附加加载逻辑（异步 + 重试 + 回退）
-    attachImageLoading({
+    const cleanupImageLoading = attachImageLoading({
+      view,
+      guardTarget: container,
       img,
       rawSrc: this.rawSrc,
       resolver: this.resolver,
@@ -604,6 +639,7 @@ class ImageWidget extends WidgetType {
         frame.appendChild(fallback);
       },
     });
+    imageLoadingCleanups.set(container, cleanupImageLoading);
     frame.appendChild(img);
 
     // 创建源码切换按钮（</> 图标）
@@ -664,6 +700,11 @@ class ImageWidget extends WidgetType {
 
     container.appendChild(frame);
     return container;
+  }
+
+  destroy(dom: HTMLElement) {
+    imageLoadingCleanups.get(dom)?.();
+    imageLoadingCleanups.delete(dom);
   }
 
   /**
@@ -773,7 +814,9 @@ class InlineImageWidget extends WidgetType {
     img.draggable = false;
 
     // 附加加载逻辑（无 onLoad 钩子，内联不需要高度缓存）
-    attachImageLoading({
+    const cleanupImageLoading = attachImageLoading({
+      view,
+      guardTarget: wrap,
       img,
       rawSrc: this.rawSrc,
       resolver: this.resolver,
@@ -787,6 +830,7 @@ class InlineImageWidget extends WidgetType {
         if (img.parentNode === wrap) wrap.replaceChild(fb, img);
       },
     });
+    imageLoadingCleanups.set(wrap, cleanupImageLoading);
     wrap.appendChild(img);
 
     // 如果是链接图片，添加外链徽章
@@ -804,6 +848,11 @@ class InlineImageWidget extends WidgetType {
     }
 
     return wrap;
+  }
+
+  destroy(dom: HTMLElement) {
+    imageLoadingCleanups.get(dom)?.();
+    imageLoadingCleanups.delete(dom);
   }
 
   /**
@@ -1007,15 +1056,14 @@ function buildDecorations(
 ): DecorationSet {
   const entries: DecorationEntry[] = [];
   // 获取主选区的光标位置
-  const head = state.selection.main.head;
+  const head = renderingSelection(state).main.head;
   // 光标所在的行号
   const cursorLine = state.doc.lineAt(head).number;
   // 当前选中的图片行起始位置（如果有的话）
   const selectedLineFrom = state.field(selectedImageField, false) ?? null;
 
-  // 确保语法树已构建（最多等待 500ms）
-  const tree = ensureSyntaxTree(state, state.doc.length, 500);
-  if (!tree) return Decoration.none;
+  // Reuse the available tree; rebuild when CodeMirror advances the background parser.
+  const tree = syntaxTree(state);
 
   // 遍历语法树，查找所有 Image 节点
   tree.iterate({
@@ -1049,7 +1097,7 @@ function buildDecorations(
       // 块级独占模式：居中显示大图
       if (isBlockSolo) {
         // 判断源码是否可见（光标是否在图片所在行范围内）
-        const sourceVisible =
+        const sourceVisible = state.field(sourceRevealEnabledField) && !selectionRenderingFrozen(state) &&
           cursorLine >= lineFrom.number && cursorLine <= lineTo.number;
         // 判断此图片是否为用户选中的图片
         const selected = selectedLineFrom === lineFrom.from;
@@ -1091,7 +1139,7 @@ function buildDecorations(
 
       // 内联模式 —— 当光标在有效范围（链接或图片）内时跳过渲染，
       // 以便用户看到原始 Markdown 源码（标准的内联实时预览显示逻辑）
-      if (head >= effFrom && head <= effTo) return;
+      if (state.field(sourceRevealEnabledField) && !selectionRenderingFrozen(state) && head >= effFrom && head <= effTo) return;
 
       // 创建内联图片 Widget
       const inlineWidget = new InlineImageWidget(
@@ -1168,11 +1216,11 @@ export function createBlockImageExtension(options: BlockImageOptions = {}): Exte
       const hasRefresh = tr.effects.some((e) => e.is(refreshBlockImagesEffect));
       if (hasRefresh) {
         tick += 1;  // 递增刷新计数器以强制重建
-        return buildDecorations(tr.state, resolver, maxAttempts, tick, onImageClick);
       }
       // 检查是否有选中状态变化
       const selectionChanged = tr.effects.some((e) => e.is(setSelectedImageEffect));
-      if (tr.docChanged || tr.selection || selectionChanged) {
+      if (shouldRebuildBlockDecorations(tr) || selectionChanged ||
+        hasRefresh && !selectionRenderingFrozen(tr.state)) {
         // 文档变化、选区变化或选中状态变化时重建装饰
         return buildDecorations(tr.state, resolver, maxAttempts, tick, onImageClick);
       }

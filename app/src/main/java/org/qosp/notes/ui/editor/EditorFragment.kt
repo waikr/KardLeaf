@@ -1488,8 +1488,10 @@ class EditorFragment : BaseFragment(R.layout.fragment_editor) {
         KardLeafCustomFeatures.ToolbarItem.IMAGE -> R.id.action_insert_image
         KardLeafCustomFeatures.ToolbarItem.DRAWING -> R.id.action_insert_drawing
         // These actions belong to the Compose editor toolbar; the legacy sandbox has no matching menu items.
+        KardLeafCustomFeatures.ToolbarItem.ATTACHMENT,
         KardLeafCustomFeatures.ToolbarItem.DATETIME,
-        KardLeafCustomFeatures.ToolbarItem.SYMBOLS -> null
+        KardLeafCustomFeatures.ToolbarItem.SYMBOLS,
+        KardLeafCustomFeatures.ToolbarItem.HIGHLIGHT -> null
         KardLeafCustomFeatures.ToolbarItem.HEADING -> R.id.action_insert_heading_1
         KardLeafCustomFeatures.ToolbarItem.HEADING2 -> R.id.action_insert_heading_2
         KardLeafCustomFeatures.ToolbarItem.HEADING3 -> R.id.action_insert_heading_3

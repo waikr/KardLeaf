@@ -20,7 +20,14 @@
  * `<img>` 与 `<source>` 的相对路径 `src` / `srcset` 会通过同一个 imageResolver
  * 异步解析（与 `![]()` 保持一致），保证 workspace-relative 路径在 Tauri 下能加载。
  */
-import { ensureSyntaxTree } from '@codemirror/language';
+import { syntaxTree } from '@codemirror/language';
+import { sourceRevealEnabledField } from '../../core/facets';
+import { shouldRebuildBlockDecorations } from '../../core/pluginUpdateHelper';
+import {
+  renderingSelection,
+  runWhenNativeSelectionSettled,
+  selectionRenderingFrozen,
+} from '../../core/mouseSelecting';
 import {
   type EditorState,
   RangeSetBuilder,
@@ -39,6 +46,8 @@ const rawHtmlClassName = 'cm-md-html';
 
 /** 原生 HTML 选项 */
 export interface RawHtmlOptions {
+  /** Host-owned editable inline tags must not become whole-content widgets. */
+  handlesEditableHtml?: (html: string) => boolean;
   /** 图片 URL 解析器 */
   resolver?: ImageResolver;
 }
@@ -107,7 +116,14 @@ function sanitizeHtml(html: string): string {
  * @param root - 根节点
  * @param resolver - 图片 URL 解析器
  */
-function resolveMediaSources(root: ParentNode, resolver: ImageResolver): void {
+function resolveMediaSources(root: HTMLElement, resolver: ImageResolver, view: EditorView): () => void {
+  let disposed = false;
+  const cleanups: Array<() => void> = [];
+  const defer = (action: () => void) => {
+    if (disposed || !root.isConnected) return;
+    cleanups.push(runWhenNativeSelectionSettled(view, root, action));
+  };
+
   // 处理 <img> 元素
   const imgs = root.querySelectorAll('img');
   imgs.forEach(async (img) => {
@@ -117,7 +133,9 @@ function resolveMediaSources(root: ParentNode, resolver: ImageResolver): void {
     try {
       const resolved = await resolver(src);
       // 检查元素是否仍在 DOM 中
-      if (img.isConnected) img.setAttribute('src', resolved);
+      defer(() => {
+        if (img.isConnected) img.setAttribute('src', resolved);
+      });
     } catch {
       // 解析失败，保留原始值
     }
@@ -132,12 +150,21 @@ function resolveMediaSources(root: ParentNode, resolver: ImageResolver): void {
     try {
       const resolved = await resolver(srcset);
       // 检查元素是否仍在 DOM 中
-      if (source.isConnected) source.setAttribute('srcset', resolved);
+      defer(() => {
+        if (source.isConnected) source.setAttribute('srcset', resolved);
+      });
     } catch {
       // 解析失败，保留原始值
     }
   });
+
+  return () => {
+    disposed = true;
+    cleanups.splice(0).forEach((cleanup) => cleanup());
+  };
 }
+
+const rawHtmlMediaCleanups = new WeakMap<HTMLElement, () => void>();
 
 
 /**
@@ -235,7 +262,7 @@ class HtmlWidget extends WidgetType {
     root.innerHTML = sanitizeHtml(this.html);
     
     // 异步解析媒体资源路径
-    if (this.resolver) resolveMediaSources(root, this.resolver);
+    if (this.resolver) rawHtmlMediaCleanups.set(root, resolveMediaSources(root, this.resolver, view));
     
     // 附加链接拦截器
     attachLinkInterceptor(root, view);
@@ -252,6 +279,11 @@ class HtmlWidget extends WidgetType {
    */
   ignoreEvent() {
     return false;
+  }
+
+  destroy(dom: HTMLElement) {
+    rawHtmlMediaCleanups.get(dom)?.();
+    rawHtmlMediaCleanups.delete(dom);
   }
 }
 
@@ -414,26 +446,27 @@ function buildDecorations(
   state: EditorState,
   resolver: ImageResolver | undefined,
   tick: number,
+  handlesEditableHtml?: (html: string) => boolean,
 ): DecorationSet {
   const entries: DecorationEntry[] = [];
-  const head = state.selection.main.head;  // 光标位置
+  const head = renderingSelection(state).main.head;
   
-  // 确保语法树已构建（最多等待 500ms）
-  const tree = ensureSyntaxTree(state, state.doc.length, 500);
-  if (!tree) return Decoration.none;
+  // Reuse the available tree; rebuild when CodeMirror advances the background parser.
+  const tree = syntaxTree(state);
 
   // 遍历语法树
   tree.iterate({
     enter(node) {
       // 处理 HTMLBlock（块级 HTML）
       if (node.name === 'HTMLBlock') {
+        if (handlesEditableHtml?.(state.sliceDoc(node.from, node.to))) return false;
         const lineFrom = state.doc.lineAt(node.from);
         const lineTo = state.doc.lineAt(node.to);
         const blockFrom = lineFrom.from;
         const blockTo = lineTo.to;
         
         // 如果光标在块的任意行上，显示源码（跳过渲染）
-        if (head >= blockFrom && head <= blockTo) return;
+        if (state.field(sourceRevealEnabledField) && !selectionRenderingFrozen(state) && head >= blockFrom && head <= blockTo) return;
 
         const html = state.sliceDoc(node.from, node.to);
         entries.push({
@@ -456,7 +489,7 @@ function buildDecorations(
         // 自闭合 void 标签（如 <br>, <img/>）
         if (isSelfClosingVoidTag(parsed)) {
           // 如果光标在标签内，显示源码
-          if (head >= node.from && head <= node.to) return;
+          if (state.field(sourceRevealEnabledField) && !selectionRenderingFrozen(state) && head >= node.from && head <= node.to) return;
           entries.push({
             from: node.from,
             to: node.to,
@@ -471,14 +504,14 @@ function buildDecorations(
         if (parsed.isClosing) return;
 
         // 跳过已由其他系统处理的配对标签，避免双重渲染
-        if (PAIRED_TAGS_HANDLED_ELSEWHERE.has(parsed.name)) return;
+        if (PAIRED_TAGS_HANDLED_ELSEWHERE.has(parsed.name) || handlesEditableHtml?.(text)) return;
 
         // 查找匹配的闭标签
         const closeNode = findMatchingClose(node.node, parsed.name, state);
         if (!closeNode) return;  // 未找到匹配的闭标签，跳过
         
         // 如果光标在标签对范围内，显示源码
-        if (head >= node.from && head <= closeNode.to) return;
+        if (state.field(sourceRevealEnabledField) && !selectionRenderingFrozen(state) && head >= node.from && head <= closeNode.to) return;
 
         // 提取完整的 HTML（包括开标签、内容和闭标签）
         const fullHtml = state.sliceDoc(node.from, closeNode.to);
@@ -531,18 +564,16 @@ export function createRawHtmlExtension(options: RawHtmlOptions = {}): Extension 
   const field = StateField.define<DecorationSet>({
     create(state) {
       // 初始化时构建装饰
-      return buildDecorations(state, resolver, tick);
+      return buildDecorations(state, resolver, tick, options.handlesEditableHtml);
     },
     update(deco, tr) {
       // 检查是否有刷新效果
       const hasRefresh = tr.effects.some((e) => e.is(refreshRawHtmlEffect));
       if (hasRefresh) {
         tick += 1;  // 递增刷新计数器以强制重建
-        return buildDecorations(tr.state, resolver, tick);
       }
-      // 文档变化或选区变化时重建装饰
-      if (tr.docChanged || tr.selection) {
-        return buildDecorations(tr.state, resolver, tick);
+      if (shouldRebuildBlockDecorations(tr) || hasRefresh && !selectionRenderingFrozen(tr.state)) {
+        return buildDecorations(tr.state, resolver, tick, options.handlesEditableHtml);
       }
       return deco;  // 无变化时返回原装饰
     },

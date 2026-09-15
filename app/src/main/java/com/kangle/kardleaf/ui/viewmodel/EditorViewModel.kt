@@ -89,6 +89,8 @@ internal class EditorViewModel(
         return result
     }
 
+    suspend fun importAttachment(uri: Uri, folder: String) = repository.importAttachment(uri, folder)
+    suspend fun resolvePreviewAttachments(markdown: String, folder: String) = repository.resolvePreviewAttachments(markdown, folder)
     suspend fun importImage(uri: Uri, currentFolder: String): String = repository.importImage(uri, currentFolder)
     suspend fun getImageImportTooLargeMessage(uri: Uri): String? = repository.getImageImportTooLargeMessage(uri)
     suspend fun importDrawingImage(bitmap: Bitmap, source: String, folder: String): String = repository.importDrawingImage(bitmap, source, folder)

@@ -1,5 +1,6 @@
-import { StateEffect, StateField, type Extension } from '@codemirror/state';
+import { StateEffect, StateField, type EditorSelection, type EditorState, type Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
+import { sourceRevealEnabledField } from './facets';
 
 /**
  * 设置鼠标拖拽选择状态的 StateEffect
@@ -8,6 +9,12 @@ import { EditorView } from '@codemirror/view';
  * 这里用于通知状态系统用户是否正在拖拽选择文本。
  */
 export const setMouseSelecting = StateEffect.define<boolean>();
+
+/** Event emitted after the browser's native selection has become empty. */
+export const nativeSelectionSettledEvent = 'kardleaf-native-selection-settled';
+
+/** State effect used by the DOM bridge to clear a native selection session. */
+export const setNativeSelectionActive = StateEffect.define<boolean>();
 
 /**
  * 追踪用户是否正在拖拽选择的 StateField
@@ -45,6 +52,105 @@ export const mouseSelectingField = StateField.define<boolean>({
   },
 });
 
+// Android's selection handles live in a native PopupWindow: dragging them need
+// not emit DOM touch/mouse events. Track selection transactions with the
+// `select` user-event so the preview can distinguish a user gesture from an
+// explicit host/search selection.
+export const nativeSelectionField = StateField.define<boolean>({
+  create: () => false,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setNativeSelectionActive)) return effect.value;
+    }
+    if (tr.docChanged) return false;
+    if (tr.selection) {
+      return tr.isUserEvent('select') && tr.state.selection.ranges.some((range) => !range.empty);
+    }
+    return value;
+  },
+});
+
+/** A non-empty native selection, including Android PopupWindow handles. */
+export function selectionGestureActive(state: EditorState): boolean {
+  return state.field(nativeSelectionField, false) ?? false;
+}
+
+// Keep this exported name for the existing render/update gates. It now means
+// only an active user selection gesture, not every non-empty programmatic
+// selection (search/host selection must still reveal its target).
+export function selectionRenderingFrozen(state: EditorState): boolean {
+  // A press freezes the previous reveal decision; only a real native range
+  // switches to the rendered surface. Treating every tap as a range flickers.
+  return !!state.field(mouseSelectingField, false) || selectionGestureActive(state);
+}
+
+/** True only when both native DOM selection endpoints belong to this editor. */
+export function hasNonEmptyNativeSelection(view: EditorView): boolean {
+  const selection = view.dom.ownerDocument.getSelection?.() ?? window.getSelection();
+  return !!selection && !selection.isCollapsed &&
+    !!selection.anchorNode && !!selection.focusNode &&
+    view.contentDOM.contains(selection.anchorNode) && view.contentDOM.contains(selection.focusNode);
+}
+
+/**
+ * Run a DOM mutation now, or after the current native handle selection ends.
+ * The caller owns the target DOM node and receives cleanup for widget destroy.
+ */
+export function runWhenNativeSelectionSettled(
+  view: EditorView,
+  target: HTMLElement,
+  action: () => void,
+): () => void {
+  let disposed = false;
+  let listening = false;
+
+  const cleanup = () => {
+    if (!listening) return;
+    document.removeEventListener(nativeSelectionSettledEvent, retry);
+    listening = false;
+  };
+  const retry = () => {
+    if (disposed || !target.isConnected || !view.dom.contains(target)) {
+      cleanup();
+      return;
+    }
+    if (hasNonEmptyNativeSelection(view)) return;
+    cleanup();
+    action();
+  };
+
+  if (hasNonEmptyNativeSelection(view)) {
+    listening = true;
+    document.addEventListener(nativeSelectionSettledEvent, retry);
+  } else {
+    action();
+  }
+
+  return () => {
+    disposed = true;
+    cleanup();
+  };
+}
+
+// Keep the *previous* reveal decisions when a drag scrolls into a new viewport.
+// The selection gesture itself keeps the rendered surface visible; only the
+// transition into/out of the gesture is allowed to rebuild decorations.
+const renderingSelectionField = StateField.define<EditorSelection>({
+  create: (state) => state.selection,
+  update(selection, tr) {
+    // Explicit host/search selections may reveal their target immediately.
+    // Chromium's DOM selections use the select/select.pointer user event.
+    const firstReveal = !tr.startState.field(sourceRevealEnabledField, false) && tr.state.field(sourceRevealEnabledField, false);
+    return firstReveal || tr.docChanged || (tr.selection && !tr.isUserEvent('select')) || !selectionRenderingFrozen(tr.state)
+      ? tr.state.selection
+      : selection;
+  },
+});
+
+export function renderingSelection(state: EditorState): EditorSelection {
+  return state.field(renderingSelectionField, false) ?? state.selection;
+}
+
 /**
  * DOM 事件处理器，桥接原生鼠标事件到 CodeMirror 状态系统
  * 
@@ -76,5 +182,7 @@ const mouseSelectingHandlers = EditorView.domEventHandlers({
  */
 export const mouseSelectingExtension: Extension = [
   mouseSelectingField,
+  nativeSelectionField,
+  renderingSelectionField,
   mouseSelectingHandlers,
 ];

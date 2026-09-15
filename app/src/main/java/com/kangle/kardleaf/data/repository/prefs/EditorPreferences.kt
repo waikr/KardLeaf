@@ -1,9 +1,23 @@
 package com.kangle.kardleaf.data.repository.prefs
 
 import android.content.SharedPreferences
+import com.kangle.kardleaf.ui.editor.selection.TextSelectionToolbarSettings
 import com.kangle.kardleaf.data.repository.PrefsManager
 
 internal class EditorPreferences(private val prefs: SharedPreferences) {
+    fun getTextSelectionToolbarSettings() = TextSelectionToolbarSettings.normalize(
+        prefs.all[TextSelectionToolbarSettings.ENABLED_KEY],
+        prefs.all[TextSelectionToolbarSettings.ROWS_KEY],
+        prefs.all[TextSelectionToolbarSettings.COMMANDS_KEY],
+    )
+
+    fun saveTextSelectionToolbarSettings(enabled: Boolean, rows: Int, commands: List<String>) {
+        val settings = TextSelectionToolbarSettings.normalize(enabled, rows, commands.joinToString(","))
+        prefs.edit().putBoolean(TextSelectionToolbarSettings.ENABLED_KEY, settings.enabled)
+            .putInt(TextSelectionToolbarSettings.ROWS_KEY, settings.rows)
+            .putString(TextSelectionToolbarSettings.COMMANDS_KEY, settings.commands.joinToString(",")).apply()
+    }
+
     fun saveKernel(kernel: PrefsManager.EditorKernel) {
         prefs.edit().putString(KEY_KERNEL, kernel.name).apply()
     }

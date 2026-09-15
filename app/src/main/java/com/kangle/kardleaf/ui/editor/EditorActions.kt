@@ -3,6 +3,7 @@ package com.kangle.kardleaf.ui.editor
 import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.utils.KardLeafContentLimits
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
+import com.kangle.kardleaf.data.utils.SearchQueryUtils
 import androidx.compose.ui.text.TextRange
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -21,6 +22,16 @@ internal data class NoteSearchMatchRange(
     val start: Int,
     val end: Int,
 )
+
+internal fun nativeSearchChangedRange(before: String, after: String): NoteSearchMatchRange {
+    val start = before.commonPrefixWith(after).length
+    val suffix = before.substring(start).commonSuffixWith(after.substring(start)).length
+    return NoteSearchMatchRange(start, before.length - suffix)
+}
+
+// ponytail: mirrors Beta EditHistory's private 200,000-character cap; expose that cap if its policy changes.
+internal fun canUndoNativeSearchReplacement(deletedLength: Int, insertedLength: Int): Boolean =
+    deletedLength.toLong() + insertedLength <= 200_000
 
 internal data class NoteSearchMatchesResult(
     val matches: List<NoteSearchMatchRange> = emptyList(),
@@ -52,8 +63,8 @@ internal fun summarizeNoteSearchMatches(
     result.errorMessage?.let { return SearchMatchSummary(0, -1, -1, 0, it) }
     val matches = result.matches
     if (matches.isEmpty()) return SearchMatchSummary(0, -1, -1, 0)
-    val preferredIndex = matches.indexOfFirst { it.start == preferredStart }
-    val currentIndex = if (preferredIndex >= 0) preferredIndex else 0
+    val preferredIndex = matches.indexOfFirst { preferredStart in it.start until it.end }
+    val currentIndex = if (preferredIndex >= 0) preferredIndex else matches.indexOfFirst { it.start >= preferredStart }.coerceAtLeast(0)
     val current = matches[currentIndex]
     return SearchMatchSummary(
         count = matches.size,
@@ -69,7 +80,14 @@ internal fun buildNoteSearchMatches(
     useRegex: Boolean,
     matchCase: Boolean,
 ): NoteSearchMatchesResult {
-    if (text.isEmpty() || query.isBlank()) return NoteSearchMatchesResult()
+    if (query.isEmpty()) return NoteSearchMatchesResult()
+    if ('\r' in text || '\r' in query) {
+        val normalized = SearchQueryUtils.normalizeLineBreaks(text)
+        val result = buildNoteSearchMatches(normalized.text, SearchQueryUtils.normalizeLineBreaks(query).text, useRegex, matchCase)
+        return result.copy(matches = result.matches.map {
+            NoteSearchMatchRange(normalized.originalOffset(it.start), normalized.originalOffset(it.end))
+        })
+    }
     return if (useRegex) {
         val pattern = createNoteSearchPattern(query, matchCase)
             ?: return NoteSearchMatchesResult(errorMessage = "正则表达式无效")
@@ -108,10 +126,11 @@ internal fun buildCurrentReplacement(
     if (!useRegex) return NoteSearchReplacementResult(text = replacement, count = 1)
     val pattern = createNoteSearchPattern(query, matchCase)
         ?: return NoteSearchReplacementResult(errorMessage = "正则表达式无效")
-    val matcher = pattern.matcher(text)
+    val normalized = SearchQueryUtils.normalizeLineBreaks(text)
+    val matcher = pattern.matcher(normalized.text)
     while (matcher.find()) {
-        val start = matcher.start().coerceIn(0, text.length)
-        val end = matcher.end().coerceIn(0, text.length)
+        val start = normalized.originalOffset(matcher.start())
+        val end = normalized.originalOffset(matcher.end())
         if (start == range.start && end == range.end) {
             val expanded = expandRegexReplacement(replacement, matcher)
                 ?: return NoteSearchReplacementResult(errorMessage = "替换内容包含无效的正则引用")
@@ -128,33 +147,31 @@ internal fun replaceAllNoteSearchMatches(
     useRegex: Boolean,
     matchCase: Boolean,
 ): NoteSearchReplacementResult {
-    if (text.isEmpty() || query.isBlank()) return NoteSearchReplacementResult(text = text)
+    if (query.isEmpty()) return NoteSearchReplacementResult(text = text)
     if (!useRegex) {
+        val matches = buildNoteSearchMatches(text, query, false, matchCase).matches
         val builder = StringBuilder(text.length)
-        var count = 0
         var searchFrom = 0
-        while (searchFrom <= text.length - query.length) {
-            val index = text.indexOf(query, startIndex = searchFrom, ignoreCase = !matchCase)
-            if (index < 0) break
-            builder.append(text, searchFrom, index)
+        for (match in matches) {
+            builder.append(text, searchFrom, match.start)
             builder.append(replacement)
-            searchFrom = index + query.length
-            count++
+            searchFrom = match.end
         }
-        if (count == 0) return NoteSearchReplacementResult(text = text)
+        if (matches.isEmpty()) return NoteSearchReplacementResult(text = text)
         builder.append(text, searchFrom, text.length)
-        return NoteSearchReplacementResult(text = builder.toString(), count = count)
+        return NoteSearchReplacementResult(text = builder.toString(), count = matches.size)
     }
 
     val pattern = createNoteSearchPattern(query, matchCase)
         ?: return NoteSearchReplacementResult(errorMessage = "正则表达式无效")
-    val matcher = pattern.matcher(text)
+    val normalized = SearchQueryUtils.normalizeLineBreaks(text)
+    val matcher = pattern.matcher(normalized.text)
     val builder = StringBuilder(text.length)
     var count = 0
     var lastEnd = 0
     while (matcher.find()) {
-        val start = matcher.start().coerceIn(0, text.length)
-        val end = matcher.end().coerceIn(0, text.length)
+        val start = normalized.originalOffset(matcher.start())
+        val end = normalized.originalOffset(matcher.end())
         if (end <= start) continue
         builder.append(text, lastEnd, start)
         val expanded = expandRegexReplacement(replacement, matcher)
@@ -178,7 +195,7 @@ private fun createNoteSearchPattern(
         } else {
             Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
         }
-        Pattern.compile(query, Pattern.MULTILINE or caseFlags)
+        Pattern.compile(SearchQueryUtils.normalizeLineBreaks(query).text, Pattern.MULTILINE or caseFlags)
     } catch (_: PatternSyntaxException) {
         null
     }
@@ -192,22 +209,30 @@ private fun expandRegexReplacement(
     while (index < replacement.length) {
         val char = replacement[index]
         when {
-            char == '\\' && index + 1 < replacement.length -> {
-                builder.append(replacement[index + 1])
+            char == '$' && replacement.getOrNull(index + 1) == '$' -> {
+                builder.append('$')
                 index += 2
             }
-            char == '$' -> {
+            char == '$' && replacement.getOrNull(index + 1) == '&' -> {
+                builder.append(matcher.group())
+                index += 2
+            }
+            char == '$' && replacement.getOrNull(index + 1)?.isDigit() == true -> {
                 var cursor = index + 1
-                if (cursor >= replacement.length || !replacement[cursor].isDigit()) return null
                 while (cursor < replacement.length && replacement[cursor].isDigit()) cursor++
-                val groupIndex = replacement.substring(index + 1, cursor).toIntOrNull() ?: return null
-                val groupText = try {
-                    matcher.group(groupIndex).orEmpty()
-                } catch (_: RuntimeException) {
-                    return null
+                var groupEnd = cursor
+                while (groupEnd > index + 1) {
+                    val group = replacement.substring(index + 1, groupEnd).toIntOrNull()
+                    if (group != null && group in 1..matcher.groupCount()) break
+                    groupEnd--
                 }
-                builder.append(groupText)
-                index = cursor
+                if (groupEnd > index + 1) {
+                    builder.append(matcher.group(replacement.substring(index + 1, groupEnd).toInt()).orEmpty())
+                    index = groupEnd
+                } else {
+                    builder.append(char)
+                    index++
+                }
             }
             else -> {
                 builder.append(char)

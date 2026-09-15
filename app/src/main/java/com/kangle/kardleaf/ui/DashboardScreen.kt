@@ -31,10 +31,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.mandatorySystemGestures
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
@@ -96,6 +101,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -108,6 +114,8 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -128,6 +136,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 
 private val STARTUP_PERF_TRACE_TAG = KardLeafLogTags.STARTUP_PERF
 private val USER_PERF_TRACE_TAG = KardLeafLogTags.USER_PERF
+private val GESTURE_TRACE_TAG = KardLeafLogTags.GESTURE_TRACE
 private const val BACK_TRACE_TAG = "KardLeafBackTrace"
 private val DASHBOARD_SCROLL_TRACE_TAG = KardLeafLogTags.DASHBOARD_SCROLL
 private const val CUSTOM_SORT_FLASH_TAG = "KardLeafCustomSortFlash"
@@ -191,7 +200,7 @@ fun DashboardScreen(
     onSelectFolder: () -> Unit,
     onCreateSampleVault: () -> Unit,
     onNoteClick: (Note) -> Unit,
-    onSearchNoteClick: (Note, String) -> Unit = { note, query -> viewModel.openNoteAtSearchMatch(note, query) },
+    onSearchNoteClick: (Note, String, SearchMatch?) -> Unit = { note, query, match -> viewModel.openNoteAtSearchMatch(note, query, renderedMatch = match) },
     onFabClick: () -> Unit,
     onOpenDrawer: () -> Unit,
     onOpenCategoryDrawer: () -> Unit = {},
@@ -251,7 +260,7 @@ fun DashboardScreen(
     val isInSelectionMode = selectedNotes.isNotEmpty()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val searchOptions by viewModel.searchOptions.collectAsState()
-    val isSearchActive = searchQuery.isNotBlank() || searchOptions.hasMetadataFilters
+    val isSearchActive = searchQuery.isNotEmpty() || searchOptions.hasMetadataFilters
     val openSearchRequest by viewModel.openSearchRequest.collectAsState()
     val shouldShowHomeBottomToolbar =
         !isPermissionNeeded &&
@@ -819,23 +828,62 @@ fun DashboardScreen(
 
     var homeBottomToolbarVisible by remember { mutableStateOf(true) }
     LaunchedEffect(homeActionStyle, currentFilter, isPermissionNeeded, isInSelectionMode, listState) {
-        homeBottomToolbarVisible = true
+        KardLeafLog.d(
+            GESTURE_TRACE_TAG,
+            "homeToolbar effectStart actionStyle=${homeActionStyle.name} filter=$currentFilter " +
+                "permissionNeeded=$isPermissionNeeded selectionMode=$isInSelectionMode " +
+                "stateBefore=$homeBottomToolbarVisible list=${listState.firstVisibleItemIndex}:${listState.firstVisibleItemScrollOffset}",
+        )
+        fun setToolbarVisible(visible: Boolean, reason: String) {
+            val previous = homeBottomToolbarVisible
+            homeBottomToolbarVisible = visible
+            if (previous != visible) {
+                KardLeafLog.d(
+                    GESTURE_TRACE_TAG,
+                    "homeToolbar state from=$previous to=$visible reason=$reason " +
+                        "list=${listState.firstVisibleItemIndex}:${listState.firstVisibleItemScrollOffset} " +
+                        "canBack=${listState.canScrollBackward} canForward=${listState.canScrollForward}",
+                )
+            }
+        }
+        setToolbarVisible(true, "effectReset")
         if (homeActionStyle != PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR ||
             isPermissionNeeded ||
             isInSelectionMode
         ) {
+            KardLeafLog.d(GESTURE_TRACE_TAG, "homeToolbar trackerDisabled")
             return@LaunchedEffect
         }
 
         snapshotFlow { listState.isScrollInProgress }
             .distinctUntilChanged()
             .collect { isScrolling ->
+                KardLeafLog.d(
+                    GESTURE_TRACE_TAG,
+                    "homeToolbar scrollState isScrolling=$isScrolling " +
+                        "list=${listState.firstVisibleItemIndex}:${listState.firstVisibleItemScrollOffset} " +
+                        "canBack=${listState.canScrollBackward} canForward=${listState.canScrollForward} " +
+                        "toolbarVisible=$homeBottomToolbarVisible",
+                )
                 if (isScrolling) {
-                    homeBottomToolbarVisible = false
+                    setToolbarVisible(false, "listScrollStart")
                 } else {
+                    KardLeafLog.d(
+                        GESTURE_TRACE_TAG,
+                        "homeToolbar revealDelayStart delayMs=$HOME_BOTTOM_TOOLBAR_REVEAL_DELAY_MS",
+                    )
                     delay(HOME_BOTTOM_TOOLBAR_REVEAL_DELAY_MS)
                     if (!listState.isScrollInProgress) {
-                        homeBottomToolbarVisible = true
+                        setToolbarVisible(true, "listScrollIdleAfterDelay")
+                        KardLeafLog.d(
+                            GESTURE_TRACE_TAG,
+                            "homeToolbar revealDelayEnd revealed=true list=${listState.firstVisibleItemIndex}:${listState.firstVisibleItemScrollOffset}",
+                        )
+                    } else {
+                        KardLeafLog.d(
+                            GESTURE_TRACE_TAG,
+                            "homeToolbar revealDelayEnd revealed=false reason=scrollRestart",
+                        )
                     }
                 }
             }
@@ -1355,11 +1403,50 @@ fun DashboardScreen(
             }
         },
     ) { paddingValues ->
+        val mandatoryGestureBottomPadding = with(density) {
+            WindowInsets.mandatorySystemGestures.getBottom(this).toDp()
+        }
+        val homeToolbarBottomPadding =
+            (paddingValues.calculateBottomPadding() - mandatoryGestureBottomPadding).coerceAtLeast(0.dp)
+        val homeToolbarTargetVisible = shouldShowHomeBottomToolbar && homeBottomToolbarVisible
+        val lastHomeToolbarBounds = remember { arrayOfNulls<androidx.compose.ui.geometry.Rect>(1) }
+        LaunchedEffect(
+            homeToolbarTargetVisible,
+            shouldShowHomeBottomToolbar,
+            homeBottomToolbarVisible,
+            homeBottomToolbarItems.size,
+            homeToolbarBottomPadding,
+        ) {
+            KardLeafLog.d(
+                GESTURE_TRACE_TAG,
+                "homeToolbar renderTarget=$homeToolbarTargetVisible shouldShow=$shouldShowHomeBottomToolbar " +
+                    "state=$homeBottomToolbarVisible items=${homeBottomToolbarItems.size} " +
+                    "bottomPaddingDp=$homeToolbarBottomPadding actionStyle=${homeActionStyle.name}",
+            )
+            val animationDurationMs = if (homeToolbarTargetVisible) {
+                HOME_BOTTOM_TOOLBAR_ENTER_DURATION_MS
+            } else {
+                HOME_BOTTOM_TOOLBAR_EXIT_DURATION_MS
+            }
+            delay(animationDurationMs.toLong() + 30L)
+            val bounds = lastHomeToolbarBounds[0]
+            KardLeafLog.d(
+                GESTURE_TRACE_TAG,
+                "homeToolbar animationSettled target=$homeToolbarTargetVisible " +
+                    "bounds=${bounds?.let { "${it.left.toInt()},${it.top.toInt()},${it.right.toInt()},${it.bottom.toInt()}" } ?: "none"} " +
+                    "bottomPaddingDp=$homeToolbarBottomPadding",
+            )
+        }
+        val layoutDirection = LocalLayoutDirection.current
         Box(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .padding(paddingValues)
+                    .padding(
+                        start = paddingValues.calculateStartPadding(layoutDirection),
+                        top = paddingValues.calculateTopPadding(),
+                        end = paddingValues.calculateEndPadding(layoutDirection),
+                    )
                     .pointerInput(showSearch) {
                         if (showSearch) {
                             awaitEachGesture {
@@ -1375,7 +1462,7 @@ fun DashboardScreen(
                     sessionSeed = currentFilter.seed,
                     viewModel = viewModel,
                     onEdit = viewModel::openNoteForEditing,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().padding(bottom = paddingValues.calculateBottomPadding()),
                 )
             } else {
         Column(
@@ -1735,6 +1822,15 @@ fun DashboardScreen(
                                                     "fromIndex=$downIndex toIndex=$endIndex fromOffset=$downOffset toOffset=$endOffset " +
                                                     "pullRefreshing=${pullRefreshState.isRefreshing} loading=$isLoading customSortBlocked=$customSortDragRefreshBlocked",
                                             )
+                                            KardLeafLog.d(
+                                                GESTURE_TRACE_TAG,
+                                                    "dashboardPointer end moves=$moveEvents scrollMoved=$scrollMoved " +
+                                                        "maxDx=${maxDx.toInt()} maxDy=${maxDy.toInt()} " +
+                                                        "from=${downIndex}:${downOffset} to=${endIndex}:${endOffset} " +
+                                                        "toolbarState=$homeBottomToolbarVisible " +
+                                                        "toolbarTarget=${shouldShowHomeBottomToolbar && homeBottomToolbarVisible} " +
+                                                        "bottomPaddingDp=$homeToolbarBottomPadding",
+                                            )
                                         }
                                         showPullRefreshCircle = false
                                     }
@@ -2038,6 +2134,7 @@ fun DashboardScreen(
                                         Box(modifier = Modifier.fillMaxSize())
                                     } else {
                                         NoteGrid(
+                                            contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding()),
                                             uiItems = uiItems,
                                             selectedNotes = selectedNotes,
                                             isLoading = shouldShowInitialNoteLoading,
@@ -2069,12 +2166,12 @@ fun DashboardScreen(
                                         scrollPerfEnabled = page == folderPagerState.currentPage &&
                                             page == folderPagerState.settledPage &&
                                             !folderPagerState.isScrollInProgress,
-                                        onSearchJump = { note ->
+                                        onSearchJump = { note, match ->
                                             if (!isInSelectionMode) {
-                                                onSearchNoteClick(note, searchQuery)
+                                                onSearchNoteClick(note, match?.query ?: searchQuery, match)
                                             }
                                         },
-                                        onNoteClick = { note ->
+                                        onNoteClick = { note, match ->
                                             if (isInSelectionMode) {
                                                 viewModel.toggleSelection(note)
                                             } else {
@@ -2084,7 +2181,7 @@ fun DashboardScreen(
                                                         "pagerScrolling=${folderPagerState.isScrollInProgress} listScrolling=${listState.isScrollInProgress} " +
                                                         "pauseBackground=$pauseBackgroundWork noteContentLen=${note.content.length} notePreviewLen=${note.contentPreview.length}",
                                                 )
-                                                onNoteClick(note)
+                                                if (match?.query?.isNotEmpty() == true) onSearchNoteClick(note, match.query, match) else onNoteClick(note)
                                             }
                                         },
                                             onNoteLongClick = { note ->
@@ -2149,6 +2246,7 @@ fun DashboardScreen(
                                         }
                                     }
                                     NoteGrid(
+                                        contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding()),
                                         uiItems = pageItems,
                                         selectedNotes = selectedNotes,
                                         isLoading = shouldShowInitialNoteLoading && isCurrentPage,
@@ -2189,12 +2287,12 @@ fun DashboardScreen(
                                             page == folderPagerState.currentPage &&
                                             page == folderPagerState.settledPage &&
                                             !folderPagerState.isScrollInProgress,
-                                        onSearchJump = { note ->
+                                        onSearchJump = { note, match ->
                                             if (!isInSelectionMode) {
-                                                onSearchNoteClick(note, searchQuery)
+                                                onSearchNoteClick(note, match?.query ?: searchQuery, match)
                                             }
                                         },
-                                        onNoteClick = { note ->
+                                        onNoteClick = { note, match ->
                                             if (isInSelectionMode) {
                                                 viewModel.toggleSelection(note)
                                             } else {
@@ -2205,7 +2303,7 @@ fun DashboardScreen(
                                                         "pagerScrolling=${folderPagerState.isScrollInProgress} listScrolling=${pageListState.isScrollInProgress} " +
                                                         "pauseBackground=$pauseBackgroundWork noteContentLen=${note.content.length} notePreviewLen=${note.contentPreview.length}",
                                                 )
-                                                onNoteClick(note)
+                                                if (match?.query?.isNotEmpty() == true) onSearchNoteClick(note, match.query, match) else onNoteClick(note)
                                             }
                                         },
                                         onNoteLongClick = { note ->
@@ -2250,6 +2348,7 @@ fun DashboardScreen(
                             }
 
                             NoteGrid(
+                                contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding()),
                                 uiItems = uiItems,
                                 selectedNotes = selectedNotes,
                                 isLoading = shouldShowInitialNoteLoading,
@@ -2282,12 +2381,12 @@ fun DashboardScreen(
                                 },
                                 scrollPerfPath = currentFolderPath,
                                 scrollPerfEnabled = true,
-                                onSearchJump = { note ->
+                                onSearchJump = { note, match ->
                                     if (!isInSelectionMode) {
-                                        onSearchNoteClick(note, searchQuery)
+                                        onSearchNoteClick(note, match?.query ?: searchQuery, match)
                                     }
                                 },
-                                onNoteClick = { note ->
+                                onNoteClick = { note, match ->
                                     if (isInSelectionMode) {
                                         viewModel.toggleSelection(note)
                                     } else {
@@ -2297,7 +2396,7 @@ fun DashboardScreen(
                                                 "listScrolling=${listState.isScrollInProgress} pauseBackground=$pauseBackgroundWork " +
                                                 "noteContentLen=${note.content.length} notePreviewLen=${note.contentPreview.length}",
                                         )
-                                        onNoteClick(note)
+                                        if (match?.query?.isNotEmpty() == true) onSearchNoteClick(note, match.query, match) else onNoteClick(note)
                                     }
                                 },
                                 onNoteLongClick = { note ->
@@ -2340,8 +2439,13 @@ fun DashboardScreen(
         }
         if (homeBottomToolbarItems.isNotEmpty() && homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) {
             AnimatedVisibility(
-                visible = shouldShowHomeBottomToolbar && homeBottomToolbarVisible,
-                modifier = Modifier.align(Alignment.BottomCenter),
+                visible = homeToolbarTargetVisible,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = homeToolbarBottomPadding)
+                    .onGloballyPositioned { coordinates ->
+                        lastHomeToolbarBounds[0] = coordinates.boundsInWindow()
+                    },
                 enter = fadeIn(animationSpec = tween(HOME_BOTTOM_TOOLBAR_ENTER_DURATION_MS)) +
                     slideInVertically(animationSpec = tween(HOME_BOTTOM_TOOLBAR_ENTER_DURATION_MS)) { it },
                 exit = fadeOut(animationSpec = tween(HOME_BOTTOM_TOOLBAR_EXIT_DURATION_MS)) +
@@ -2355,6 +2459,7 @@ fun DashboardScreen(
             }
         }
         if (showFolderNavigationPanel) {
+            Box(Modifier.fillMaxSize().padding(bottom = paddingValues.calculateBottomPadding())) {
             FolderNavigationPanel(
                 labels = labels,
                 notes = allNotes,
@@ -2393,6 +2498,7 @@ fun DashboardScreen(
                     closeFolderNavigationPanel()
                 },
             )
+            }
         }
         if (showWebClipImportDialog) {
             WebClipImportDialog(
@@ -2438,7 +2544,7 @@ fun DashboardScreen(
         }
         if (showSampleCleanupPrompt) {
             Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().padding(bottom = paddingValues.calculateBottomPadding()),
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 Surface(

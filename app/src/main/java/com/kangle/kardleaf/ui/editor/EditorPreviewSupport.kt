@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -160,10 +162,12 @@ internal fun NoteSearchTextField(
     onFocusChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
-        singleLine = true,
+        singleLine = false,
+        maxLines = Int.MAX_VALUE,
         textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
         cursorBrush = SolidColor(if (focused) MaterialTheme.colorScheme.primary else Color.Transparent),
         modifier = modifier
@@ -187,7 +191,7 @@ internal fun NoteSearchTextField(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                innerTextField()
+                Box(Modifier.verticalScroll(rememberScrollState())) { innerTextField() }
             }
         },
     )

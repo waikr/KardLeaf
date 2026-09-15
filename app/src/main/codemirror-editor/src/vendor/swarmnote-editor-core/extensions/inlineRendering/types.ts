@@ -55,7 +55,8 @@ export interface ReplacementExtension {
   /** 
    * 当选区包含时是否隐藏装饰
    * 
-   * 默认为 true：当选区与装饰范围相交时，隐藏 widget 并显示源码。
+   * 默认为 true：当普通光标/显式选区与装饰范围相交时，隐藏 widget 并显示源码。
+   * 原生长按/拖选期间由统一选区策略保持 widget 渲染。
    * 设为 false：即使有选区也保持 widget 显示。
    */
   hideWhenContainsSelection?: boolean;

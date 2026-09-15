@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
@@ -36,6 +37,8 @@ internal fun ToolbarIconButton(
     text: String,
     icon: ImageVector? = null,
     contentDescription: String? = text,
+    preserveIconColors: Boolean = false,
+    iconSize: Dp = 22.dp,
     bold: Boolean = false,
     italic: Boolean = false,
     underline: Boolean = false,
@@ -53,8 +56,8 @@ internal fun ToolbarIconButton(
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
-                modifier = Modifier.size(22.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(iconSize),
+                tint = if (preserveIconColors) androidx.compose.ui.graphics.Color.Unspecified else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             Text(

@@ -1,5 +1,31 @@
 import type { ViewUpdate } from '@codemirror/view';
-import { mouseSelectingField } from './mouseSelecting';
+import { setSourceRevealEnabled } from './facets';
+import type { Transaction } from '@codemirror/state';
+import { syntaxTree } from '@codemirror/language';
+import { renderingSelection, selectionGestureActive, selectionRenderingFrozen } from './mouseSelecting';
+
+// Keep block widgets stable while native handles move. Content edits still
+// rebuild immediately; selection-only transitions rebuild once at the edge of
+// the gesture, and viewport changes still mount the newly visible widgets.
+export function shouldRebuildBlockDecorations(tr: Transaction): boolean {
+  if (tr.docChanged || tr.reconfigured ||
+    tr.effects.some((effect) => effect.is(setSourceRevealEnabled))) return true;
+  if (!renderingSelection(tr.startState).eq(renderingSelection(tr.state))) return true;
+  if (selectionGestureActive(tr.startState) !== selectionGestureActive(tr.state)) return true;
+  // DOMObserver can process Android's selectionchange before the bridge's
+  // state effect reaches this transaction. A non-empty native select event
+  // still needs one rebuild to enter the rendered surface, then the gesture
+  // field keeps later handle moves stable.
+  const nativeSelection = tr.selection && tr.isUserEvent('select') &&
+    tr.state.selection.ranges.some((range) => !range.empty);
+  if (nativeSelection && !selectionRenderingFrozen(tr.startState)) return true;
+  const selectionStarted = selectionRenderingFrozen(tr.state) && !selectionRenderingFrozen(tr.startState);
+  const selectionEnded = !selectionRenderingFrozen(tr.state) && selectionRenderingFrozen(tr.startState);
+  if (selectionStarted || selectionEnded) return true;
+  if (selectionRenderingFrozen(tr.state)) return false;
+  return selectionRenderingFrozen(tr.startState) || !!tr.selection ||
+    syntaxTree(tr.startState) !== syntaxTree(tr.state);
+}
 
 /**
  * Widget 更新动作类型
@@ -18,21 +44,25 @@ export type UpdateAction = 'rebuild' | 'skip' | 'none';
  * 
  * **决策逻辑（优先级从高到低）：**
  * 
- * 1. **强制重建**：文档内容、视口或配置发生变化时，必须重建
+ * 1. **强制重建**：文档内容、显式选区或配置变化时，必须重建
  *    - `docChanged` - 文档内容改变
- *    - `viewportChanged` - 可见区域改变
+ *    - `renderingSelection` - 搜索/宿主显式选区改变
  *    - `reconfigured` - 扩展配置重新加载
  * 
  * 2. **拖拽结束重建**：从拖拽状态退出时，需要重建以显示最终选区
  *    - `wasDragging && !isDragging` - 拖拽刚结束
  * 
- * 3. **拖拽中跳过**：正在拖拽时跳过纯选区更新，避免闪烁
+ * 3. **视口变化重建**：视口变化始终需要重建，以挂载新进入的 widget
+ *    - `viewportChanged` - 可见区域改变
+ *
+ * 4. **拖拽中跳过选区重建**：没有文档或视口变化时，手柄移动期间跳过
+ *    会替换节点的选区装饰更新
  *    - `isDragging` - 正在拖拽
- * 
- * 4. **选区变化重建**：非拖拽情况下的选区变化需要重建
+ *
+ * 5. **选区变化重建**：非拖拽情况下的选区变化需要重建
  *    - `selectionSet` - 选区设置（如点击、键盘移动光标）
  * 
- * 5. **其他情况无操作**：没有相关变化时无需处理
+ * 6. **其他情况无操作**：没有相关变化时无需处理
  * 
  * **使用示例：**
  * ```typescript
@@ -48,31 +78,53 @@ export type UpdateAction = 'rebuild' | 'skip' | 'none';
  * @returns 建议的更新动作
  */
 export function checkUpdateAction(update: ViewUpdate): UpdateAction {
-  // 第一优先级：文档/视口/配置变化 → 必须重建
+  const renderingChanged = !renderingSelection(update.startState).eq(renderingSelection(update.state));
+  const nativeGestureChanged = selectionGestureActive(update.startState) !== selectionGestureActive(update.state);
+  const nativeSelection = update.transactions.some((transaction) =>
+    transaction.selection && transaction.isUserEvent('select') &&
+      transaction.state.selection.ranges.some((range) => !range.empty));
+
+  // Document/configuration changes and explicit host selections must rebuild.
   if (
     update.docChanged ||
-    update.viewportChanged ||
-    update.transactions.some((t) => t.reconfigured)
+    renderingChanged ||
+    nativeGestureChanged ||
+    update.transactions.some((t) => t.reconfigured) ||
+    update.transactions.some((t) => t.effects.some((effect) => effect.is(setSourceRevealEnabled)))
   ) {
     return 'rebuild';
   }
 
   // 获取当前和之前的拖拽状态
-  const isDragging = update.state.field(mouseSelectingField, false);
-  const wasDragging = update.startState.field(mouseSelectingField, false);
+  const isDragging = selectionRenderingFrozen(update.state);
+  const wasDragging = selectionRenderingFrozen(update.startState);
+
+  if (nativeSelection && !wasDragging && !isDragging) return 'rebuild';
+
+  // Entering the native selection gesture may need one rebuild to replace
+  // source-revealed markup with the stable rendered widgets. Keep that DOM
+  // fixed for subsequent handle moves, then rebuild once on release.
+  if (isDragging !== wasDragging) return 'rebuild';
+
+  // A handle drag may auto-scroll into a new viewport. Rebuild that viewport
+  // so its widgets exist; WidgetType.eq keeps already selected DOM nodes when
+  // the visible range is reconciled.
+  if (update.viewportChanged) {
+    return 'rebuild';
+  }
+
+  // Selection-only updates during the gesture must not replace DOM nodes.
+  if (isDragging) {
+    return 'skip';
+  }
 
   // 第二优先级：拖拽刚结束 → 重建以显示最终状态
   if (wasDragging && !isDragging) {
     return 'rebuild';
   }
 
-  // 第三优先级：正在拖拽 → 跳过以避免闪烁
-  if (isDragging) {
-    return 'skip';
-  }
-
   // 第四优先级：选区变化 → 重建（非拖拽情况）
-  if (update.selectionSet) {
+  if (update.selectionSet || syntaxTree(update.startState) !== syntaxTree(update.state)) {
     return 'rebuild';
   }
 

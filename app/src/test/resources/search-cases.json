@@ -1,0 +1,17 @@
+[
+  {"name":"literal spaces", "text":" foo foo ", "query":" foo ", "ranges":[[0,5]]},
+  {"name":"whitespace only", "text":"a  b", "query":"  ", "ranges":[[1,3]]},
+  {"name":"newline only", "text":"a\nb\n", "query":"\n", "ranges":[[1,2],[3,4]]},
+  {"name":"literal backslash", "text":"a\\nb\na", "query":"\\n", "ranges":[[1,3]]},
+  {"name":"multiline", "text":"前\n一行\n二行\n后", "query":"一行\n二行", "ranges":[[2,7]]},
+  {"name":"UTF16", "text":"😀中文 😀中文", "query":"中文", "ranges":[[2,4],[7,9]]},
+  {"name":"case insensitive", "text":"aA aa AA", "query":"aa", "ranges":[[0,2],[3,5],[6,8]]},
+  {"name":"case sensitive", "text":"aA aa AA", "query":"aa", "matchCase":true, "ranges":[[3,5]]},
+  {"name":"non overlapping", "text":"ababa", "query":"aba", "ranges":[[0,3]]},
+  {"name":"regex multiline anchors", "text":"foo\nbar\nfoo", "query":"^foo$", "useRegex":true, "ranges":[[0,3],[8,11]]},
+  {"name":"regex multiline content", "text":"x\nfoo\nbar\ny", "query":"foo\\s+bar", "useRegex":true, "ranges":[[2,9]]},
+  {"name":"regex no literal fallback", "text":"a.b", "query":"a\\.c", "useRegex":true, "ranges":[]},
+  {"name":"zero width excluded", "text":"foo foo", "query":"(?=foo)", "useRegex":true, "ranges":[]},
+  {"name":"invalid regex", "text":"", "query":"[", "useRegex":true, "error":true, "ranges":[]},
+  {"name":"empty query", "text":"anything", "query":"", "ranges":[]}
+]

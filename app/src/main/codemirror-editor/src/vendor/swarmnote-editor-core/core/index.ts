@@ -8,7 +8,11 @@
  */
 
 /** 实时预览主开关 Facet */
-export { collapseOnSelectionFacet } from './facets';
+export {
+  collapseOnSelectionFacet,
+  setSourceRevealEnabled,
+  sourceRevealEnabledField,
+} from './facets';
 
 /** 鼠标拖拽选择追踪相关 */
 export {
@@ -16,8 +20,20 @@ export {
   mouseSelectingExtension,
   /** 拖拽状态 StateField */
   mouseSelectingField,
+  /** Android/浏览器原生选区 StateField */
+  nativeSelectionField,
+  /** 检查编辑器内的非空原生 DOM 选区 */
+  hasNonEmptyNativeSelection,
+  /** 原生选区结束事件名 */
+  nativeSelectionSettledEvent,
+  /** 在原生选区结束后执行一次异步 DOM 更新 */
+  runWhenNativeSelectionSettled,
+  /** 清理原生选区状态的 Effect */
+  setNativeSelectionActive,
   /** 设置拖拽状态的 Effect */
   setMouseSelecting,
+  /** 用户选区手势是否活跃 */
+  selectionGestureActive,
 } from './mouseSelecting';
 
 /** 判断是否显示源码的工具函数 */

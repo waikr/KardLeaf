@@ -3,6 +3,7 @@
 import com.kangle.kardleaf.data.utils.EditorOpenSession
 import com.kangle.kardleaf.data.utils.KardLeafLog
 import com.kangle.kardleaf.data.utils.SearchQueryUtils
+import org.json.JSONObject
 import com.kangle.kardleaf.ui.editor.*
 import com.kangle.kardleaf.ui.editor.api.EditorFastScrollMetrics
 import com.kangle.kardleaf.ui.editor.codemirror.CodeMirrorWebViewScrollController
@@ -28,6 +29,9 @@ import android.os.SystemClock
 import android.view.KeyEvent as AndroidKeyEvent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -180,6 +184,7 @@ private const val EDITOR_TRACE_TAG = "KardLeafEditorTrace"
 private const val CODEMIRROR_DEBUG_TRACE_TAG = "KardLeafCM6Trace"
 private const val LARGE_NOTE_OPEN_TRACE_TAG = "KardLeafLargeNoteOpen"
 private const val OPEN_PATH_PROBE_TAG = "KardLeafOpenPathProbe"
+private const val PREVIEW_MEDIA_TRACE_TAG = "KardLeafPreviewMedia"
 private const val USER_PERF_TRACE_TAG = "KardLeafUserPerf"
 
 private data class PendingCodeMirrorEditSwitch(
@@ -188,6 +193,13 @@ private data class PendingCodeMirrorEditSwitch(
     val source: String,
     val startedAt: Long,
     val requestFocus: Boolean,
+)
+
+private data class PendingCodeMirrorKernelSwitch(
+    val switchId: Int,
+    val sourceKernel: PrefsManager.EditorKernel,
+    val targetKernel: PrefsManager.EditorKernel,
+    val startedAt: Long,
 )
 
 internal fun isPreviewRenderReadyForRequest(
@@ -460,8 +472,11 @@ fun EditorScreen(
     val defaultOpenNoteMode = remember {
         KardLeafCustomFeatures.getOpenNoteMode(context)
     }
-    val toolbarOrder = remember {
-        KardLeafCustomFeatures.getToolbarOrder(context)
+    val customFunctionItems = remember {
+        KardLeafCustomFeatures.getCustomFunctionItems(context)
+    }
+    val toolbarOrder = remember(customFunctionItems) {
+        KardLeafCustomFeatures.getEditorToolbarOrder(context, customFunctionItems)
     }
     val notePrefsManager = remember { PrefsManager(context) }
     var editorKernel by remember { mutableStateOf(notePrefsManager.getEditorKernel()) }
@@ -596,6 +611,10 @@ fun EditorScreen(
     )
     var canUndo by remember { mutableStateOf(false) }
     var canRedo by remember { mutableStateOf(false) }
+    var contextToolbarKind by remember(editorDocumentKey) { mutableStateOf("") }
+    var contextCanDeleteRow by remember(editorDocumentKey) { mutableStateOf(false) }
+    var contextCanDeleteColumn by remember(editorDocumentKey) { mutableStateOf(false) }
+
     val isTemporaryDraft = currentNote == null && externalDraft?.isTemporary == true
     var folder by remember(currentNote, externalDraft, initialLabel, isPrivacyEditor) {
         mutableStateOf(
@@ -609,6 +628,7 @@ fun EditorScreen(
             },
         )
     }
+    var previewAttachments by remember(editorDocumentKey) { mutableStateOf(emptyMap<String, String>()) }
     var renderedPreview by remember(editorDocumentKey) {
         mutableStateOf(
             when {
@@ -624,6 +644,8 @@ fun EditorScreen(
     var pendingPreviewScrollRatio by remember(editorDocumentKey) { mutableStateOf<Float?>(null) }
     var pendingPreviewSwitch by remember(editorDocumentKey) { mutableStateOf<Triple<Int, EditorViewportAnchor, Long>?>(null) }
     var pendingCodeMirrorEditSwitch by remember(editorDocumentKey) { mutableStateOf<PendingCodeMirrorEditSwitch?>(null) }
+    var pendingCodeMirrorKernelSwitch by remember(editorDocumentKey) { mutableStateOf<PendingCodeMirrorKernelSwitch?>(null) }
+    var kernelSwitchSequence by remember(editorDocumentKey) { mutableStateOf(0) }
     var modeSwitchSequence by remember(editorDocumentKey) { mutableStateOf(0) }
     var activeModeSwitchId by remember(editorDocumentKey) { mutableStateOf(0) }
     var committedModeSwitchId by remember(editorDocumentKey) { mutableStateOf(0) }
@@ -656,6 +678,12 @@ fun EditorScreen(
             !isPrivacyEditor &&
             editorSurfaceContent.isNotEmpty() &&
             defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT
+    val isCodeMirrorOpening =
+        effectiveEditorOpen &&
+            usesCodeMirrorLikeEditor &&
+            isOpeningNoteContent &&
+            editorSurfaceContent.isNotEmpty() &&
+            defaultOpenNoteMode == KardLeafCustomFeatures.OpenNoteMode.EDIT
     val userPerfContentLen = editorSurfaceContent.length
     val userPerfSizeTier = userPerfNoteSizeTier(userPerfContentLen)
     val isUserPerfLargeNote = !isNewPrivacyNote && userPerfContentLen >= USER_PERF_LARGE_NOTE_MIN_CHARS
@@ -667,6 +695,7 @@ fun EditorScreen(
     var userPerfAreaFirstFrameLogged by remember(editorDocumentKey) { mutableStateOf(false) }
     var userPerfFirstContentLaidOutLogged by remember(editorDocumentKey) { mutableStateOf(false) }
     var userPerfRenderedLogged by remember(editorDocumentKey) { mutableStateOf(false) }
+    var userPerfFullRenderedLogged by remember(editorDocumentKey) { mutableStateOf(false) }
     val quillpadRecomposeCount = remember(editorDocumentKey) { AtomicInteger() }
     if (effectiveEditorOpen && usesQuillpadStyleEditor) {
         SideEffect {
@@ -760,6 +789,7 @@ fun EditorScreen(
                 USER_PERF_TRACE_TAG,
                 "editorOpen composeDecision key=$editorDocumentKey contentLen=${initialContent.length} sizeTier=$userPerfSizeTier " +
                     "isOpening=$isOpeningNoteContent isEditing=$isEditing usesOpeningShell=$usesOpeningEditShell " +
+                    "codeMirrorOpening=$isCodeMirrorOpening " +
                     "defaultOpenMode=$defaultOpenNoteMode blocksLarge=$blocksDirectEditForLargeNote defersLarge=$defersAutoEditForLargeNote " +
                     "codeMirror=$usesCodeMirrorLikeEditor currentNoteNull=${currentNote == null} externalDraftNull=${externalDraft == null}",
             )
@@ -869,7 +899,7 @@ fun EditorScreen(
     var lastMathMenuDismissAt by remember { mutableStateOf(0L) }
     var showDateTimeMenu by remember { mutableStateOf(false) }
     var lastDateTimeMenuDismissAt by remember { mutableStateOf(0L) }
-    var showCustomSymbolsMenu by remember { mutableStateOf(false) }
+    var showQuickTextMenu by remember { mutableStateOf(false) }
     var showNoteSearch by remember { mutableStateOf(false) }
     var showDrawingPad by remember { mutableStateOf(false) }
     var isDownloadingWebImages by remember(editorDocumentKey) { mutableStateOf(false) }
@@ -897,7 +927,9 @@ fun EditorScreen(
     var noteSearchCurrentStart by remember { mutableStateOf(-1) }
     var noteSearchCurrentEnd by remember { mutableStateOf(-1) }
     var noteSearchCurrentOrdinal by remember { mutableStateOf(0) }
-    var noteSearchRequestToken by remember { mutableStateOf(0) }
+    var noteSearchRevision by remember { mutableStateOf(0) }
+    var noteSearchJumpRevision by remember { mutableStateOf(0) }
+    var noteSearchJumpStart by remember { mutableStateOf<Int?>(null) }
     var noteSearchFocused by remember { mutableStateOf(false) }
     var noteReplaceFocused by remember { mutableStateOf(false) }
     var suppressNextSearchKeyboardRequest by remember { mutableStateOf(false) }
@@ -1625,6 +1657,7 @@ fun EditorScreen(
     }
 
     fun markEditorDirty() {
+        if (showNoteSearch && !usesCodeMirrorLikeEditor) noteSearchRevision++
         if (isPrivacyEditor) {
             privacyEditorDirty = true
         } else if (!viewModel.editorDirty.value) {
@@ -1812,27 +1845,81 @@ fun EditorScreen(
         showLabelMenu = false
         showHeadingMenu = false
         showMathMenu = false
+        if (targetKernel == editorKernel && pendingCodeMirrorKernelSwitch == null) return
+        val sourceKernel = editorKernel
+        val switchId = ++kernelSwitchSequence
+        pendingCodeMirrorKernelSwitch?.let { pending ->
+            KardLeafLog.d(
+                "KardLeafCodeMirror",
+                "editor kernel switch cancelled id=${pending.switchId} source=${pending.sourceKernel} target=${pending.targetKernel} " +
+                    "replacement=$switchId key=$editorDocumentKey",
+            )
+        }
+        pendingCodeMirrorKernelSwitch = null
         if (targetKernel == editorKernel) return
         fun applySnapshot(snapshot: KardLeafEditorSnapshot) {
+            if (switchId != kernelSwitchSequence) {
+                KardLeafLog.d(
+                    "KardLeafCodeMirror",
+                    "editor kernel snapshot dropped id=$switchId latest=$kernelSwitchSequence target=$targetKernel key=$editorDocumentKey",
+                )
+                return
+            }
             editorController.updateExternalTitle(snapshot.title)
             editorController.updateExternalContentSnapshot(snapshot.content, snapshot.selection)
             switchedEditorSnapshot = snapshot
-            notePrefsManager.saveEditorKernel(targetKernel)
-            editorKernel = targetKernel
-            KardLeafLog.d(
-                "KardLeafCodeMirror",
-                "editor kernel switched and saved target=$targetKernel key=$editorDocumentKey " +
-                    "titleLen=${snapshot.title.length} contentLen=${snapshot.content.length} selection=${snapshot.selection}",
-            )
+            if (targetKernel == PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW && isEditing && !isPrivacyEditor) {
+                pendingCodeMirrorKernelSwitch = PendingCodeMirrorKernelSwitch(
+                    switchId = switchId,
+                    sourceKernel = sourceKernel,
+                    targetKernel = targetKernel,
+                    startedAt = SystemClock.elapsedRealtime(),
+                )
+                KardLeafLog.d(
+                    "KardLeafCodeMirror",
+                    "editor kernel target prepared id=$switchId source=$sourceKernel target=$targetKernel key=$editorDocumentKey " +
+                        "titleLen=${snapshot.title.length} contentLen=${snapshot.content.length} selection=${snapshot.selection} " +
+                        "sourceSurfaceRetained=true",
+                )
+            } else {
+                notePrefsManager.saveEditorKernel(targetKernel)
+                editorKernel = targetKernel
+                KardLeafLog.d(
+                    "KardLeafCodeMirror",
+                    "editor kernel switched and saved id=$switchId source=$sourceKernel target=$targetKernel key=$editorDocumentKey " +
+                        "titleLen=${snapshot.title.length} contentLen=${snapshot.content.length} selection=${snapshot.selection}",
+                )
+            }
         }
         if (usesExternalEditorSnapshot && editorController.requestExternalSnapshot { snapshot ->
                 applySnapshot(snapshot)
             }
         ) {
-            KardLeafLog.d("KardLeafCodeMirror", "editor kernel switch requested external snapshot target=$targetKernel key=$editorDocumentKey kernel=$editorKernel")
+            KardLeafLog.d(
+                "KardLeafCodeMirror",
+                "editor kernel switch requested external snapshot id=$switchId target=$targetKernel key=$editorDocumentKey kernel=$editorKernel",
+            )
         } else {
             applySnapshot(editorController.getSnapshot())
         }
+    }
+
+    fun cancelPendingCodeMirrorKernelSwitch(reason: String) {
+        val pending = pendingCodeMirrorKernelSwitch ?: return
+        pendingCodeMirrorKernelSwitch = null
+        // Keep the source's current text; reverting the props can reload the original note into Beta.
+        switchedEditorSnapshot = editorController.getSnapshot()
+        KardLeafLog.d(
+            "KardLeafCodeMirror",
+            "editor kernel target cancelled id=${pending.switchId} source=${pending.sourceKernel} " +
+                "target=${pending.targetKernel} key=$editorDocumentKey reason=$reason",
+        )
+    }
+
+    fun syncPendingCodeMirrorKernelSnapshot() {
+        if (pendingCodeMirrorKernelSwitch == null) return
+        val snapshot = editorController.getSnapshot()
+        if (snapshot != switchedEditorSnapshot) switchedEditorSnapshot = snapshot
     }
 
     fun shouldSaveEditorOnLeave(): Boolean =
@@ -1959,6 +2046,52 @@ fun EditorScreen(
             "[insert-image] compose after cursor=${afterSelection.start}..${afterSelection.end} expectedCursor=${start + insertion.length}",
         )
         markEditorDirty()
+    }
+
+    var attachmentSelection by remember(editorDocumentKey) { mutableStateOf<TextRange?>(null) }
+    var importingAttachment by remember(editorDocumentKey) { mutableStateOf(false) }
+    val latestAttachmentDocument = rememberUpdatedState(editorDocumentKey)
+    val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val selection = attachmentSelection
+        attachmentSelection = null
+        if (uris.isNotEmpty() && selection != null && !isPrivacyEditor) {
+            val documentKey = editorDocumentKey
+            val targetFolder = folder
+            val contentBeforeImport = editorController.getText()
+            importingAttachment = true
+            coroutineScope.launch {
+                try {
+                    val imported = mutableListOf<String>()
+                    for (uri in uris) {
+                        try {
+                            imported += viewModel.importAttachment(uri, targetFolder)
+                                .ifBlank { error("附件导入失败，请检查文件大小和仓库权限") }
+                        } catch (error: kotlinx.coroutines.CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            context.showToast(error.message ?: "附件导入失败", Toast.LENGTH_LONG)
+                        }
+                    }
+                    if (latestAttachmentDocument.value == documentKey && imported.isNotEmpty()) {
+                        val currentContent = editorController.getText()
+                        val insertionSelection = if (currentContent == contentBeforeImport) selection else TextRange(currentContent.length)
+                        insertImageMarkdown(imported.joinToString("\n\n"), insertionSelection)
+                    }
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    context.showToast(error.message ?: "附件导入失败", Toast.LENGTH_LONG)
+                } finally {
+                    importingAttachment = false
+                }
+            }
+        }
+    }
+    fun launchAttachmentPicker() {
+        if (isPrivacyEditor || importingAttachment) return
+        attachmentSelection = editorController.getSelection()
+        keyboardController?.hide()
+        attachmentPicker.launch(arrayOf("*/*"))
     }
 
     fun launchImagePicker() {
@@ -2157,6 +2290,7 @@ fun EditorScreen(
         previewImageTargets = extractPreviewImageClickTargets(snapshot.content)
         val token = previewRenderToken + 1
         previewRenderToken = token
+        previewAttachments = emptyMap()
         renderedPreview = markdown
         KardLeafLog.d(
             EDITOR_TRACE_TAG,
@@ -2174,7 +2308,17 @@ fun EditorScreen(
         )
         coroutineScope.launch {
             val preparedMarkdown = viewModel.preparePreviewMarkdown(markdown, folder)
+            val attachments = if (isPrivacyEditor) emptyMap() else viewModel.resolvePreviewAttachments(markdown, folder)
+            val mediaCount = attachments.values.count { value ->
+                val mime = Uri.parse(value).getQueryParameter("mime")
+                mime?.startsWith("video/") == true || mime?.startsWith("audio/") == true
+            }
+            KardLeafLog.d(
+                PREVIEW_MEDIA_TRACE_TAG,
+                "preview map token=$token total=${attachments.size} mediaCount=$mediaCount markdownLen=${markdown.length}",
+            )
             if (previewRenderToken == token) {
+                previewAttachments = attachments
                 renderedPreview = preparedMarkdown
                 KardLeafLog.d(
                     EDITOR_TRACE_TAG,
@@ -2513,7 +2657,6 @@ fun EditorScreen(
         noteSearchCurrentOrdinal = 0
         noteSearchFocused = false
         noteReplaceFocused = false
-        noteSearchRequestToken++
         editorController.clearSearchHighlights()
         if (usesCodeMirrorLikeEditor) {
             editorController.executeCommand("clearSearchState", "close")
@@ -2528,14 +2671,21 @@ fun EditorScreen(
         query: String,
         currentStart: Int,
         text: String = editorController.getText(),
+        trackSelection: Boolean = false,
     ): SearchMatchSummary {
-        val summary = summarizeNoteSearchMatches(
+        var summary = summarizeNoteSearchMatches(
             text = text,
             query = query,
             preferredStart = currentStart,
             useRegex = noteSearchUseRegex,
             matchCase = noteSearchMatchCase,
         )
+        if (trackSelection) {
+            val selection = editorController.getSnapshot().selection
+            if (selection.min < summary.currentStart || selection.max > summary.currentEnd || selection.min >= summary.currentEnd) {
+                summary = summary.copy(currentStart = -1, currentEnd = -1, currentOrdinal = 0)
+            }
+        }
         noteSearchError = summary.errorMessage
         noteSearchMatchCount = summary.count
         noteSearchCurrentStart = summary.currentStart
@@ -2620,7 +2770,12 @@ fun EditorScreen(
         searchText: String = editorController.getText(),
         source: String = "cached",
     ) {
-        if (query.isBlank()) return
+        if (query.isEmpty()) return
+        if (isEditing && usesCodeMirrorLikeEditor) {
+            editorController.executeCommand("setSearchState", query, noteSearchUseRegex, noteSearchMatchCase,
+                -1, 0, codeMirrorOffset(searchText, index.coerceAtLeast(0)), true)
+            return
+        }
         val text = searchText
         KardLeafLog.d(
             SEARCH_TRACE_TAG,
@@ -2653,95 +2808,22 @@ fun EditorScreen(
             )
             return
         }
-        if (usesCodeMirrorLikeEditor) {
-            val codeMirrorStart = codeMirrorOffset(text, summary.currentStart)
-            val codeMirrorEnd = codeMirrorOffset(text, summary.currentEnd)
-            editorController.updateExternalSelection(codeMirrorStart, codeMirrorEnd)
-            editorController.executeCommand(
-                "setSearchState",
-                query,
-                noteSearchUseRegex,
-                noteSearchMatchCase,
-                summary.currentOrdinal - 1,
-                summary.count,
-            )
-            editorController.executeCommand("selectRange", codeMirrorStart, codeMirrorEnd)
-        } else {
-            editorController.setSelection(summary.currentStart, summary.currentEnd)
-        }
-        val selectionToken = noteSearchRequestToken
-        val selectionDocumentKey = editorDocumentKey
-        coroutineScope.launch {
-            withFrameNanos { }
-            delay(60)
-            if (
-                selectionToken != noteSearchRequestToken ||
-                selectionDocumentKey != editorDocumentKey ||
-                !showNoteSearch ||
-                noteSearchQuery != query
-            ) {
-                return@launch
-            }
-            if (usesCodeMirrorLikeEditor) {
-                val codeMirrorStart = codeMirrorOffset(text, summary.currentStart)
-                val codeMirrorEnd = codeMirrorOffset(text, summary.currentEnd)
-                editorController.executeCommand("selectRange", codeMirrorStart, codeMirrorEnd)
-            } else {
-                editorController.setSelection(summary.currentStart, summary.currentEnd)
-                editorController.scrollToOffset(summary.currentStart)
-            }
-            runCatching { searchFocusRequester.requestFocus() }
-        }
+        editorController.setSelection(summary.currentStart, summary.currentEnd)
+        editorController.scrollToOffset(summary.currentStart)
     }
 
-    fun runWithSearchText(
-        reason: String,
-        query: String,
-        block: (String, String) -> Unit,
-    ) {
-        if (isEditing && usesCodeMirrorLikeEditor) {
-            noteSearchRequestToken += 1
-            val token = noteSearchRequestToken
-            val cachedLen = editorController.getText().length
-            val requested = editorController.requestExternalSnapshot { snapshot ->
-                if (token != noteSearchRequestToken || query != noteSearchQuery) {
-                    KardLeafLog.d(
-                        SEARCH_TRACE_TAG,
-                        "searchSnapshot skip stale reason=$reason token=$token currentToken=$noteSearchRequestToken " +
-                            "queryLen=${query.length} currentQueryLen=${noteSearchQuery.length} snapshotLen=${snapshot.content.length}",
-                    )
-                    return@requestExternalSnapshot
-                }
-                KardLeafLog.d(
-                    SEARCH_TRACE_TAG,
-                    "searchSnapshot ready reason=$reason token=$token cachedLen=$cachedLen snapshotLen=${snapshot.content.length} " +
-                        "selection=${snapshot.selection.start}..${snapshot.selection.end} queryLen=${query.length}",
-                )
-                block(snapshot.content, "codemirror-snapshot")
-            }
-            if (requested) {
-                KardLeafLog.d(
-                    SEARCH_TRACE_TAG,
-                    "searchSnapshot request reason=$reason token=$token cachedLen=$cachedLen queryLen=${query.length}",
-                )
-                return
-            }
-            KardLeafLog.d(
-                SEARCH_TRACE_TAG,
-                "searchSnapshot fallback reason=$reason token=$token cachedLen=$cachedLen queryLen=${query.length}",
-            )
-        }
-        block(editorController.getText(), "cached")
-    }
-
-    fun searchInNote(query: String) {
+    fun searchInNote(query: String, preferredStart: Int? = null) {
         KardLeafLog.d(
             SEARCH_TRACE_TAG,
             "searchInNote enter queryLen=${query.length} editing=$isEditing largePlain=$showsLargePlainTextPreview " +
                 "currentCount=$noteSearchMatchCount current=${noteSearchCurrentStart}..${noteSearchCurrentEnd}",
         )
-        if (query.isBlank()) {
-            noteSearchRequestToken++
+        if (isEditing && usesCodeMirrorLikeEditor) {
+            editorController.executeCommand("setSearchState", query, noteSearchUseRegex, noteSearchMatchCase,
+                -1, 0, preferredStart?.let { codeMirrorOffset(editorController.getText(), it) } ?: -1, true)
+            return
+        }
+        if (query.isEmpty()) {
             noteSearchError = null
             noteSearchMatchCount = 0
             noteSearchCurrentStart = -1
@@ -2753,10 +2835,12 @@ fun EditorScreen(
             }
             return
         }
-        runWithSearchText("search", query) { text, source ->
+        editorController.getText().let { text ->
+            val source = "cached"
             val searchStartMs = SystemClock.elapsedRealtime()
             val result = buildNoteSearchMatches(text, query, noteSearchUseRegex, noteSearchMatchCase)
-            val index = result.matches.firstOrNull()?.start ?: -1
+            val start = preferredStart ?: editorController.getSnapshot().selection.start
+            val index = result.matches.firstOrNull { it.end > start }?.start ?: result.matches.firstOrNull()?.start ?: -1
             KardLeafLog.d(
                 SEARCH_TRACE_TAG,
                 "searchInNote result queryLen=${query.length} textLen=${text.length} source=$source count=${result.matches.size} " +
@@ -2769,8 +2853,13 @@ fun EditorScreen(
 
     fun moveSearchMatch(forward: Boolean) {
         val query = noteSearchQuery
-        if (query.isBlank()) return
-        runWithSearchText(if (forward) "next" else "previous", query) { text, source ->
+        if (query.isEmpty()) return
+        if (isEditing && usesCodeMirrorLikeEditor) {
+            editorController.executeCommand("navigateSearch", if (forward) 1 else -1, -1, query, noteSearchUseRegex, noteSearchMatchCase)
+            return
+        }
+        editorController.getText().let { text ->
+            val source = "cached"
             KardLeafLog.d(
                 SEARCH_TRACE_TAG,
                 "moveSearchMatch enter forward=$forward queryLen=${query.length} textLen=${text.length} source=$source " +
@@ -2782,13 +2871,16 @@ fun EditorScreen(
             noteSearchError = result.errorMessage
             if (result.errorMessage != null || result.matches.isEmpty()) {
                 updateSearchState(query, -1, text)
-                return@runWithSearchText
+                return@let
             }
-            val currentIndex = result.matches.indexOfFirst { it.start == noteSearchCurrentStart && it.end == noteSearchCurrentEnd }
+            val selection = editorController.getSnapshot().selection
+            val currentIndex = result.matches.indexOfFirst { selection.min in it.start until it.end && selection.max <= it.end }
             val nextIndex = if (forward) {
-                if (currentIndex >= 0) (currentIndex + 1) % result.matches.size else 0
+                if (currentIndex >= 0) (currentIndex + 1) % result.matches.size
+                else result.matches.indexOfFirst { it.start >= selection.max }.coerceAtLeast(0)
             } else {
-                if (currentIndex > 0) currentIndex - 1 else result.matches.lastIndex
+                if (currentIndex >= 0) (currentIndex - 1 + result.matches.size) % result.matches.size
+                else result.matches.indexOfLast { it.end <= selection.min }.takeIf { it >= 0 } ?: result.matches.lastIndex
             }
             val nextMatch = result.matches[nextIndex]
             KardLeafLog.d(
@@ -2803,12 +2895,16 @@ fun EditorScreen(
 
     fun replaceCurrentSearchMatch() {
         val query = noteSearchQuery
-        if (query.isBlank()) {
+        if (query.isEmpty()) {
             context.showToast("请输入要查找的文本")
             return
         }
         if (!isEditing) {
             context.showToast("请先切换到编辑状态再替换")
+            return
+        }
+        if (usesCodeMirrorLikeEditor) {
+            editorController.executeCommand("replaceSearch", false, noteReplaceText, query, noteSearchUseRegex, noteSearchMatchCase)
             return
         }
         val snapshot = editorController.getSnapshot()
@@ -2821,8 +2917,7 @@ fun EditorScreen(
         }
         val rawStart = minOf(snapshot.selection.start, snapshot.selection.end).coerceIn(0, text.length)
         val rawEnd = maxOf(snapshot.selection.start, snapshot.selection.end).coerceIn(0, text.length)
-        val replaceMatch = result.matches.firstOrNull { it.start == rawStart && it.end == rawEnd }
-            ?: result.matches.firstOrNull { it.start == noteSearchCurrentStart && it.end == noteSearchCurrentEnd }
+        val replaceMatch = result.matches.firstOrNull { rawStart in it.start until it.end && rawEnd <= it.end }
             ?: result.matches.firstOrNull { it.start >= rawStart }
             ?: result.matches.firstOrNull()
         if (replaceMatch == null) {
@@ -2848,6 +2943,10 @@ fun EditorScreen(
             return
         }
         val replacementText = replacement.text ?: noteReplaceText
+        if (!canUndoNativeSearchReplacement(replaceMatch.end - replaceMatch.start, replacementText.length)) {
+            context.showToast("替换范围超过原生撤销上限，请缩小范围或使用 WebView 内核")
+            return
+        }
         editorController.setSelection(replaceMatch.start, replaceMatch.end)
         editorController.replaceSelection(replacementText)
         markEditorDirty()
@@ -2866,12 +2965,16 @@ fun EditorScreen(
 
     fun replaceAllSearchMatches() {
         val query = noteSearchQuery
-        if (query.isBlank()) {
+        if (query.isEmpty()) {
             context.showToast("请输入要查找的文本")
             return
         }
         if (!isEditing) {
             context.showToast("请先切换到编辑状态再替换")
+            return
+        }
+        if (usesCodeMirrorLikeEditor) {
+            editorController.executeCommand("replaceSearch", true, noteReplaceText, query, noteSearchUseRegex, noteSearchMatchCase)
             return
         }
         val snapshot = editorController.getSnapshot()
@@ -2907,7 +3010,17 @@ fun EditorScreen(
                 "newTextLen=${newText.length} count=${replacement.count} " +
                 "elapsed=${SystemClock.elapsedRealtime() - replaceAllStartMs}ms",
         )
-        editorController.replaceAll(newText, TextRange(cursor, cursor))
+        val changedRange = nativeSearchChangedRange(snapshot.content, newText)
+        val insertedText = newText.substring(changedRange.start, newText.length - (snapshot.content.length - changedRange.end))
+        if (!canUndoNativeSearchReplacement(changedRange.end - changedRange.start, insertedText.length)) {
+            context.showToast("替换范围超过原生撤销上限，请缩小范围或使用 WebView 内核")
+            return
+        }
+        if (changedRange.start != changedRange.end || insertedText.isNotEmpty()) {
+            editorController.setSelection(changedRange.start, changedRange.end)
+            editorController.replaceSelection(insertedText)
+            editorController.setSelection(cursor)
+        }
         KardLeafLog.d(
             SEARCH_TRACE_TAG,
             "replaceAll dispatched cursor=$cursor selection=${snapshot.selection.start}..${snapshot.selection.end}",
@@ -2992,25 +3105,22 @@ fun EditorScreen(
     LaunchedEffect(pendingEditorSearchJump, editorDocumentKey, initialContent, isOpeningNoteContent) {
         val jump = pendingEditorSearchJump ?: return@LaunchedEffect
         val sameNote = currentNote?.id == jump.noteId
-        if (isPrivacyEditor || !sameNote || jump.query.isBlank()) {
+        if (isPrivacyEditor || !sameNote || jump.query.isEmpty()) {
             viewModel.consumeEditorSearchJump(jump.requestId)
             return@LaunchedEffect
         }
-        if (initialContent.isBlank()) {
-            if (!isOpeningNoteContent) viewModel.consumeEditorSearchJump(jump.requestId)
-            return@LaunchedEffect
-        }
+        if (isOpeningNoteContent) return@LaunchedEffect
         KardLeafLog.d(
             SEARCH_TRACE_TAG,
             "dashboard jump apply ${SearchQueryUtils.describeForLog(jump.query)} " +
                 "preferredStart=${jump.preferredStart} textLen=${initialContent.length} " +
-                "appliedRegex=false appliedMatchCase=false",
+                "appliedRegex=${jump.options.useRegex} appliedMatchCase=${jump.options.matchCase}",
         )
         val jumpMatches = buildNoteSearchMatches(
             text = initialContent,
             query = jump.query,
-            useRegex = false,
-            matchCase = false,
+            useRegex = jump.options.useRegex,
+            matchCase = jump.options.matchCase,
         ).matches
         val preferredMatch = jumpMatches.firstOrNull { it.start == jump.preferredStart }
         if (isOpeningNoteContent) {
@@ -3024,22 +3134,35 @@ fun EditorScreen(
             "dashboard jump matches count=${jumpMatches.size} first=${jumpMatches.firstOrNull()?.start ?: -1} " +
                 "preferredFound=${preferredMatch != null} selected=$matchIndex opening=$isOpeningNoteContent",
         )
-        if (matchIndex < 0) {
-            viewModel.consumeEditorSearchJump(jump.requestId)
-            return@LaunchedEffect
-        }
         suppressNextSearchKeyboardRequest = !showNoteSearch
         showNoteSearch = true
         noteSearchQuery = jump.query
-        withFrameNanos { }
-        selectSearchMatch(matchIndex, jump.query, initialContent, "dashboard-jump")
+        noteSearchUseRegex = jump.options.useRegex
+        noteSearchMatchCase = jump.options.matchCase
+        noteSearchJumpStart = if (jump.scope == null || jump.scope == "正文") matchIndex.coerceAtLeast(0) else Int.MIN_VALUE
+        noteSearchJumpRevision++
         viewModel.consumeEditorSearchJump(jump.requestId)
     }
 
-    LaunchedEffect(editorDocumentKey, noteSearchQuery, noteSearchUseRegex, noteSearchMatchCase, initialContent) {
+    LaunchedEffect(editorDocumentKey, showNoteSearch, isEditing, usesCodeMirrorLikeEditor, noteSearchQuery, noteSearchUseRegex, noteSearchMatchCase, initialContent, noteSearchJumpRevision) {
         if (showNoteSearch) {
-            withFrameNanos { }
-            searchInNote(noteSearchQuery)
+            val preferredStart = noteSearchJumpStart
+            noteSearchJumpStart = null
+            if (preferredStart == Int.MIN_VALUE) {
+                if (isEditing && usesCodeMirrorLikeEditor) {
+                    editorController.executeCommand("setSearchState", noteSearchQuery, noteSearchUseRegex, noteSearchMatchCase)
+                } else {
+                    updateSearchState(noteSearchQuery, -1, trackSelection = true)
+                }
+            } else {
+                searchInNote(noteSearchQuery, preferredStart)
+            }
+        }
+    }
+
+    LaunchedEffect(noteSearchRevision) {
+        if (showNoteSearch && isEditing && !usesCodeMirrorLikeEditor) {
+            updateSearchState(noteSearchQuery, editorController.getSnapshot().selection.min, trackSelection = true)
         }
     }
 
@@ -3534,6 +3657,7 @@ fun EditorScreen(
         onLeavingEditorStart()
         isLeavingEditor = true
         isClosingEditor = true
+        cancelPendingCodeMirrorKernelSwitch("leave_editor")
         closeNoteSidePanel()
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
@@ -3566,6 +3690,7 @@ fun EditorScreen(
 
 
     fun enterPreviewMode() {
+        cancelPendingCodeMirrorKernelSwitch("enter_preview")
         if (!usesCodeMirrorLikeEditor || showsLargePlainTextPreview) {
             fun applySnapshot(snapshot: KardLeafEditorSnapshot) {
                 val editorMetrics =
@@ -4238,12 +4363,12 @@ fun EditorScreen(
         closeNoteSidePanel()
     }
 
-    BackHandler(enabled = showLabelMenu || showMoreMenu || showKernelMenu || showHeadingMenu || showMathMenu || showDateTimeMenu || showCustomSymbolsMenu) {
+    BackHandler(enabled = showLabelMenu || showMoreMenu || showKernelMenu || showHeadingMenu || showMathMenu || showDateTimeMenu || showQuickTextMenu) {
         KardLeafLog.d(
             BACK_TRACE_TAG,
             "Editor menu BackHandler hit showLabelMenu=$showLabelMenu showMoreMenu=$showMoreMenu " +
                 "showHeadingMenu=$showHeadingMenu showMathMenu=$showMathMenu " +
-                "showDateTimeMenu=$showDateTimeMenu showCustomSymbolsMenu=$showCustomSymbolsMenu",
+                "showDateTimeMenu=$showDateTimeMenu showQuickTextMenu=$showQuickTextMenu",
         )
         showLabelMenu = false
         showMoreMenu = false
@@ -4251,15 +4376,15 @@ fun EditorScreen(
         showHeadingMenu = false
         showMathMenu = false
         showDateTimeMenu = false
-        showCustomSymbolsMenu = false
+        showQuickTextMenu = false
     }
 
-    LaunchedEffect(showLabelMenu, showMoreMenu, showKernelMenu, showHeadingMenu, showMathMenu, showDateTimeMenu, showCustomSymbolsMenu) {
+    LaunchedEffect(showLabelMenu, showMoreMenu, showKernelMenu, showHeadingMenu, showMathMenu, showDateTimeMenu, showQuickTextMenu) {
         KardLeafLog.d(
             BACK_TRACE_TAG,
             "Editor menu state changed showLabelMenu=$showLabelMenu showMoreMenu=$showMoreMenu " +
                 "showHeadingMenu=$showHeadingMenu showMathMenu=$showMathMenu " +
-                "showDateTimeMenu=$showDateTimeMenu showCustomSymbolsMenu=$showCustomSymbolsMenu",
+                "showDateTimeMenu=$showDateTimeMenu showQuickTextMenu=$showQuickTextMenu",
         )
     }
 
@@ -4309,7 +4434,7 @@ fun EditorScreen(
             showMoreMenu = false
             showMathMenu = false
             showDateTimeMenu = false
-            showCustomSymbolsMenu = false
+            showQuickTextMenu = false
             showHeadingMenu = !showHeadingMenu
         }
     }
@@ -4322,18 +4447,18 @@ fun EditorScreen(
             showMoreMenu = false
             showHeadingMenu = false
             showMathMenu = false
-            showCustomSymbolsMenu = false
+            showQuickTextMenu = false
             showDateTimeMenu = !showDateTimeMenu
         }
     }
 
-    fun toggleCustomSymbolsMenu() {
+    fun toggleQuickTextMenu() {
         showLabelMenu = false
         showMoreMenu = false
         showHeadingMenu = false
         showMathMenu = false
         showDateTimeMenu = false
-        showCustomSymbolsMenu = !showCustomSymbolsMenu
+        showQuickTextMenu = !showQuickTextMenu
     }
 
     @Composable
@@ -4384,17 +4509,17 @@ fun EditorScreen(
     }
 
     @Composable
-    fun CustomSymbolsToolbarAction() {
+    fun QuickTextToolbarAction() {
         Box {
             ToolbarIconButton(
                 text = "",
                 icon = Icons.Outlined.TextFields,
-                contentDescription = "自定义符号",
-                onClick = { toggleCustomSymbolsMenu() },
+                contentDescription = "快捷文本",
+                onClick = { toggleQuickTextMenu() },
             )
             KardLeafDropdownMenu(
-                expanded = showCustomSymbolsMenu,
-                onDismissRequest = { showCustomSymbolsMenu = false },
+                expanded = showQuickTextMenu,
+                onDismissRequest = { showQuickTextMenu = false },
                 modifier = Modifier.width(220.dp),
                 forceAboveAnchor = true,
                 properties = PopupProperties(
@@ -4403,26 +4528,63 @@ fun EditorScreen(
                     dismissOnClickOutside = true,
                 ),
             ) {
-                val symbols = KardLeafCustomFeatures.getCustomSymbols(context)
-                if (symbols.isEmpty()) {
+                val quickTexts = KardLeafCustomFeatures.getQuickTexts(context)
+                if (quickTexts.isEmpty()) {
                     DropdownMenuItem(
-                        text = { Text("请先在设置中添加符号") },
+                        text = { Text("请先在设置中添加快捷文本") },
                         enabled = false,
                         onClick = {},
                     )
                 } else {
-                    symbols.forEach { symbol ->
+                    quickTexts.forEach { item ->
                         DropdownMenuItem(
-                            text = { Text(symbol) },
+                            text = {
+                                Text(item.name)
+                            },
                             onClick = {
-                                insertAtCursor(symbol)
-                                showCustomSymbolsMenu = false
+                                insertAtCursor(item.content)
+                                showQuickTextMenu = false
                             },
                         )
                     }
                 }
             }
         }
+    }
+
+    @Composable
+    fun ContextToolbarActions() {
+        EditorContextToolbarActions(
+            kind = if (isEditing && usesCodeMirrorLikeEditor && codeMirrorLivePreviewEnabled) contextToolbarKind else "",
+            canDeleteRow = contextCanDeleteRow,
+            canDeleteColumn = contextCanDeleteColumn,
+            enabled = !usesOpeningEditShell,
+            onCommand = { command, action ->
+                if (command == "setInlineStyleAtCursor") {
+                    val separator = action.indexOf(':')
+                    if (separator > 0) {
+                        runEditorCommand(
+                            command,
+                            action.substring(0, separator),
+                            action.substring(separator + 1),
+                        )
+                    }
+                } else {
+                    runEditorCommand(command, action)
+                }
+            },
+        )
+    }
+
+    @Composable
+    fun CustomFunctionToolbarAction(item: KardLeafCustomFeatures.CustomFunctionItem) {
+        val icon = remember(item.svg) { customToolbarSvgImageVector(item.svg) }
+        ToolbarIconButton(
+            text = customToolbarFallbackText(item),
+            icon = icon,
+            contentDescription = item.name,
+            onClick = { insertAtCursor(item.content) },
+        )
     }
 
     @Composable
@@ -5300,12 +5462,12 @@ fun EditorScreen(
                         )
                         NoteSearchChip(
                             text = "替换",
-                            enabled = noteSearchQuery.isNotBlank(),
+                            enabled = noteSearchQuery.isNotEmpty(),
                             onClick = { replaceCurrentSearchMatch() },
                         )
                         NoteSearchChip(
                             text = "全部",
-                            enabled = noteSearchQuery.isNotBlank(),
+                            enabled = noteSearchQuery.isNotEmpty(),
                             onClick = { replaceAllSearchMatches() },
                         )
                     }
@@ -5393,8 +5555,11 @@ fun EditorScreen(
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
-                            toolbarOrder.forEach { toolbarItem ->
-                                when (toolbarItem) {
+                            toolbarOrder.forEach { toolbarEntry ->
+                                when (toolbarEntry) {
+                                    is KardLeafCustomFeatures.EditorToolbarEntry.CustomFunction ->
+                                        CustomFunctionToolbarAction(toolbarEntry.item)
+                                    is KardLeafCustomFeatures.EditorToolbarEntry.BuiltIn -> when (toolbarEntry.item) {
                                     KardLeafCustomFeatures.ToolbarItem.PREVIEW -> ToolbarIconButton(
                                         text = "",
                                         icon = Icons.Outlined.Visibility,
@@ -5411,12 +5576,22 @@ fun EditorScreen(
                                         contentDescription = "撤销",
                                         onClick = { undoContent() },
                                     )
-                                    KardLeafCustomFeatures.ToolbarItem.REDO -> ToolbarIconButton(
+                                    KardLeafCustomFeatures.ToolbarItem.REDO -> {
+                                        ToolbarIconButton(
+                                            text = "",
+                                            icon = Icons.Outlined.Redo,
+                                            enabled = canRedo,
+                                            contentDescription = "恢复",
+                                            onClick = { redoContent() },
+                                        )
+                                        ContextToolbarActions()
+                                    }
+                                    KardLeafCustomFeatures.ToolbarItem.ATTACHMENT -> ToolbarIconButton(
                                         text = "",
-                                        icon = Icons.Outlined.Redo,
-                                        enabled = canRedo,
-                                        contentDescription = "恢复",
-                                        onClick = { redoContent() },
+                                        icon = Icons.Outlined.AttachFile,
+                                        contentDescription = "附件",
+                                        enabled = !isPrivacyEditor && !importingAttachment,
+                                        onClick = { launchAttachmentPicker() },
                                     )
                                     KardLeafCustomFeatures.ToolbarItem.IMAGE -> ToolbarIconButton(
                                         text = "",
@@ -5431,7 +5606,7 @@ fun EditorScreen(
                                         onClick = { openDrawingPad() },
                                     )
                                     KardLeafCustomFeatures.ToolbarItem.DATETIME -> DateTimeToolbarAction()
-                                    KardLeafCustomFeatures.ToolbarItem.SYMBOLS -> CustomSymbolsToolbarAction()
+                                    KardLeafCustomFeatures.ToolbarItem.SYMBOLS -> QuickTextToolbarAction()
                                     KardLeafCustomFeatures.ToolbarItem.HEADING,
                                     KardLeafCustomFeatures.ToolbarItem.HEADING2,
                                     KardLeafCustomFeatures.ToolbarItem.HEADING3 -> HeadingToolbarAction()
@@ -5445,6 +5620,12 @@ fun EditorScreen(
                                     KardLeafCustomFeatures.ToolbarItem.ITALIC -> ToolbarIconButton(text = "I", italic = true, onClick = { insertAtCursorOrCommand("_", "_", command = "toggleItalic") })
                                     KardLeafCustomFeatures.ToolbarItem.UNDERLINE -> ToolbarIconButton(text = "U", underline = true, onClick = { insertAtCursorOrCommand("<u>", "</u>", command = "toggleUnderline") })
                                     KardLeafCustomFeatures.ToolbarItem.STRIKE -> ToolbarIconButton(text = "S", strikethrough = true, onClick = { insertAtCursorOrCommand("~~", "~~", command = "toggleStrike") })
+                                    KardLeafCustomFeatures.ToolbarItem.HIGHLIGHT -> ToolbarIconButton(
+                                        text = "",
+                                        icon = toolbarItemIcon(KardLeafCustomFeatures.ToolbarItem.HIGHLIGHT),
+                                        contentDescription = "高亮",
+                                        onClick = { insertAtCursorOrCommand("==", "==", command = "toggleHighlight") },
+                                    )
                                     KardLeafCustomFeatures.ToolbarItem.LINK -> ToolbarIconButton(text = "Link", onClick = { insertAtCursor("[", "](url)") })
                                     KardLeafCustomFeatures.ToolbarItem.CODE -> ToolbarIconButton(text = "`", onClick = { insertAtCursorOrCommand("`", "`", command = "toggleCode") })
                                     KardLeafCustomFeatures.ToolbarItem.CODE_BLOCK -> ToolbarIconButton(text = "```", onClick = { insertAtCursorOrCommand("```\n", "\n```", command = "insertCodeBlock") })
@@ -5473,6 +5654,7 @@ fun EditorScreen(
                                     KardLeafCustomFeatures.ToolbarItem.CHECKBOX_DONE -> ToolbarIconButton(text = "[x]", onClick = { insertAtCursor("- [x] ") })
                                     KardLeafCustomFeatures.ToolbarItem.TABLE -> ToolbarIconButton(text = "表格", onClick = { insertAtCursorOrCommand("| 列1 | 列2 |\n| --- | --- |\n| 内容 | 内容 |\n", command = "insertTable") })
                                 }
+                                }
                             }
                         }
                     } else {
@@ -5484,9 +5666,12 @@ fun EditorScreen(
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            toolbarOrder.forEach { toolbarItem ->
-                                item(toolbarItem.name) {
-                                    when (toolbarItem) {
+                            toolbarOrder.forEach { toolbarEntry ->
+                                item(toolbarEntry.key) {
+                                    when (toolbarEntry) {
+                                        is KardLeafCustomFeatures.EditorToolbarEntry.CustomFunction ->
+                                            CustomFunctionToolbarAction(toolbarEntry.item)
+                                        is KardLeafCustomFeatures.EditorToolbarEntry.BuiltIn -> when (toolbarEntry.item) {
                                         KardLeafCustomFeatures.ToolbarItem.PREVIEW -> ToolbarIconButton(
                                             text = "",
                                             icon = Icons.Outlined.Visibility,
@@ -5503,12 +5688,27 @@ fun EditorScreen(
                                             contentDescription = "撤销",
                                             onClick = { undoContent() },
                                         )
-                                        KardLeafCustomFeatures.ToolbarItem.REDO -> ToolbarIconButton(
+                                        KardLeafCustomFeatures.ToolbarItem.REDO -> {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                            ) {
+                                                ToolbarIconButton(
+                                                    text = "",
+                                                    icon = Icons.Outlined.Redo,
+                                                    enabled = canRedo,
+                                                    contentDescription = "恢复",
+                                                    onClick = { redoContent() },
+                                                )
+                                                ContextToolbarActions()
+                                            }
+                                        }
+                                        KardLeafCustomFeatures.ToolbarItem.ATTACHMENT -> ToolbarIconButton(
                                             text = "",
-                                            icon = Icons.Outlined.Redo,
-                                            enabled = canRedo,
-                                            contentDescription = "恢复",
-                                            onClick = { redoContent() },
+                                            icon = Icons.Outlined.AttachFile,
+                                            contentDescription = "附件",
+                                            enabled = !isPrivacyEditor && !importingAttachment,
+                                            onClick = { launchAttachmentPicker() },
                                         )
                                         KardLeafCustomFeatures.ToolbarItem.IMAGE -> ToolbarIconButton(
                                             text = "",
@@ -5523,7 +5723,7 @@ fun EditorScreen(
                                             onClick = { openDrawingPad() },
                                         )
                                         KardLeafCustomFeatures.ToolbarItem.DATETIME -> DateTimeToolbarAction()
-                                        KardLeafCustomFeatures.ToolbarItem.SYMBOLS -> CustomSymbolsToolbarAction()
+                                    KardLeafCustomFeatures.ToolbarItem.SYMBOLS -> QuickTextToolbarAction()
                                         KardLeafCustomFeatures.ToolbarItem.HEADING,
                                         KardLeafCustomFeatures.ToolbarItem.HEADING2,
                                         KardLeafCustomFeatures.ToolbarItem.HEADING3 -> HeadingToolbarAction()
@@ -5537,6 +5737,12 @@ fun EditorScreen(
                                         KardLeafCustomFeatures.ToolbarItem.ITALIC -> ToolbarIconButton(text = "I", italic = true, onClick = { insertAtCursorOrCommand("_", "_", command = "toggleItalic") })
                                         KardLeafCustomFeatures.ToolbarItem.UNDERLINE -> ToolbarIconButton(text = "U", underline = true, onClick = { insertAtCursorOrCommand("<u>", "</u>", command = "toggleUnderline") })
                                         KardLeafCustomFeatures.ToolbarItem.STRIKE -> ToolbarIconButton(text = "S", strikethrough = true, onClick = { insertAtCursorOrCommand("~~", "~~", command = "toggleStrike") })
+                                        KardLeafCustomFeatures.ToolbarItem.HIGHLIGHT -> ToolbarIconButton(
+                                            text = "",
+                                            icon = toolbarItemIcon(KardLeafCustomFeatures.ToolbarItem.HIGHLIGHT),
+                                            contentDescription = "高亮",
+                                            onClick = { insertAtCursorOrCommand("==", "==", command = "toggleHighlight") },
+                                        )
                                         KardLeafCustomFeatures.ToolbarItem.LINK -> ToolbarIconButton(text = "Link", onClick = { insertAtCursor("[", "](url)") })
                                         KardLeafCustomFeatures.ToolbarItem.CODE -> ToolbarIconButton(text = "`", onClick = { insertAtCursorOrCommand("`", "`", command = "toggleCode") })
                                         KardLeafCustomFeatures.ToolbarItem.CODE_BLOCK -> ToolbarIconButton(text = "```", onClick = { insertAtCursorOrCommand("```\n", "\n```", command = "insertCodeBlock") })
@@ -5560,7 +5766,7 @@ fun EditorScreen(
                                                             showMoreMenu = false
                                                             showHeadingMenu = false
                                                             showDateTimeMenu = false
-                                                            showCustomSymbolsMenu = false
+                                                            showQuickTextMenu = false
                                                             showMathMenu = !showMathMenu
                                                         }
                                                     },
@@ -5624,6 +5830,7 @@ fun EditorScreen(
                                         KardLeafCustomFeatures.ToolbarItem.TABLE -> ToolbarIconButton(text = "表格", onClick = { insertAtCursorOrCommand("| 列1 | 列2 |\n| --- | --- |\n| 内容 | 内容 |\n", command = "insertTable") })
                                     }
                                 }
+                                    }
                             }
                         }
                     }
@@ -5658,139 +5865,40 @@ fun EditorScreen(
             if (
                 effectiveEditorOpen &&
                 !blocksDirectEditForLargeNote &&
-                (isEditing || (keepsModeSurfacesAlive && editorSurfaceCreated && !isOpeningNoteContent))
+                !usesCodeMirrorLikeEditor &&
+                (
+                    isEditing ||
+                        isCodeMirrorOpening ||
+                        (keepsModeSurfacesAlive && editorSurfaceCreated && !isOpeningNoteContent)
+                )
             ) {
                 KardLeafLog.d(
                     LARGE_NOTE_OPEN_TRACE_TAG,
                     "screen compose editor surface key=$editorDocumentKey kernel=$editorKernel useCodeMirror=$usesCodeMirrorLikeEditor " +
-                        "initialContentLen=${editorSurfaceContent.length} isOpening=$isOpeningNoteContent editing=$isEditing closing=$isClosingEditor",
+                        "pendingKernel=${pendingCodeMirrorKernelSwitch?.targetKernel} initialContentLen=${editorSurfaceContent.length} " +
+                        "isOpening=$isOpeningNoteContent editing=$isEditing closing=$isClosingEditor",
                 )
-                if (usesCodeMirrorLikeEditor) {
-                    KardLeafLog.d(
-                        TITLE_TRACE_TAG,
-                        "title render key=$editorDocumentKey engine=CODEMIRROR showTitle=${showBars && !hideQuickNoteTitleInEditor} " +
-                            "showBars=$showBars hideQuickNoteTitle=$hideQuickNoteTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
-                            "showDetailTitle=$showNoteDetailTitle rawInitialTitle=$rawInitialTitle initialTitle=$initialTitle " +
-                            "displayInitialTitle=$displayInitialTitle keepLastTitleForEmptyExternal=$keepLastTitleForEmptyExternal " +
-                            "lastValidTitleLen=${lastValidEditorDisplayTitle.length} currentPath=${currentNote?.file?.path} currentTitle=${currentNote?.title}",
-                    )
-                    KardLeafCodeMirrorEditor(
-                        initialTitle = editorSurfaceTitle,
-                        initialContent = editorSurfaceContent,
-                        documentKey = editorDocumentKey,
-                        controller = editorController,
-                        scrollController = codeMirrorScrollController,
-                        active = isEditing && !showMindMap,
-                        onTitleChanged = { markEditorDirty() },
-                        onContentChanged = {
-                            editorContentLength.value = editorController.getContentLength()
-                            markEditorDirty()
-                            syncUndoRedoState()
-                            refreshMindMapFromEditor()
-                        },
-                        onContentEdited = {
-                            editorContentLength.value = editorController.getContentLength()
-                            markEditorDirty()
-                        },
-                        onUndoRedoStateChanged = { syncUndoRedoState() },
-                        onUserInteraction = { hideNoteSearchCursor("codemirror editor touch") },
-                        onFastScrollSourceScrolled = { fastScrollSignal.notifyScrollChanged() },
-                        titleHint = stringResource(R.string.title_hint),
-                        textColor = MaterialTheme.colorScheme.onBackground,
-                        hintColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        titleTextSize = MaterialTheme.typography.titleLarge.fontSize,
-                        contentTextSize = editorFontSizeSp.sp,
-                        contentLineHeightMultiplier = editorLineHeightMultiplier,
-                        contentLetterSpacingSp = editorLetterSpacingSp,
-                        contentParagraphSpacingDp = editorParagraphSpacingDp,
-                        contentFontFamily = editorFontFamily,
-                        isDark = isDark,
-                        showTitle = showBars && !hideQuickNoteTitleInEditor,
-                        livePreviewEnabled = codeMirrorLivePreviewEnabled,
-                        requestFocusToken = editorFocusRequestToken,
-                        onFocusRequestHandled = ::handleEditorFocusRequest,
-                        preferredFocusSelection = editEntrySelection,
-                        initialViewportAnchor = pendingCodeMirrorEditSwitch?.anchor,
-                        onInitialViewportAnchorApplied = { anchor, result ->
-                            val pending = pendingCodeMirrorEditSwitch
-                            if (
-                                pending == null ||
-                                pending.anchor != anchor ||
-                                activeModeSwitchId != pending.switchId
-                            ) {
-                                KardLeafLog.d(
-                                    MODE_SWITCH_TRACE_TAG,
-                                    "drop direction=preview_to_edit reason=stale_initial_anchor offset=${anchor.offset}",
-                                )
-                            } else {
-                                pendingCodeMirrorEditSwitch = null
-                                if (pending.requestFocus) editorFocusRequestToken += 1
-                                isLeavingEditor = false
-                                editEnterTraceStartMs = pending.startedAt
-                                editEnterTraceRun += 1
-                                isEditing = true
-                                committedModeSwitchId = pending.switchId
-                                KardLeafLog.d(
-                                    MODE_SWITCH_TRACE_TAG,
-                                    "stateChanged id=${pending.switchId} direction=preview_to_edit engine=CODEMIRROR " +
-                                        "source=${pending.source} sourceOffset=${anchor.offset} edge=${anchor.edge} " +
-                                        "targetResult=$result elapsed=${SystemClock.elapsedRealtime() - pending.startedAt}ms " +
-                                        "contentApplied=true surfaceVisible=true",
-                                )
-                            }
-                        },
-                        onDrawingImageClicked = { target -> handleImageClicked(target) },
-                        wikilinkNotes = allNotes,
-                        onInternalLinkOpen = { target ->
-                            viewModel.openWikilinkTarget(target, currentNote?.file?.path.orEmpty())
-                        },
-                        resolveImages = { markdown ->
-                            viewModel.resolveMarkdownImageDataUris(markdown, folder).map { image ->
-                                KardLeafCodeMirrorImage(
-                                    reference = image.reference,
-                                    dataUri = image.dataUri,
-                                )
-                            }
-                        },
-                        userPerfOpenStartRealtimeMs = userPerfOpenStartMs,
-                        userPerfSizeTier = userPerfSizeTier,
-                        onUserPerfBodyRendered = { renderedLen, status ->
-                            if (isUserPerfTrackedNote && !userPerfRenderedLogged) {
-                                userPerfRenderedLogged = true
-                                KardLeafLog.d(
-                                    USER_PERF_TRACE_TAG,
-                                    "editorOpen bodyRendered elapsed=${SystemClock.elapsedRealtime() - userPerfOpenStartMs}ms " +
-                                        "engine=CODEMIRROR mode=codeMirror renderStatus=$status renderedLen=$renderedLen " +
-                                        "contentLen=$userPerfContentLen sizeTier=$userPerfSizeTier isLarge=$isUserPerfLargeNote " +
-                                        "isOpening=$isOpeningNoteContent partialLarge=$isShowingPartialLargeNote path=${currentNote?.file?.path}",
-                                )
-                            }
-                        },
-                        imeAnimationTargetBottomPx = WindowInsets.imeAnimationTarget.exclude(navigationBarsInsets).getBottom(density),
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .zIndex(if (isEditing) 1f else 0f)
-                            .onGloballyPositioned { coordinates ->
-                                logCodeMirrorOuterLayout("codeMirrorSlot", coordinates)
-                            }
-                            .then(userPerfAreaFirstFrameModifier("codeMirror")),
-                    )
-                } else if (usesQuillpadStyleEditor) {
+                if (usesQuillpadStyleEditor) {
                     KardLeafQuillpadEditor(
                         initialTitle = editorSurfaceTitle,
                         initialContent = editorSurfaceContent,
                         documentKey = editorDocumentKey,
                         controller = editorController,
                         active = isEditing && !showMindMap,
-                        onTitleChanged = { markEditorDirty() },
+                        onTitleChanged = {
+                            markEditorDirty()
+                            syncPendingCodeMirrorKernelSnapshot()
+                        },
                         onContentChanged = {
                             editorContentLength.value = editorController.getContentLength()
                             markEditorDirty()
+                            syncPendingCodeMirrorKernelSnapshot()
                             syncUndoRedoState()
                             refreshMindMapFromEditor()
                         },
                         onUndoRedoChanged = { syncUndoRedoState() },
                         onUserInteraction = { hideNoteSearchCursor("quillpad editor touch") },
+                        onSearchSelectionChanged = { if (showNoteSearch) noteSearchRevision++ },
                         onFastScrollSourceScrolled = { fastScrollSignal.notifyScrollChanged() },
                         onInlineImageClicked = { reference -> openDrawingPadForReference(reference) },
                         titleHint = stringResource(R.string.title_hint),
@@ -5845,10 +5953,14 @@ fun EditorScreen(
                         initialContent = editorSurfaceContent,
                         documentKey = editorDocumentKey,
                         controller = editorController,
-                        onTitleChanged = { markEditorDirty() },
+                        onTitleChanged = {
+                            markEditorDirty()
+                            syncPendingCodeMirrorKernelSnapshot()
+                        },
                         onContentChanged = {
                             editorContentLength.value = editorController.getContentLength()
                             markEditorDirty()
+                            syncPendingCodeMirrorKernelSnapshot()
                             syncUndoRedoState()
                             refreshMindMapFromEditor()
                         },
@@ -5883,7 +5995,204 @@ fun EditorScreen(
                     )
                 }
             }
-            if (effectiveEditorOpen && (!isEditing || (keepsModeSurfacesAlive && previewSurfaceCreated))) {
+            if (
+                effectiveEditorOpen &&
+                !blocksDirectEditForLargeNote &&
+                (usesCodeMirrorLikeEditor || pendingCodeMirrorKernelSwitch != null) &&
+                (
+                    isEditing ||
+                        isCodeMirrorOpening ||
+                        (keepsModeSurfacesAlive && editorSurfaceCreated && !isOpeningNoteContent)
+                )
+            ) {
+                KardLeafLog.d(
+                    TITLE_TRACE_TAG,
+                    "title render key=$editorDocumentKey engine=CODEMIRROR showTitle=${showBars && !hideQuickNoteTitleInEditor} " +
+                        "pendingKernel=${pendingCodeMirrorKernelSwitch?.targetKernel} " +
+                        "showBars=$showBars hideQuickNoteTitle=$hideQuickNoteTitleInEditor hideInitialTitle=$hideInitialTitleInEditor " +
+                        "showDetailTitle=$showNoteDetailTitle rawInitialTitle=$rawInitialTitle initialTitle=$initialTitle " +
+                        "displayInitialTitle=$displayInitialTitle keepLastTitleForEmptyExternal=$keepLastTitleForEmptyExternal " +
+                        "lastValidTitleLen=${lastValidEditorDisplayTitle.length} currentPath=${currentNote?.file?.path} currentTitle=${currentNote?.title}",
+                )
+                KardLeafCodeMirrorEditor(
+                    initialTitle = editorSurfaceTitle,
+                    initialContent = editorSurfaceContent,
+                    documentKey = editorDocumentKey,
+                    controller = editorController,
+                    scrollController = codeMirrorScrollController,
+                    // Preload without exposing the target's title placeholder through the native surface.
+                    active = usesCodeMirrorLikeEditor && (isEditing || isCodeMirrorOpening) && !showMindMap,
+                    selectionToolbarSuspended = showNoteSearch || showMoreMenu || showKernelMenu || showHistoryDialog ||
+                        showHeadingMenu || showMathMenu || showDateTimeMenu || showQuickTextMenu ||
+                        showNoteInfoDialog || showLabelMenu || showCreateLabelDialog || showDrawingPad ||
+                        showAiPanel || showWebClipImportDialog || showOfflineWebEditDialog || isLeavingEditor ||
+                        noteSidePanelVisibleFraction > 0f,
+                    interactive = isEditing && !isOpeningNoteContent && !showMindMap && pendingCodeMirrorKernelSwitch == null,
+                    openingCacheVisible = isCodeMirrorOpening,
+                    onTitleChanged = { markEditorDirty() },
+                    onSearchStateChanged = { payload ->
+                        val state = runCatching { JSONObject(payload) }.getOrNull()
+                        if (state != null && showNoteSearch && usesCodeMirrorLikeEditor &&
+                            state.optString("query") == noteSearchQuery.replace("\r\n", "\n").replace('\r', '\n') &&
+                            state.optBoolean("useRegex") == noteSearchUseRegex && state.optBoolean("matchCase") == noteSearchMatchCase
+                        ) {
+                            noteSearchMatchCount = state.optInt("count", 0)
+                            noteSearchCurrentStart = state.optInt("currentStart", -1)
+                            noteSearchCurrentEnd = state.optInt("currentEnd", -1)
+                            noteSearchCurrentOrdinal = state.optInt("currentOrdinal", 0)
+                            noteSearchError = if (state.isNull("error")) null else state.optString("error")
+                        }
+                    },
+                    onContentChanged = {
+                        editorContentLength.value = editorController.getContentLength()
+                        markEditorDirty()
+                        syncUndoRedoState()
+                        refreshMindMapFromEditor()
+                    },
+                    onContentEdited = {
+                        editorContentLength.value = editorController.getContentLength()
+                        markEditorDirty()
+                    },
+                    onUndoRedoStateChanged = { syncUndoRedoState() },
+                    onContextToolbarChanged = { kind, row, column ->
+                        contextToolbarKind = kind
+                        contextCanDeleteRow = row
+                        contextCanDeleteColumn = column
+                    },
+                    onUserInteraction = { hideNoteSearchCursor("codemirror editor touch") },
+                    onFastScrollSourceScrolled = { fastScrollSignal.notifyScrollChanged() },
+                    titleHint = stringResource(R.string.title_hint),
+                    textColor = MaterialTheme.colorScheme.onBackground,
+                    hintColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    titleTextSize = MaterialTheme.typography.titleLarge.fontSize,
+                    contentTextSize = editorFontSizeSp.sp,
+                    contentLineHeightMultiplier = editorLineHeightMultiplier,
+                    contentLetterSpacingSp = editorLetterSpacingSp,
+                    contentParagraphSpacingDp = editorParagraphSpacingDp,
+                    contentFontFamily = editorFontFamily,
+                    isDark = isDark,
+                    showTitle = showBars && !hideQuickNoteTitleInEditor,
+                    livePreviewEnabled = codeMirrorLivePreviewEnabled,
+                    requestFocusToken = editorFocusRequestToken,
+                    onFocusRequestHandled = ::handleEditorFocusRequest,
+                    preferredFocusSelection = editEntrySelection,
+                    initialViewportAnchor = pendingCodeMirrorEditSwitch?.anchor,
+                    onInitialViewportAnchorApplied = { anchor, result ->
+                        val pending = pendingCodeMirrorEditSwitch
+                        if (
+                            pending == null ||
+                            pending.anchor != anchor ||
+                            activeModeSwitchId != pending.switchId
+                        ) {
+                            KardLeafLog.d(
+                                MODE_SWITCH_TRACE_TAG,
+                                "drop direction=preview_to_edit reason=stale_initial_anchor offset=${anchor.offset}",
+                            )
+                        } else {
+                            pendingCodeMirrorEditSwitch = null
+                            if (pending.requestFocus) editorFocusRequestToken += 1
+                            isLeavingEditor = false
+                            editEnterTraceStartMs = pending.startedAt
+                            editEnterTraceRun += 1
+                            isEditing = true
+                            committedModeSwitchId = pending.switchId
+                            KardLeafLog.d(
+                                MODE_SWITCH_TRACE_TAG,
+                                "stateChanged id=${pending.switchId} direction=preview_to_edit engine=CODEMIRROR " +
+                                    "source=${pending.source} sourceOffset=${anchor.offset} edge=${anchor.edge} " +
+                                    "targetResult=$result elapsed=${SystemClock.elapsedRealtime() - pending.startedAt}ms " +
+                                    "contentApplied=true surfaceVisible=true",
+                            )
+                        }
+                    },
+                    onInitialSurfaceReady = {
+                        val pending = pendingCodeMirrorKernelSwitch
+                        if (pending != null && pending.targetKernel == PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW) {
+                            if (effectiveEditorOpen && isEditing && !showMindMap) {
+                                pendingCodeMirrorKernelSwitch = null
+                                notePrefsManager.saveEditorKernel(pending.targetKernel)
+                                editorKernel = pending.targetKernel
+                                KardLeafLog.d(
+                                    "KardLeafCodeMirror",
+                                    "editor kernel target committed id=${pending.switchId} source=${pending.sourceKernel} " +
+                                        "target=${pending.targetKernel} key=$editorDocumentKey " +
+                                        "elapsed=${SystemClock.elapsedRealtime() - pending.startedAt}ms targetSurfaceReady=true",
+                                )
+                            } else {
+                                cancelPendingCodeMirrorKernelSwitch("surface_ready_inactive")
+                            }
+                        }
+                    },
+                    onInitialSurfaceError = {
+                        if (pendingCodeMirrorKernelSwitch?.targetKernel == PrefsManager.EditorKernel.CODEMIRROR_LIVE_PREVIEW) {
+                            cancelPendingCodeMirrorKernelSwitch("target_surface_error")
+                        }
+                        if (pendingCodeMirrorEditSwitch != null && !isEditing) {
+                            pendingCodeMirrorEditSwitch = null
+                            editorSurfaceCreated = false
+                            KardLeafLog.w(MODE_SWITCH_TRACE_TAG, "preview_to_edit cancelled reason=target_surface_error")
+                        }
+                    },
+                    onDrawingImageClicked = { target -> handleImageClicked(target) },
+                    wikilinkNotes = allNotes,
+                    onInternalLinkOpen = { target ->
+                        viewModel.openWikilinkTarget(target, currentNote?.file?.path.orEmpty())
+                    },
+                    resolveImages = { markdown ->
+                        viewModel.resolveMarkdownImageDataUris(markdown, folder).map { image ->
+                            KardLeafCodeMirrorImage(
+                                reference = image.reference,
+                                dataUri = image.dataUri,
+                            )
+                        }
+                    },
+                    userPerfOpenStartRealtimeMs = userPerfOpenStartMs,
+                    userPerfSizeTier = userPerfSizeTier,
+                    onUserPerfBodyRendered = { renderedLen, status ->
+                        if (isUserPerfTrackedNote) {
+                            if (!userPerfRenderedLogged) {
+                                userPerfRenderedLogged = true
+                                KardLeafLog.d(
+                                    USER_PERF_TRACE_TAG,
+                                    "editorOpen bodyRendered elapsed=${SystemClock.elapsedRealtime() - userPerfOpenStartMs}ms " +
+                                        "engine=CODEMIRROR mode=codeMirror renderStatus=$status renderedLen=$renderedLen " +
+                                        "contentLen=$userPerfContentLen sizeTier=$userPerfSizeTier isLarge=$isUserPerfLargeNote " +
+                                        "isOpening=$isOpeningNoteContent partialLarge=$isShowingPartialLargeNote path=${currentNote?.file?.path}",
+                                )
+                            }
+                            if ((status == "full" || renderedLen >= userPerfContentLen) && !userPerfFullRenderedLogged) {
+                                userPerfFullRenderedLogged = true
+                                KardLeafLog.d(
+                                    USER_PERF_TRACE_TAG,
+                                    "editorOpen bodyFullyRendered elapsed=${SystemClock.elapsedRealtime() - userPerfOpenStartMs}ms " +
+                                        "engine=CODEMIRROR mode=codeMirror renderedLen=$renderedLen " +
+                                        "contentLen=$userPerfContentLen sizeTier=$userPerfSizeTier isLarge=$isUserPerfLargeNote " +
+                                        "isOpening=$isOpeningNoteContent path=${currentNote?.file?.path}",
+                                )
+                            }
+                        }
+                    },
+                    imeAnimationTargetBottomPx = WindowInsets.imeAnimationTarget.exclude(navigationBarsInsets).getBottom(density),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(
+                            when {
+                                isEditing && pendingCodeMirrorKernelSwitch == null -> 1f
+                                pendingCodeMirrorKernelSwitch != null -> -1f
+                                else -> 0f
+                            },
+                        )
+                        .onGloballyPositioned { coordinates ->
+                            logCodeMirrorOuterLayout("codeMirrorSlot", coordinates)
+                        }
+                        .then(userPerfAreaFirstFrameModifier("codeMirror")),
+                )
+            }
+            if (
+                effectiveEditorOpen &&
+                    (!isEditing || (keepsModeSurfacesAlive && previewSurfaceCreated)) &&
+                    !isCodeMirrorOpening
+            ) {
                 if (usesCodeMirrorLikeEditor && isOpeningNoteContent) {
                     Column(
                         modifier = Modifier
@@ -5950,6 +6259,7 @@ fun EditorScreen(
                 } else {
                     PreviewWebView(
                         content = visiblePreviewContent,
+                        attachments = previewAttachments,
                         sessionKey = editorDocumentKey,
                         isDark = isDark,
                         controller = previewController,
@@ -6533,4 +6843,3 @@ fun EditorScreen(
         }
     }
 }
-

@@ -89,8 +89,8 @@ android {
         applicationId = "com.kardleaf"
         minSdk = 23
         targetSdk = 34
-        versionCode = 190
-        versionName = "1.9.0"
+        versionCode = 1100
+        versionName = "1.10.0"
         manifestPlaceholders["appLabel"] = "KardLeaf"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "KARDLEAF_TRIAL_GATEWAY_URL", buildConfigString("https://ai.waikrfaio.xyz"))
@@ -214,6 +214,7 @@ dependencies {
     implementation("net.dankito.readability4j:readability4j:1.0.8")
     implementation("com.vladsch.flexmark:flexmark-html2md-converter:0.64.8")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.02.00"))

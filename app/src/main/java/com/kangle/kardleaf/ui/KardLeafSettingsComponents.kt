@@ -142,7 +142,10 @@ internal fun settingsPageTitle(page: String): String {
             "historyLimit" -> "History limit"
             "trash" -> "Trash"
             "toolbar" -> "Bottom toolbar"
+            "quickTexts" -> "Quick texts"
+            "customFunctions" -> "Custom function items"
             "editorTopToolbar" -> "Top toolbar"
+            "editorTextSelectionToolbar" -> "Text selection toolbar"
             "selectionToolbar" -> "Selection toolbar"
             "editorTypography" -> "Editor font"
             "appLanguage" -> "Language"
@@ -154,7 +157,8 @@ internal fun settingsPageTitle(page: String): String {
             "previewTheme" -> "Preview theme"
             "autoCodeMirrorThreshold" -> "Automatic editor threshold"
             "trashAutoClean" -> "Automatic trash cleanup"
-            "webDav" -> "WebDAV"
+            "webDav" -> "Cloud sync"
+            "s3" -> "Cloud sync"
             "autoBackup" -> "Auto backup"
             "taskReminders" -> "Tasks & reminders"
             "taskFolder" -> "Task list location"
@@ -193,7 +197,10 @@ internal fun settingsPageTitle(page: String): String {
         "historyLimit" -> "历史版本数量"
         "trash" -> "回收站"
         "toolbar" -> "底部工具栏"
+        "quickTexts" -> "快捷文本"
+        "customFunctions" -> "自定义功能项"
         "editorTopToolbar" -> "顶部工具栏"
+        "editorTextSelectionToolbar" -> "文本选择工具栏"
         "selectionToolbar" -> "长按选择栏"
         "homeBottomToolbar" -> "首页底部工具栏"
         "drawerEdit" -> "侧边栏调整"
@@ -205,7 +212,8 @@ internal fun settingsPageTitle(page: String): String {
         "previewTheme" -> "预览主题"
         "autoCodeMirrorThreshold" -> "自动切换字数"
         "trashAutoClean" -> "自动清理回收站"
-        "webDav" -> "WebDAV 云同步"
+        "webDav" -> "云同步"
+        "s3" -> "云同步"
         "autoBackup" -> "自动备份"
         "taskReminders" -> "任务与提醒"
         "taskFolder" -> "任务清单位置"
@@ -335,6 +343,7 @@ internal fun toolbarItemIcon(item: KardLeafCustomFeatures.ToolbarItem): ImageVec
         KardLeafCustomFeatures.ToolbarItem.UNDO -> Icons.Outlined.Undo
         KardLeafCustomFeatures.ToolbarItem.REDO -> Icons.Outlined.Redo
         KardLeafCustomFeatures.ToolbarItem.IMAGE -> Icons.Outlined.Image
+        KardLeafCustomFeatures.ToolbarItem.ATTACHMENT -> Icons.Outlined.AttachFile
         KardLeafCustomFeatures.ToolbarItem.DRAWING -> Icons.Outlined.Palette
         KardLeafCustomFeatures.ToolbarItem.DATETIME -> Icons.Outlined.Alarm
         KardLeafCustomFeatures.ToolbarItem.SYMBOLS -> Icons.Outlined.TextFields
@@ -346,6 +355,7 @@ internal fun toolbarItemIcon(item: KardLeafCustomFeatures.ToolbarItem): ImageVec
         KardLeafCustomFeatures.ToolbarItem.ITALIC -> Icons.Outlined.FormatItalic
         KardLeafCustomFeatures.ToolbarItem.UNDERLINE -> Icons.Outlined.FormatUnderlined
         KardLeafCustomFeatures.ToolbarItem.STRIKE -> Icons.Outlined.StrikethroughS
+        KardLeafCustomFeatures.ToolbarItem.HIGHLIGHT -> highlightToolbarIcon
         KardLeafCustomFeatures.ToolbarItem.LINK -> Icons.Outlined.Link
         KardLeafCustomFeatures.ToolbarItem.CODE -> Icons.Outlined.Code
         KardLeafCustomFeatures.ToolbarItem.CODE_BLOCK -> Icons.Outlined.Terminal
@@ -362,15 +372,15 @@ internal fun toolbarItemIcon(item: KardLeafCustomFeatures.ToolbarItem): ImageVec
 
 @Composable
 internal fun SettingsToolbarGrid(
-    items: List<KardLeafCustomFeatures.ToolbarItem>,
-    onOrderChange: (List<KardLeafCustomFeatures.ToolbarItem>) -> Unit,
+    items: List<KardLeafCustomFeatures.EditorToolbarEntry>,
+    onOrderChange: (List<KardLeafCustomFeatures.EditorToolbarEntry>) -> Unit,
 ) {
     val columns = 4
     val spacing = 10.dp
     val haptic = LocalHapticFeedback.current
-    val itemsKey = remember(items) { items.joinToString("|") { it.name } }
+    val itemsKey = remember(items) { items.joinToString("|") { it.key } }
     val orderedItems = remember(itemsKey) {
-        mutableStateListOf<KardLeafCustomFeatures.ToolbarItem>().apply { addAll(items) }
+        mutableStateListOf<KardLeafCustomFeatures.EditorToolbarEntry>().apply { addAll(items) }
     }
     val dragMoved = remember(itemsKey) { mutableStateOf(false) }
 
@@ -399,32 +409,43 @@ internal fun SettingsToolbarGrid(
         ) {
             items(
                 items = orderedItems,
-                key = { it },
+                key = { it.key },
             ) { item ->
                 ReorderableItem(
                     state = reorderableState,
-                    key = item,
+                    key = item.key,
                 ) { isDragging ->
-                    SettingsToolbarGridItem(
-                        icon = toolbarItemIcon(item),
-                        title = item.label,
-                        isDragging = isDragging,
-                        isDropTarget = false,
-                        modifier = Modifier
-                            .size(itemSize)
-                            .longPressDraggableHandle(
-                                onDragStarted = {
-                                    dragMoved.value = false
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                },
-                                onDragStopped = {
-                                    if (dragMoved.value) {
-                                        onOrderChange(orderedItems.toList())
-                                    }
-                                    dragMoved.value = false
-                                },
-                            ),
-                    )
+                    val dragModifier = Modifier
+                        .size(itemSize)
+                        .longPressDraggableHandle(
+                            onDragStarted = {
+                                dragMoved.value = false
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            },
+                            onDragStopped = {
+                                if (dragMoved.value) {
+                                    onOrderChange(orderedItems.toList())
+                                }
+                                dragMoved.value = false
+                            },
+                        )
+                    when (item) {
+                        is KardLeafCustomFeatures.EditorToolbarEntry.BuiltIn -> SettingsToolbarGridItem(
+                            icon = toolbarItemIcon(item.item),
+                            title = item.item.label,
+                            isDragging = isDragging,
+                            isDropTarget = false,
+                            modifier = dragModifier,
+                        )
+                        is KardLeafCustomFeatures.EditorToolbarEntry.CustomFunction -> SettingsToolbarGridItem(
+                            icon = null,
+                            customItem = item.item,
+                            title = item.item.name,
+                            isDragging = isDragging,
+                            isDropTarget = false,
+                            modifier = dragModifier,
+                        )
+                    }
                 }
             }
         }
@@ -433,7 +454,8 @@ internal fun SettingsToolbarGrid(
 
 @Composable
 internal fun SettingsToolbarGridItem(
-    icon: ImageVector,
+    icon: ImageVector?,
+    customItem: KardLeafCustomFeatures.CustomFunctionItem? = null,
     title: String,
     isDragging: Boolean,
     isDropTarget: Boolean,
@@ -461,12 +483,16 @@ internal fun SettingsToolbarGridItem(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(22.dp),
-            )
+            if (customItem != null) {
+                CustomToolbarItemGlyph(customItem, size = 34.dp)
+            } else if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = contentColor,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodySmall,

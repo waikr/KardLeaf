@@ -18,7 +18,6 @@ import android.text.Spanned
 import android.text.TextWatcher
 import android.text.style.BackgroundColorSpan
 import android.text.style.LineHeightSpan
-import android.text.style.ReplacementSpan
 import android.text.style.UpdateAppearance
 import android.text.style.UpdateLayout
 import android.util.AttributeSet
@@ -87,7 +86,7 @@ private const val USER_PERF_TAG = "KardLeafUserPerf"
 private const val QUILLPAD_IME_TAG = "KardLeafQuillpadIme"
 private const val BETA_IMAGE_LAYOUT_TAG = "KardLeafBetaImageLayout"
 private val SEARCH_HIGHLIGHT_COLOR = 0x8CFFD60A.toInt()
-private val SEARCH_CURRENT_OUTLINE_COLOR = 0xD9FF9800.toInt()
+private val SEARCH_CURRENT_HIGHLIGHT_COLOR = 0xC0FF9800.toInt()
 
 private const val INLINE_IMAGE_PREVIEW_MAX_CHARS = 30_000
 private const val INLINE_IMAGE_PREVIEW_MAX_COUNT = 12
@@ -227,76 +226,7 @@ internal class QuillpadInlineImageLineHeightSpan(
     }
 }
 
-private class QuillpadRoundedSearchHighlightSpan(
-    private val backgroundColor: Int,
-    private val outlineColor: Int?,
-    private val horizontalInsetPx: Float,
-    private val verticalInsetPx: Float,
-    private val cornerRadiusPx: Float,
-    private val outlineWidthPx: Float,
-) : ReplacementSpan() {
-    override fun getSize(
-        paint: Paint,
-        text: CharSequence,
-        start: Int,
-        end: Int,
-        fm: Paint.FontMetricsInt?,
-    ): Int {
-        if (fm != null) {
-            val source = paint.fontMetricsInt
-            fm.ascent = source.ascent
-            fm.descent = source.descent
-            fm.top = source.top
-            fm.bottom = source.bottom
-            fm.leading = source.leading
-        }
-        return paint.measureText(text, start, end).roundToInt()
-    }
-
-    override fun draw(
-        canvas: Canvas,
-        text: CharSequence,
-        start: Int,
-        end: Int,
-        x: Float,
-        top: Int,
-        y: Int,
-        bottom: Int,
-        paint: Paint,
-    ) {
-        val textWidth = paint.measureText(text, start, end)
-        val left = x + horizontalInsetPx
-        val right = (x + textWidth - horizontalInsetPx).coerceAtLeast(left)
-        val fontMetrics = paint.fontMetrics
-        val rect = RectF(
-            left,
-            y + fontMetrics.ascent + verticalInsetPx,
-            right,
-            y + fontMetrics.descent - verticalInsetPx,
-        )
-        val oldColor = paint.color
-        val oldStyle = paint.style
-        val oldStrokeWidth = paint.strokeWidth
-
-        paint.color = backgroundColor
-        paint.style = Paint.Style.FILL
-        canvas.drawRoundRect(rect, cornerRadiusPx, cornerRadiusPx, paint)
-
-        if (outlineColor != null) {
-            paint.color = outlineColor
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = outlineWidthPx
-            canvas.drawRoundRect(rect, cornerRadiusPx, cornerRadiusPx, paint)
-        }
-
-        paint.color = oldColor
-        paint.style = oldStyle
-        paint.strokeWidth = oldStrokeWidth
-        canvas.drawText(text, start, end, x, y.toFloat(), paint)
-    }
-}
-
-private class QuillpadMultilineSearchHighlightSpan(color: Int) : BackgroundColorSpan(color)
+private class QuillpadSearchHighlightSpan(color: Int) : BackgroundColorSpan(color)
 
 internal data class QuillpadDebugCounters(
     val androidViewUpdates: Int,
@@ -535,7 +465,9 @@ private class KernelExtendedEditText(
         canvas.restore()
     }
 
-    override fun onTouchEvent(event: MotionEvent): Boolean {
+    override fun onTouchEvent(event: MotionEvent): Boolean = handleEditorTouch(event)
+
+    private fun handleEditorTouch(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) diagnostic?.invoke("tapStart role=$role")
         if (role == "content" && imagePreviewItems.isNotEmpty()) {
             when (event.actionMasked) {
@@ -1286,6 +1218,7 @@ internal class KardLeafQuillpadEditorView
         private val editorColumn = LinearLayout(context)
         private val titleEditText = KernelExtendedEditText(context, "title")
         private val contentEditText = KernelExtendedEditText(context, "content")
+
         private var programmaticChange = false
         private var continuingList = false
         private var titleChangedCallback: (() -> Unit)? = null
@@ -2320,39 +2253,16 @@ internal class KardLeafQuillpadEditorView
             matchCase: Boolean,
         ): Int {
             clearContentSearchHighlights()
-            if (query.isBlank()) return 0
+            if (query.isEmpty()) return 0
             val editable = contentEditText.text ?: return 0
             val result = buildNoteSearchMatches(editable.toString(), query, useRegex, matchCase)
             if (result.errorMessage != null) return 0
 
-            val density = resources.displayMetrics.density
-            val textLayout = contentEditText.layout
             result.matches.forEach { match ->
                 val isCurrent = match.start == currentStart
-                var containsLineBreak = false
-                for (index in match.start until match.end) {
-                    if (editable[index] == '\n') {
-                        containsLineBreak = true
-                        break
-                    }
-                }
-                // ReplacementSpan is atomic to Layout, so use a character span for soft-wrapped matches too.
-                val spansVisualLines = textLayout?.let { layout ->
-                    layout.getLineForOffset(match.start) !=
-                        layout.getLineForOffset((match.end - 1).coerceAtLeast(match.start))
-                } == true
-                val span = if (containsLineBreak || spansVisualLines) {
-                    QuillpadMultilineSearchHighlightSpan(SEARCH_HIGHLIGHT_COLOR)
-                } else {
-                    QuillpadRoundedSearchHighlightSpan(
-                        backgroundColor = SEARCH_HIGHLIGHT_COLOR,
-                        outlineColor = if (isCurrent) SEARCH_CURRENT_OUTLINE_COLOR else null,
-                        horizontalInsetPx = density,
-                        verticalInsetPx = density,
-                        cornerRadiusPx = density * 3f,
-                        outlineWidthPx = density,
-                    )
-                }
+                val span = QuillpadSearchHighlightSpan(
+                    if (isCurrent) SEARCH_CURRENT_HIGHLIGHT_COLOR else SEARCH_HIGHLIGHT_COLOR,
+                )
                 editable.setSpan(
                     span,
                     match.start,
@@ -2366,9 +2276,7 @@ internal class KardLeafQuillpadEditorView
 
         override fun clearContentSearchHighlights() {
             val editable = contentEditText.text ?: return
-            editable.getSpans(0, editable.length, QuillpadRoundedSearchHighlightSpan::class.java)
-                .forEach(editable::removeSpan)
-            editable.getSpans(0, editable.length, QuillpadMultilineSearchHighlightSpan::class.java)
+            editable.getSpans(0, editable.length, QuillpadSearchHighlightSpan::class.java)
                 .forEach(editable::removeSpan)
             contentEditText.invalidate()
         }
@@ -2395,6 +2303,7 @@ internal class KardLeafQuillpadEditorView
                 "toggleItalic" -> contentEditText.insertMarkdown(MarkdownSpan.ITALICS)
                 "toggleUnderline" -> contentEditText.insertUnderline()
                 "toggleStrike" -> contentEditText.insertMarkdown(MarkdownSpan.STRIKETHROUGH)
+                "toggleHighlight" -> contentEditText.insertMarkdown(MarkdownSpan.HIGHLIGHT)
                 "toggleCode" -> contentEditText.insertMarkdown(MarkdownSpan.CODE)
                 "toggleBlockquote" -> contentEditText.insertMarkdown(MarkdownSpan.QUOTE)
                 "insertHorizontalRule" -> contentEditText.insertDivider()
@@ -2477,6 +2386,7 @@ internal fun KardLeafQuillpadEditor(
     onContentChanged: () -> Unit,
     onUndoRedoChanged: () -> Unit,
     onUserInteraction: () -> Unit = {},
+    onSearchSelectionChanged: () -> Unit = {},
     onFastScrollSourceScrolled: () -> Unit = {},
     onInlineImageClicked: (String) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -2508,6 +2418,7 @@ internal fun KardLeafQuillpadEditor(
     controller.acceptInitialSnapshot(documentKey, initialTitle, initialContent, initialSelection)
     val currentOnTitleChanged = rememberUpdatedState(onTitleChanged)
     val currentOnContentChanged = rememberUpdatedState(onContentChanged)
+    val currentOnSearchSelectionChanged = rememberUpdatedState(onSearchSelectionChanged)
     val currentOnUndoRedoChanged = rememberUpdatedState(onUndoRedoChanged)
     val currentOnUserInteraction = rememberUpdatedState(onUserInteraction)
     val currentOnFastScrollSourceScrolled = rememberUpdatedState(onFastScrollSourceScrolled)
@@ -2569,7 +2480,10 @@ internal fun KardLeafQuillpadEditor(
                 readOnly = readOnly,
                 onTitleChanged = { currentOnTitleChanged.value() },
                 onContentChanged = { currentOnContentChanged.value() },
-                onSelectionChanged = controller::updateCachedSelection,
+                onSelectionChanged = { start, end ->
+                    controller.updateCachedSelection(start, end)
+                    currentOnSearchSelectionChanged.value()
+                },
                 onUndoRedoChanged = { currentOnUndoRedoChanged.value() },
                 onUserInteraction = { currentOnUserInteraction.value() },
                 onFastScrollSourceScrolled = { currentOnFastScrollSourceScrolled.value() },

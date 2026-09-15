@@ -2,9 +2,11 @@ package com.kangle.kardleaf.widget
 
 import android.content.Context
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Build
 import android.widget.RemoteViews
+import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.utils.KardLeafLog
 
 internal const val WIDGET_THEME_LOG_TAG = "KardLeafWidgetTheme"
@@ -88,22 +90,17 @@ object WidgetTheme {
 
     fun configuredPalette(context: Context, kind: Kind, appWidgetId: Int): Palette? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return if (prefs.contains("${keyPrefix(kind, appWidgetId)}preset")) {
-            palette(context, kind, appWidgetId)
-        } else {
-            null
+        if (!prefs.contains("${keyPrefix(kind, appWidgetId)}preset")) {
+            return defaultPaletteIfDark(context)
         }
+        val settings = load(context, kind, appWidgetId)
+        if (settings.preset == Preset.SYSTEM) return defaultPaletteIfDark(context)
+        return palette(context, settings)
     }
 
     fun palette(context: Context, settings: Settings): Palette = when (settings.preset) {
-        Preset.SYSTEM -> defaultPalette()
-        Preset.DARK -> Palette(
-            background = 0xFF111827.toInt(),
-            surface = 0xFF1F2937.toInt(),
-            accent = 0xFF60A5FA.toInt(),
-            onSurface = 0xFFF9FAFB.toInt(),
-            muted = 0xFFCBD5E1.toInt(),
-        )
+        Preset.SYSTEM -> defaultPalette(isWidgetDark(context))
+        Preset.DARK -> darkPalette()
         Preset.PAPER -> Palette(
             background = 0xFFFFF8E7.toInt(),
             surface = 0xFFFFFDF5.toInt(),
@@ -147,12 +144,37 @@ object WidgetTheme {
 
     private fun keyPrefix(kind: Kind, appWidgetId: Int): String = "${kind.key}_${appWidgetId}_"
 
-    private fun defaultPalette(): Palette = Palette(
-        background = DEFAULT_BACKGROUND,
-        surface = Color.WHITE,
-        accent = DEFAULT_ACCENT,
-        onSurface = DEFAULT_ON_SURFACE,
-        muted = DEFAULT_MUTED,
+    internal fun isNightMode(context: Context): Boolean =
+        (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    private fun defaultPalette(isNight: Boolean): Palette =
+        if (isNight) darkPalette() else Palette(
+            background = DEFAULT_BACKGROUND,
+            surface = Color.WHITE,
+            accent = DEFAULT_ACCENT,
+            onSurface = DEFAULT_ON_SURFACE,
+            muted = DEFAULT_MUTED,
+        )
+
+    private fun defaultPaletteIfDark(context: Context): Palette? =
+        if (isWidgetDark(context)) darkPalette() else null
+
+    private fun isWidgetDark(context: Context): Boolean {
+        val prefs = PrefsManager(context)
+        val style = prefs.getAppThemeStyle()
+        return isNightMode(context) ||
+            prefs.getAppThemeMode() == PrefsManager.AppThemeMode.DARK ||
+            style == PrefsManager.AppThemeStyle.DRACULA ||
+            style == PrefsManager.AppThemeStyle.GITHUB_DARK
+    }
+
+    private fun darkPalette(): Palette = Palette(
+        background = 0xFF111827.toInt(),
+        surface = 0xFF1F2937.toInt(),
+        accent = 0xFF60A5FA.toInt(),
+        onSurface = 0xFFF9FAFB.toInt(),
+        muted = 0xFFCBD5E1.toInt(),
     )
 
     private fun customPalette(accent: Int, background: Int): Palette {

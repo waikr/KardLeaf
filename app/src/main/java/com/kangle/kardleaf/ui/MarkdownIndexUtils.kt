@@ -16,6 +16,9 @@ data class SearchMatch(
     val scope: String,
     val snippet: String,
     val startOffset: Int = -1,
+    val query: String? = null,
+    val options: NoteSearchOptions = NoteSearchOptions(),
+    val matchedText: String? = null,
 )
 
 enum class ObsidianLinkKind {
@@ -426,11 +429,11 @@ fun findSearchMatch(
     options: NoteSearchOptions = NoteSearchOptions(),
     compiledRegex: Regex? = null,
 ): SearchMatch? {
-    val q = query.trim()
+    val q = com.kangle.kardleaf.data.utils.SearchQueryUtils.normalizeLineBreaks(query).text
     val folder = note.folder.replace("\\", "/")
     if (options.folder != null && folder != options.folder) return null
     if (options.tag != null && note.tags.none { it.equals(options.tag, ignoreCase = true) }) return null
-    if (q.isBlank()) {
+    if (q.isEmpty()) {
         return when {
             options.tag != null -> SearchMatch("标签", "#${options.tag}")
             options.folder != null -> SearchMatch("文件夹", folder)
@@ -440,16 +443,21 @@ fun findSearchMatch(
     val regex =
         if (options.useRegex) {
             compiledRegex ?: runCatching {
-                Regex(q, if (options.matchCase) emptySet() else setOf(RegexOption.IGNORE_CASE))
+                Regex(q, setOf(RegexOption.MULTILINE) + if (options.matchCase) emptySet() else setOf(RegexOption.IGNORE_CASE))
             }.getOrNull() ?: return null
         } else {
             null
         }
 
     fun matchRange(text: String): IntRange? {
-        regex?.find(text)?.let { return it.range }
-        val start = text.indexOf(q, ignoreCase = !options.matchCase)
-        return start.takeIf { it >= 0 }?.let { it until (it + q.length) }
+        val normalized = com.kangle.kardleaf.data.utils.SearchQueryUtils.normalizeLineBreaks(text)
+        val range = if (regex != null) {
+            regex.findAll(normalized.text).firstOrNull { it.value.isNotEmpty() }?.range
+        } else {
+            val start = normalized.text.indexOf(q, ignoreCase = !options.matchCase)
+            start.takeIf { it >= 0 }?.let { it until (it + q.length) }
+        } ?: return null
+        return normalized.originalOffset(range.first) until normalized.originalOffset(range.last + 1)
     }
 
     val titleMatch = options.matchTitle.then { matchRange(note.title) }
@@ -464,12 +472,13 @@ fun findSearchMatch(
         }
     }
     return when {
-        titleMatch != null -> SearchMatch("标题", note.title)
+        titleMatch != null -> SearchMatch("标题", note.title, matchedText = note.title.substring(titleMatch))
         contentMatch != null ->
             SearchMatch(
                 "正文",
                 buildSearchSnippetAt(note.content, contentMatch.first, contentMatch.last - contentMatch.first + 1),
-                if (options.useRegex) -1 else contentMatch.first,
+                contentMatch.first,
+                matchedText = note.content.substring(contentMatch),
             )
         matchedHistory != null -> {
             val history =
@@ -491,7 +500,7 @@ private fun buildSearchSnippetAt(
     val end = (startOffset + matchLength.coerceAtLeast(1) + 90).coerceAtMost(content.length)
     return buildString {
         if (start > 0) append("...")
-        append(content.substring(start, end).replace('\r', ' ').replace('\n', ' ').trim())
+        append(content.substring(start, end).replace('\r', ' ').replace('\n', ' '))
         if (end < content.length) append("...")
     }
 }

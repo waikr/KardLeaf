@@ -6,16 +6,26 @@ import android.os.SystemClock
 import android.util.TypedValue
 import androidx.documentfile.provider.DocumentFile
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -104,9 +114,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -119,6 +131,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -133,6 +146,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
@@ -150,6 +164,7 @@ import com.kangle.kardleaf.data.model.Note
 import com.kangle.kardleaf.data.repository.PrefsManager
 import com.kangle.kardleaf.data.repository.VaultInfo
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.KardLeafLogTags
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeMode
 import com.kangle.kardleaf.ui.theme.LocalKardLeafThemeStyle
@@ -157,6 +172,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.withContext
@@ -223,10 +239,15 @@ fun AppDrawerContent(
     val drawerName = drawerPrefs.getDrawerName()
     val isModern = LocalKardLeafThemeStyle.current != PrefsManager.AppThemeStyle.CLASSIC
     val drawerBackground = MaterialTheme.colorScheme.surfaceContainer
+    val lastDrawerSheetBounds = remember { arrayOfNulls<Rect>(1) }
 
     ModalDrawerSheet(
-        modifier = Modifier.width(if (isModern) 292.dp else 280.dp),
-        drawerContainerColor = drawerBackground,
+        modifier = Modifier
+            .width(if (isModern) 292.dp else 280.dp)
+            .onGloballyPositioned { coordinates ->
+                lastDrawerSheetBounds[0] = coordinates.boundsInWindow()
+            },
+        drawerContainerColor = Color.Transparent,
         drawerContentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         val allFolderPaths = remember(labels, allNotes, allLabels, allNotesIncludingHidden) {
@@ -253,7 +274,14 @@ fun AppDrawerContent(
         var heatmapBounds by remember { mutableStateOf<Rect?>(null) }
         val currentHeatmapBounds = rememberUpdatedState(heatmapBounds)
 
-        LaunchedEffect(isDrawerOpen) {
+        LaunchedEffect(isDrawerOpen, categoryOnly) {
+            val bounds = lastDrawerSheetBounds[0]
+            KardLeafLog.d(
+                GESTURE_TRACE_TAG,
+                "drawerSurface state open=$isDrawerOpen categoryOnly=$categoryOnly screen=$currentScreen " +
+                    "bounds=${bounds?.let { "${it.left.toInt()},${it.top.toInt()},${it.right.toInt()},${it.bottom.toInt()}" } ?: "none"} " +
+                    "background=$drawerBackground",
+            )
             if (!isDrawerOpen) heatmapDetailsOpen = false
         }
 
@@ -1251,15 +1279,32 @@ private fun formatHeatmapNumber(value: Long): String =
 private fun PrefsManager.DrawerStyle.isGroupedDrawerStyle(): Boolean =
     this == PrefsManager.DrawerStyle.GROUPED_CARD || this == PrefsManager.DrawerStyle.DATA_CARD
 
+private val FILE_TREE_TOOLBAR_ICON_COLOR = Color(0xFF64748B)
+private val GESTURE_TRACE_TAG = KardLeafLogTags.GESTURE_TRACE
+
 @Composable
 private fun FileTreeToolbarIconButton(
     onClick: () -> Unit,
+    buttonSize: Dp = 48.dp,
     content: @Composable () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pressedBackground by animateColorAsState(
+        targetValue = if (isPressed) {
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(90),
+        label = "FileTreeActionPressedBackground",
+    )
+    val buttonShape = RoundedCornerShape(14.dp)
     Box(
         modifier = Modifier
-            .size(48.dp)
+            .size(buttonSize)
+            .clip(buttonShape)
+            .background(pressedBackground)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -1465,7 +1510,17 @@ private fun FileTreeActionPopup(
     onDismiss: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    if (!expanded) return
+    var popupMounted by remember { mutableStateOf(false) }
+    if (!expanded && !popupMounted) return
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            popupMounted = true
+        } else {
+            delay(180)
+            popupMounted = false
+        }
+    }
+    if (!popupMounted) return
     val density = LocalDensity.current
     val positionProvider = remember(density) {
         AboveFileTreePopupPositionProvider(with(density) { 4.dp.roundToPx() })
@@ -1479,14 +1534,41 @@ private fun FileTreeActionPopup(
             dismissOnClickOutside = true,
         ),
     ) {
-        Surface(
-            shape = MaterialTheme.shapes.extraSmall,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 3.dp,
-            shadowElevation = 4.dp,
+        val popupShape = RoundedCornerShape(16.dp)
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(animationSpec = tween(90)) + scaleIn(
+                initialScale = 0.76f,
+                animationSpec = tween(210, easing = FastOutSlowInEasing),
+                transformOrigin = TransformOrigin(0.5f, 1f),
+            ),
+            exit = fadeOut(animationSpec = tween(105)) + scaleOut(
+                targetScale = 0.84f,
+                animationSpec = tween(145, easing = FastOutLinearInEasing),
+                transformOrigin = TransformOrigin(0.5f, 1f),
+            ),
         ) {
-            Row {
-                content()
+            Surface(
+                modifier = Modifier
+                    .shadow(
+                        elevation = 2.dp,
+                        shape = popupShape,
+                        ambientColor = Color.Black.copy(alpha = 0.08f),
+                        spotColor = Color.Black.copy(alpha = 0.10f),
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = Color(0xFFDCE3EC),
+                        shape = popupShape,
+                    ),
+                shape = popupShape,
+                color = Color.White,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                Row(modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
+                    content()
+                }
             }
         }
     }
@@ -1957,6 +2039,8 @@ private fun CategoryDrawerContent(
                 Icon(
                     imageVector = if (hasExpandedFolders) Icons.Outlined.UnfoldLess else Icons.Outlined.UnfoldMore,
                     contentDescription = if (hasExpandedFolders) "全部收起" else "全部展开",
+                    tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                    modifier = Modifier.size(20.dp),
                 )
             }
             FileTreeToolbarIconButton(onClick = {
@@ -1966,7 +2050,8 @@ private fun CategoryDrawerContent(
                 Icon(
                     painter = painterResource(R.drawable.ic_file_tree_new_note),
                     contentDescription = "新增文件",
-                    tint = Color.Unspecified,
+                    tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                    modifier = Modifier.size(28.dp),
                 )
             }
             FileTreeToolbarIconButton(onClick = {
@@ -1975,7 +2060,8 @@ private fun CategoryDrawerContent(
                 Icon(
                     painter = painterResource(R.drawable.ic_file_tree_new_folder),
                     contentDescription = "新增文件夹",
-                    tint = Color.Unspecified,
+                    tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                    modifier = Modifier.size(28.dp),
                 )
             }
             Box {
@@ -1986,7 +2072,7 @@ private fun CategoryDrawerContent(
                     Icon(
                         painter = painterResource(R.drawable.ic_file_tree_filter),
                         contentDescription = "筛选",
-                        tint = Color.Unspecified,
+                        tint = FILE_TREE_TOOLBAR_ICON_COLOR,
                     )
                 }
                 KardLeafDropdownMenu(
@@ -2023,7 +2109,7 @@ private fun CategoryDrawerContent(
                     Icon(
                         Icons.Filled.SwapVert,
                         contentDescription = "排序",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = FILE_TREE_TOOLBAR_ICON_COLOR,
                     )
                 }
                 KardLeafDropdownMenu(
@@ -2825,6 +2911,7 @@ private fun FileDrawerSection(
             depth = 0,
             onNoteClick = onNoteClick,
             onRevealNote = onRevealNote,
+            onOpenFolder = onOpenFolder,
             onRenameNote = onRenameNote,
             onMoveNote = onMoveNote,
             onDeleteNote = onDeleteNote,
@@ -3044,6 +3131,7 @@ private fun FolderTree(
                         depth = depth + 1,
                         onNoteClick = onNoteClick,
                         onRevealNote = onRevealNote,
+                        onOpenFolder = onOpenFolder,
                         onRenameNote = onRenameNote,
                         onMoveNote = onMoveNote,
                         onDeleteNote = onDeleteNote,
@@ -3074,6 +3162,7 @@ private fun FolderNoteItem(
     depth: Int,
     onNoteClick: (Note) -> Unit,
     onRevealNote: (Note) -> Unit,
+    onOpenFolder: (String) -> Unit,
     onRenameNote: (Note) -> Unit,
     onMoveNote: (Note) -> Unit,
     onDeleteNote: (Note) -> Unit,
@@ -3119,20 +3208,22 @@ private fun FolderNoteItem(
                         onNoteClick(note)
                     }
                 },
-                onLongClick = if (inline) null else { offset ->
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    KardLeafLog.d(
-                        FILE_TREE_TRACE_TAG,
-                        "note long pathHash=${note.file.path.hashCode()} " +
-                            "showMenuBefore=$showMenu selectionCleared=true xPx=${offset.x} " +
-                            "yPx=${offset.y} t=${SystemClock.uptimeMillis()}",
-                    )
-                    onClearFolderSelection(null)
-                    showMenu = true
-                    KardLeafLog.d(
-                        FILE_TREE_TRACE_TAG,
-                        "note long stateSet pathHash=${note.file.path.hashCode()} showMenu=true",
-                    )
+                longPressActive = showMenu && !inline,
+                onLongClick = if (inline) null else {
+                    {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        KardLeafLog.d(
+                            FILE_TREE_TRACE_TAG,
+                            "note long pathHash=${note.file.path.hashCode()} " +
+                                "showMenuBefore=$showMenu selectionCleared=true t=${SystemClock.uptimeMillis()}",
+                        )
+                        onClearFolderSelection(null)
+                        showMenu = true
+                        KardLeafLog.d(
+                            FILE_TREE_TRACE_TAG,
+                            "note long stateSet pathHash=${note.file.path.hashCode()} showMenu=true",
+                        )
+                    }
                 },
                 content = if (inline) {
                     {
@@ -3164,6 +3255,7 @@ private fun FolderNoteItem(
             DrawerNoteActionMenu(
                 expanded = showMenu && !inline,
                 isFavorite = note.isFavorite,
+                onOpenFolder = { onOpenFolder(note.folder) },
                 onDismiss = {
                     KardLeafLog.d(FILE_TREE_TRACE_TAG, "note menu dismiss pathHash=${note.file.path.hashCode()}")
                     showMenu = false
@@ -3277,54 +3369,70 @@ private fun DrawerFolderActionMenu(
     onCreateFolder: () -> Unit,
 ) {
     FileTreeActionPopup(expanded = expanded, onDismiss = onDismiss) {
-        FileTreeToolbarIconButton(onClick = {
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = {
             onDismiss()
             onOpenFolder()
         }) {
             Icon(
-                painter = painterResource(R.drawable.ic_folder_navigation_expand),
+                painter = painterResource(R.drawable.ic_file_tree_home),
                 contentDescription = "首页打开",
-                tint = Color.Unspecified,
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                modifier = Modifier.size(24.dp),
             )
         }
-        FileTreeToolbarIconButton(onClick = {
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = {
             onDismiss()
             onRename()
         }) {
-            Icon(Icons.Outlined.Edit, contentDescription = "重命名")
+            Icon(
+                painter = painterResource(R.drawable.ic_file_tree_rename),
+                contentDescription = "重命名",
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                modifier = Modifier.size(27.dp),
+            )
         }
-        FileTreeToolbarIconButton(onClick = {
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = {
             onDismiss()
             onMove()
         }) {
-            Icon(Icons.AutoMirrored.Outlined.DriveFileMove, contentDescription = "移动")
+            Icon(
+                Icons.AutoMirrored.Outlined.DriveFileMove,
+                contentDescription = "移动",
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                modifier = Modifier.size(26.dp),
+            )
         }
-        FileTreeToolbarIconButton(onClick = {
-            onDismiss()
-            onDelete()
-        }) {
-            Icon(Icons.Outlined.Delete, contentDescription = "删除")
-        }
-        FileTreeToolbarIconButton(onClick = {
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = {
             onDismiss()
             onCreateNote()
         }) {
             Icon(
                 painter = painterResource(R.drawable.ic_file_tree_new_note),
                 contentDescription = "新增文件",
-                modifier = Modifier.size(30.dp),
-                tint = Color.Unspecified,
+                modifier = Modifier.size(28.dp),
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
             )
         }
-        FileTreeToolbarIconButton(onClick = {
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = {
             onDismiss()
             onCreateFolder()
         }) {
             Icon(
                 painter = painterResource(R.drawable.ic_file_tree_new_folder),
                 contentDescription = "新增文件夹",
-                modifier = Modifier.size(30.dp),
-                tint = Color.Unspecified,
+                modifier = Modifier.size(31.dp),
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+            )
+        }
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = {
+            onDismiss()
+            onDelete()
+        }) {
+            Icon(
+                Icons.Outlined.Delete,
+                contentDescription = "删除",
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                modifier = Modifier.size(25.dp),
             )
         }
     }
@@ -3334,6 +3442,7 @@ private fun DrawerFolderActionMenu(
 private fun DrawerNoteActionMenu(
     expanded: Boolean,
     isFavorite: Boolean,
+    onOpenFolder: () -> Unit,
     onDismiss: () -> Unit,
     onRename: () -> Unit,
     onMove: () -> Unit,
@@ -3341,19 +3450,47 @@ private fun DrawerNoteActionMenu(
     onToggleFavorite: () -> Unit,
 ) {
     FileTreeActionPopup(expanded = expanded, onDismiss = onDismiss) {
-        FileTreeToolbarIconButton(onClick = onRename) {
-            Icon(Icons.Outlined.Edit, contentDescription = "重命名")
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = {
+            onDismiss()
+            onOpenFolder()
+        }) {
+            Icon(
+                painter = painterResource(R.drawable.ic_file_tree_home),
+                contentDescription = "首页打开",
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                modifier = Modifier.size(24.dp),
+            )
         }
-        FileTreeToolbarIconButton(onClick = onMove) {
-            Icon(Icons.AutoMirrored.Outlined.DriveFileMove, contentDescription = "移动")
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = onRename) {
+            Icon(
+                painter = painterResource(R.drawable.ic_file_tree_rename),
+                contentDescription = "重命名",
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                modifier = Modifier.size(27.dp),
+            )
         }
-        FileTreeToolbarIconButton(onClick = onDelete) {
-            Icon(Icons.Outlined.Delete, contentDescription = "删除")
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = onMove) {
+            Icon(
+                Icons.AutoMirrored.Outlined.DriveFileMove,
+                contentDescription = "移动",
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                modifier = Modifier.size(26.dp),
+            )
         }
-        FileTreeToolbarIconButton(onClick = onToggleFavorite) {
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = onToggleFavorite) {
             Icon(
                 Icons.Outlined.StarBorder,
                 contentDescription = if (isFavorite) "取消收藏" else "收藏",
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                modifier = Modifier.size(24.dp),
+            )
+        }
+        FileTreeToolbarIconButton(buttonSize = 44.dp, onClick = onDelete) {
+            Icon(
+                Icons.Outlined.Delete,
+                contentDescription = "删除",
+                tint = FILE_TREE_TOOLBAR_ICON_COLOR,
+                modifier = Modifier.size(25.dp),
             )
         }
     }
@@ -3394,9 +3531,12 @@ private fun FolderTreeItem(
     val isFilterSelected = currentScreen is MainViewModel.Screen.Dashboard && (currentFilter as? MainViewModel.NoteFilter.Label)?.name == node.path
     val isActionSelected = selectedFolderPath == node.path
     val isSelected = isFilterSelected || isActionSelected
+    val pressedBackgroundColor = fileTreePressedBackgroundColor()
     val canExpand = true
     val isCollapsed = node.path in collapsedFolders
     val canManage = node.path.split('/').none { it == ".KardLeaf" }
+    val interactionSource = remember(node.path) { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
     val menuRenderCount = remember(node.path) { intArrayOf(0) }
     LaunchedEffect(isActionSelected) {
         if (isActionSelected) {
@@ -3424,14 +3564,13 @@ private fun FolderTreeItem(
         if (!inline && selectedFolderPath != null) onSelectFolder(null)
         if (!inline && canExpand) onToggleFolder(node.path)
     }
-    val folderLongClick: (Offset) -> Unit = { offset ->
+    val folderLongClick: () -> Unit = {
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         KardLeafLog.d(
             FILE_TREE_TRACE_TAG,
             "folder long pathHash=${node.path.hashCode()} " +
                 "selectedBeforeHash=${selectedFolderPath?.hashCode()} " +
-                "isActionSelected=$isActionSelected inline=$inline " +
-                "xPx=${offset.x} yPx=${offset.y} t=${SystemClock.uptimeMillis()}",
+                "isActionSelected=$isActionSelected inline=$inline t=${SystemClock.uptimeMillis()}",
         )
         onSelectFolder(node.path)
         KardLeafLog.d(
@@ -3466,7 +3605,6 @@ private fun FolderTreeItem(
         targetValue = if (isCollapsed) 0f else 90f,
         label = "DrawerFolderChevron",
     )
-
     if (!isModern) {
         FileTreeSwipeReveal(
             itemKey = node.path,
@@ -3480,34 +3618,21 @@ private fun FolderTreeItem(
                         .fillMaxWidth()
                         .height(44.dp)
                         .background(
-                            if (isSelected) {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            } else {
-                                Color.Transparent
+                            when {
+                                isActionSelected -> pressedBackgroundColor
+                                isSelected -> MaterialTheme.colorScheme.surfaceVariant
+                                isPressed -> pressedBackgroundColor
+                                else -> Color.Transparent
                             },
                         )
                         .then(
                             if (!inline) {
-                                Modifier.pointerInput(node.path) {
-                                    detectTapGestures(
-                                        onPress = {
-                                            val pressStart = SystemClock.uptimeMillis()
-                                            KardLeafLog.d(
-                                                FILE_TREE_TRACE_TAG,
-                                                "folder pressStart pathHash=${node.path.hashCode()} " +
-                                                    "t=$pressStart",
-                                            )
-                                            val released = tryAwaitRelease()
-                                            KardLeafLog.d(
-                                                FILE_TREE_TRACE_TAG,
-                                                "folder pressEnd pathHash=${node.path.hashCode()} " +
-                                                    "released=$released elapsed=${SystemClock.uptimeMillis() - pressStart}",
-                                            )
-                                        },
-                                        onTap = { folderClick() },
-                                        onLongPress = folderLongClick,
-                                    )
-                                }
+                                Modifier.combinedClickable(
+                                    interactionSource = interactionSource,
+                                    indication = null,
+                                    onClick = folderClick,
+                                    onLongClick = folderLongClick,
+                                )
                             } else {
                                 Modifier
                             },
@@ -3548,7 +3673,7 @@ private fun FolderTreeItem(
                     )
                 }
             }
-            if (isActionSelected && !inline) folderMenu()
+            if (!inline) folderMenu()
             }
         }
         return
@@ -3556,12 +3681,15 @@ private fun FolderTreeItem(
 
     val folderShape = RoundedCornerShape(20.dp)
     val backgroundColor =
-        if (isSelected) {
+        if (isActionSelected) {
+            pressedBackgroundColor
+        } else if (isSelected) {
             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f)
+        } else if (isPressed) {
+            pressedBackgroundColor
         } else {
             Color.Transparent
         }
-    val borderColor = Color.Transparent
     FileTreeSwipeReveal(
         itemKey = node.path,
         onReveal = { onOpenFolder(node.path) },
@@ -3574,30 +3702,15 @@ private fun FolderTreeItem(
                 .padding(start = 12.dp + (depth * 12).dp, end = 12.dp, top = 3.dp, bottom = 3.dp)
                 .clip(folderShape)
                 .background(backgroundColor)
-                .border(1.dp, borderColor, folderShape)
                 .height(42.dp)
                 .then(
                     if (!inline) {
-                        Modifier.pointerInput(node.path) {
-                            detectTapGestures(
-                                onPress = {
-                                    val pressStart = SystemClock.uptimeMillis()
-                                    KardLeafLog.d(
-                                        FILE_TREE_TRACE_TAG,
-                                        "folder pressStart pathHash=${node.path.hashCode()} " +
-                                            "t=$pressStart",
-                                    )
-                                    val released = tryAwaitRelease()
-                                    KardLeafLog.d(
-                                        FILE_TREE_TRACE_TAG,
-                                        "folder pressEnd pathHash=${node.path.hashCode()} " +
-                                            "released=$released elapsed=${SystemClock.uptimeMillis() - pressStart}",
-                                    )
-                                },
-                                onTap = { folderClick() },
-                                onLongPress = folderLongClick,
-                            )
-                        }
+                        Modifier.combinedClickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            onClick = folderClick,
+                            onLongClick = folderLongClick,
+                        )
                     } else {
                         Modifier
                     },
@@ -3638,7 +3751,7 @@ private fun FolderTreeItem(
                 )
             }
         }
-        if (isActionSelected && !inline) folderMenu()
+        if (!inline) folderMenu()
         }
     }
 }

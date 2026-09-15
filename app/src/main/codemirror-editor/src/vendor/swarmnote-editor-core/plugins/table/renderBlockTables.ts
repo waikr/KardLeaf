@@ -28,6 +28,7 @@
  * 此模块从不硬编码 rgba 颜色。
  */
 import { syntaxTree } from '@codemirror/language';
+import { getSearchQuery, setSearchQuery } from '@codemirror/search';
 import {
   type EditorState,
   type Range,
@@ -38,6 +39,13 @@ import { Decoration, type DecorationSet, EditorView, WidgetType } from '@codemir
 import { editorEventCallback, EditorEventType, type TableContextMenuActions } from '../../events';
 import { renderInlineMarkdown } from '../../utils/renderInlineMarkdown';
 import { renderedTableCellOffsetToSource } from './tableCaret';
+import {
+  hasNonEmptyNativeSelection,
+  nativeSelectionSettledEvent,
+  runWhenNativeSelectionSettled,
+  selectionRenderingFrozen,
+} from '../../core/mouseSelecting';
+import { shouldShowSource } from '../../core/shouldShowSource';
 
 // KaTeX 在表格单元格首次包含内联数学公式时懒加载；
 // CSS 已由 `renderBlockMath.ts` 全局导入。
@@ -72,20 +80,26 @@ function loadKaTeX(): Promise<typeof import('katex').default> {
  *
  * @param root - 根元素（表格容器）
  */
-function hydrateMathSpans(root: HTMLElement) {
+function hydrateMathSpans(root: HTMLElement, view: EditorView) {
   const spans = root.querySelectorAll<HTMLElement>('.cm-table-math[data-tex]');
   if (spans.length === 0) return;
   void loadKaTeX().then((katex) => {
-    spans.forEach((span) => {
-      if (!span.isConnected) return;
-      const tex = span.dataset.tex ?? '';
-      try {
-        katex.render(tex, span, { displayMode: false, throwOnError: false });
-        span.removeAttribute('data-tex');
-      } catch {
-        span.textContent = `$${tex}$`;
-      }
+    if (!root.isConnected || !view.dom.contains(root)) return;
+    tableMathCleanups.get(root)?.();
+    const cleanup = runWhenNativeSelectionSettled(view, root, () => {
+      spans.forEach((span) => {
+        if (!span.isConnected || !root.contains(span)) return;
+        const tex = span.dataset.tex ?? '';
+        span.dataset.source = `$${tex}$`;
+        try {
+          katex.render(tex, span, { displayMode: false, throwOnError: false });
+          span.removeAttribute('data-tex');
+        } catch {
+          span.textContent = `$${tex}$`;
+        }
+      });
     });
+    tableMathCleanups.set(root, cleanup);
   });
 }
 
@@ -236,9 +250,10 @@ function generateSeparator(alignment: Alignment): string {
  * @returns Markdown 格式的表格字符串
  */
 function serializeMarkdownTable(data: TableData): string {
-  const headerLine = `| ${data.headers.join(' | ')} |`;
+  const escapePipe = (value: string) => value.replace(/(^|[^\\])\|/g, '$1\\|');
+  const headerLine = `| ${data.headers.map(escapePipe).join(' | ')} |`;
   const sepLine = `| ${data.alignments.map(generateSeparator).join(' | ')} |`;
-  const dataLines = data.rows.map((row) => `| ${row.join(' | ')} |`);
+  const dataLines = data.rows.map((row) => `| ${row.map(escapePipe).join(' | ')} |`);
   return [headerLine, sepLine, ...dataLines].join('\n');
 }
 
@@ -389,6 +404,7 @@ function iconButton(
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = className;
+  btn.contentEditable = 'false';
   btn.title = title;
   btn.setAttribute('aria-label', title);
   btn.innerHTML = LUCIDE_ICONS[iconKey];
@@ -445,6 +461,127 @@ function queueTableFocus(
  * @param tableFrom - 表格起始位置
  * @param tableTo - 表格结束位置
  */
+// CodeMirror may reuse a DOM node with an equivalent *new* WidgetType instance.
+// Listener cleanup must follow the DOM, not the discarded widget instance.
+const tableCellCleanups = new WeakMap<HTMLElement, () => void>();
+const tableCellSettledHandlers = new WeakMap<HTMLElement, () => void>();
+const tableWidgetCleanups = new WeakMap<HTMLElement, () => void>();
+const tableMathCleanups = new WeakMap<HTMLElement, () => void>();
+let tableSelectionSyncCount = 0;
+let lastTableSelectionTraceAt = 0;
+
+function closestTableCell(node: Node | null): HTMLElement | null {
+  const element = node instanceof Element ? node : node?.parentElement;
+  return element?.closest<HTMLElement>('.cm-table-cell') ?? null;
+}
+
+function mapTableDomPoint(view: EditorView, node: Node, offset: number): number | null {
+  const cell = closestTableCell(node);
+  if (cell && view.contentDOM.contains(cell)) {
+    const widget = cell.closest<HTMLElement>('.cm-table-widget');
+    if (!widget) return null;
+    const tableFrom = Number(widget.dataset.tableFrom);
+    const tableTo = Number(widget.dataset.tableTo);
+    const colIdx = Number(cell.dataset.colIdx);
+    const row = cell.closest<HTMLTableRowElement>('tbody tr');
+    const rowIdx = row ? Number(row.dataset.rowIdx) : -1;
+    const colCount = widget.querySelectorAll('thead th.cm-table-cell').length;
+    if (!Number.isFinite(tableFrom) || !Number.isFinite(tableTo) ||
+      !Number.isFinite(colIdx) || !Number.isFinite(colCount) || colCount <= 0) return null;
+    const cellIndex = rowIdx < 0 ? colIdx : (rowIdx + 1) * colCount + colIdx;
+    const sourceRange = tableCellSourceRange(view.state, tableFrom, tableTo, cellIndex);
+    const visibleOffset = domTextOffset(cell, node, offset);
+    if (!sourceRange || visibleOffset === null) return null;
+    const source = view.state.doc.sliceString(sourceRange.from, sourceRange.to);
+    return sourceRange.from + renderedTableCellOffsetToSource(source, visibleOffset);
+  }
+
+  if (!view.contentDOM.contains(node)) return null;
+  const element = node instanceof Element ? node : node.parentElement;
+  if (element?.closest('.cm-table-widget')) return null;
+  try {
+    return view.posAtDOM(node, offset);
+  } catch {
+    return null;
+  }
+}
+
+function syncNativeTableSelection(view: EditorView, container: HTMLElement) {
+  const selection = view.dom.ownerDocument.getSelection?.() ?? window.getSelection();
+  if (!selection?.anchorNode || !selection.focusNode) return false;
+  if (!container.contains(selection.anchorNode) && !container.contains(selection.focusNode)) return false;
+
+  const anchor = mapTableDomPoint(view, selection.anchorNode, selection.anchorOffset);
+  const head = mapTableDomPoint(view, selection.focusNode, selection.focusOffset);
+  if (anchor === null || head === null) return true;
+
+  const current = view.state.selection.main;
+  tableSelectionSyncCount += 1;
+  const now = performance.now();
+  if (now - lastTableSelectionTraceAt >= 120 || current.anchor !== anchor || current.head !== head) {
+    lastTableSelectionTraceAt = now;
+    console.log(
+      `[KardLeafCM6TableTrace] selection sync count=${tableSelectionSyncCount} ` +
+        `source=${anchor}->${head} cm=${current.anchor}->${current.head} ` +
+        `collapsed=${selection.isCollapsed}`,
+    );
+  }
+  if (current.anchor !== anchor || current.head !== head) {
+    // Mirror the browser range into CM without forcing CM to replace the
+    // native range or move focus away from a table cell.
+    view.dispatch({ selection: { anchor, head }, userEvent: 'select' });
+  }
+  return true;
+}
+
+function serializeTableCellDom(cell: HTMLElement): string {
+  const serialize = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? '';
+    if (!(node instanceof Element)) return Array.from(node.childNodes).map(serialize).join('');
+    if (node.matches('.cm-table-row-handle, .cm-table-col-handle')) return '';
+    const children = () => Array.from(node.childNodes).map(serialize).join('');
+    switch (node.tagName) {
+      case 'BR': return node.hasAttribute('data-table-placeholder') ? '' : '<br>';
+      case 'STRONG':
+      case 'B': return `**${children()}**`;
+      case 'EM':
+      case 'I': return `*${children()}*`;
+      case 'DEL':
+      case 'S': return `~~${children()}~~`;
+      case 'MARK': return `==${children()}==`;
+      case 'CODE': return `\`${children()}\``;
+      case 'A': {
+        const href = node.getAttribute('href');
+        return href ? `[${children()}](${href})` : children();
+      }
+      case 'IMG': {
+        const src = node.getAttribute('src');
+        return src ? `![${node.getAttribute('alt') ?? ''}](${src})` : '';
+      }
+      case 'SPAN':
+        if (node.classList.contains('cm-table-math')) {
+          return node.dataset.source ?? `$${node.dataset.tex ?? node.textContent ?? ''}$`;
+        }
+        return children();
+      default: return children();
+    }
+  };
+  return Array.from(cell.childNodes).map(serialize).join('');
+}
+
+function tableCellDraftValue(cell: HTMLElement): string {
+  return cell.dataset.editing === 'true' && cell.dataset.userEdited === 'true'
+    ? serializeTableCellDom(cell)
+    : cell.dataset.raw ?? '';
+}
+
+function finishTableEditing(view: EditorView, container: HTMLElement) {
+  for (const cell of container.querySelectorAll<HTMLElement>('.cm-table-cell')) {
+    tableCellSettledHandlers.get(cell)?.();
+    hydrateMathSpans(cell, view);
+  }
+}
+
 class EditableTableWidget extends WidgetType {
   constructor(
     /** 表格数据 */
@@ -491,9 +628,38 @@ class EditableTableWidget extends WidgetType {
     const container = document.createElement('div');
     container.className = 'cm-table-widget';
     container.dataset.tableFrom = String(this.tableFrom);
+    container.dataset.tableTo = String(this.tableTo);
+    // Keep the widget's default non-editable boundary so each editable cell
+    // owns its caret. Inheriting CM's edit host makes Chromium refocus CM when
+    // it places a collapsed cell selection; native range mapping stays below.
+    let hadNativeSelection = false;
 
     // 构建并附加表格
     container.appendChild(this.buildTable(view));
+
+    const handleSelectionChange = () => {
+      const active = hasNonEmptyNativeSelection(view);
+      const touchesTable = syncNativeTableSelection(view, container);
+      if (active) {
+        if (touchesTable) hadNativeSelection = true;
+        return;
+      }
+      if (hadNativeSelection) finishTableEditing(view, container);
+      hadNativeSelection = false;
+    };
+    const handleSelectionSettled = () => {
+      if ((!hadNativeSelection && !container.dataset.pendingBlur) || selectionRenderingFrozen(view.state)) return;
+      delete container.dataset.pendingBlur;
+      finishTableEditing(view, container);
+      hadNativeSelection = false;
+    };
+    document.addEventListener('selectionchange', handleSelectionChange, true);
+    document.addEventListener(nativeSelectionSettledEvent, handleSelectionSettled);
+    tableWidgetCleanups.set(container, () => {
+      document.removeEventListener('selectionchange', handleSelectionChange, true);
+      document.removeEventListener(nativeSelectionSettledEvent, handleSelectionSettled);
+      hadNativeSelection = false;
+    });
 
     // 插入表格命令执行时 Widget 尚不存在，因此命令会把首次焦点暂存到
     // 当前 EditorView 的 DOM；Widget 创建后在这里接管并立即消费。
@@ -516,6 +682,7 @@ class EditableTableWidget extends WidgetType {
           `top=${view.scrollDOM.scrollTop.toFixed(1)}`,
       );
       requestAnimationFrame(() => {
+        if (hasNonEmptyNativeSelection(view)) return;
         // 找到目标行（-1 表示表头）
         const targetRow =
           pending.row === -1
@@ -554,6 +721,22 @@ class EditableTableWidget extends WidgetType {
    */
   ignoreEvent(): boolean {
     return true;
+  }
+
+  get editable(): boolean {
+    return false;
+  }
+
+  destroy(dom: HTMLElement): void {
+    tableWidgetCleanups.get(dom)?.();
+    tableWidgetCleanups.delete(dom);
+    for (const cell of dom.querySelectorAll<HTMLElement>('th[contenteditable], td[contenteditable]')) {
+      tableCellCleanups.get(cell)?.();
+      tableCellCleanups.delete(cell);
+      tableMathCleanups.get(cell)?.();
+      tableMathCleanups.delete(cell);
+      tableCellSettledHandlers.delete(cell);
+    }
   }
 
   // ── 表格主体 ──
@@ -706,11 +889,12 @@ class EditableTableWidget extends WidgetType {
     const cell = document.createElement(tag);
     cell.className = 'cm-table-cell';
     cell.contentEditable = 'true';
+    cell.tabIndex = 0;
     cell.spellcheck = false;
     cell.dataset.raw = value;
     cell.dataset.colIdx = String(colIdx);
-    cell.innerHTML = renderInlineMarkdown(value);
-    hydrateMathSpans(cell);
+    cell.innerHTML = renderInlineMarkdown(value) || '<br data-table-placeholder>';
+    hydrateMathSpans(cell, view);
 
     const align = this.data.alignments[colIdx];
     if (align) cell.style.textAlign = align;
@@ -724,41 +908,82 @@ class EditableTableWidget extends WidgetType {
 
     let editing = false;
     let selectionSyncFrame = 0;
-    let pendingCaretPoint: { x: number; y: number } | null = null;
 
     const rowIndex = () => tag === 'th' ? -1 : Number(cell.parentElement?.dataset.rowIdx ?? -1);
-    const scheduleSelectionSync = (point?: { x: number; y: number }) => {
-      if (point) pendingCaretPoint = point;
+    const scheduleSelectionSync = () => {
       if (selectionSyncFrame) return;
       selectionSyncFrame = requestAnimationFrame(() => {
         selectionSyncFrame = 0;
-        const caretPoint = pendingCaretPoint;
-        pendingCaretPoint = null;
-        if (caretPoint) {
-          const range = document.caretRangeFromPoint(caretPoint.x, caretPoint.y);
-          if (range && cell.contains(range.startContainer)) {
-            const selection = window.getSelection();
-            selection?.removeAllRanges();
-            selection?.addRange(range);
-          }
+        if (cell.isConnected && document.activeElement === cell) {
+          const widget = cell.closest<HTMLElement>('.cm-table-widget');
+          if (widget) syncNativeTableSelection(view, widget);
         }
-        this.syncCellSelection(view, cell, rowIndex(), colIdx);
       });
     };
-    const handleSelectionChange = () => {
+    const restorePreview = () => {
       const selection = window.getSelection();
-      if (selection && cell.contains(selection.anchorNode) && cell.contains(selection.focusNode)) {
-        scheduleSelectionSync();
+      const widget = cell.closest<HTMLElement>('.cm-table-widget');
+      if (document.activeElement === cell || selectionRenderingFrozen(view.state) ||
+        hasNonEmptyNativeSelection(view) && !!widget &&
+          (widget.contains(selection.anchorNode) || widget.contains(selection.focusNode))) {
+        return;
       }
+      console.log(
+        `[KardLeafCM6TableTrace] preview restore row=${rowIndex()} col=${colIdx} ` +
+          `selection=${selection?.toString().length ?? 0} connected=${cell.isConnected}`,
+      );
+      editing = false;
+      delete cell.dataset.editing;
+      delete cell.dataset.editStartText;
+      delete cell.dataset.userEdited;
+      if (!cell.isConnected) return;
     };
+    tableCellCleanups.set(cell, () => {
+      if (selectionSyncFrame) cancelAnimationFrame(selectionSyncFrame);
+      tableCellSettledHandlers.delete(cell);
+    });
 
-    const commitIfChanged = () => {
-      const nextValue = cell.textContent ?? '';
-      const raw = cell.dataset.raw ?? '';
-      if (nextValue === raw) return;
+    const commitIfChanged = (nextFocus: EventTarget | null = document.activeElement) => {
+      if (!editing || cell.dataset.editing !== 'true') return;
+      if (cell.dataset.userEdited !== 'true') {
+        editing = false;
+        delete cell.dataset.editing;
+        delete cell.dataset.editStartText;
+        delete cell.dataset.userEdited;
+        return;
+      }
+      const nextValue = serializeTableCellDom(cell);
+      if (nextValue === cell.dataset.raw) {
+        editing = false;
+        delete cell.dataset.editing;
+        delete cell.dataset.editStartText;
+        delete cell.dataset.userEdited;
+        return;
+      }
       cell.dataset.raw = nextValue;
+      delete cell.dataset.editing;
+      delete cell.dataset.editStartText;
+      delete cell.dataset.userEdited;
+      editing = false;
+      // Committing replaces the table before the browser can focus the cell
+      // named by blur.relatedTarget. Carry that destination across the rebuild.
+      if (nextFocus instanceof HTMLElement && nextFocus !== cell &&
+        nextFocus.matches('.cm-table-cell') &&
+        nextFocus.closest('.cm-table-widget') === cell.closest('.cm-table-widget') &&
+        !pendingTableFocus.has(this.tableFrom)) {
+        queueTableFocus(view, this.tableFrom,
+          nextFocus.tagName === 'TH' ? -1 : Number(nextFocus.parentElement?.dataset.rowIdx),
+          Number(nextFocus.dataset.colIdx), 'cell-blur');
+      }
       onCommit(nextValue);
     };
+
+    tableCellSettledHandlers.set(cell, () => {
+      if (!editing || document.activeElement === cell || hasNonEmptyNativeSelection(view) ||
+        selectionRenderingFrozen(view.state)) return;
+      commitIfChanged();
+      restorePreview();
+    });
 
     const emitTableMenu = (clientX: number, clientY: number) => {
       const rowIdx = tag === 'th' ? -1 : Number(cell.parentElement?.dataset.rowIdx ?? -1);
@@ -779,28 +1004,58 @@ class EditableTableWidget extends WidgetType {
     cell.addEventListener('focus', () => {
       if (!editing) {
         editing = true;
-        cell.textContent = cell.dataset.raw ?? '';
+        cell.dataset.editing = 'true';
+        cell.dataset.editStartText = cell.textContent ?? '';
+        cell.dataset.userEdited = 'false';
       }
       const rect = cell.getBoundingClientRect();
+      console.log(
+        `[KardLeafCM6TableTrace] cell focus row=${rowIndex()} col=${colIdx} ` +
+          `rawLen=${(cell.dataset.raw ?? '').length} textLen=${(cell.textContent ?? '').length} ` +
+          `top=${view.scrollDOM.scrollTop.toFixed(1)} height=${view.scrollDOM.clientHeight}`,
+      );
       emitTableMenu(rect.left + rect.width / 2, rect.bottom);
-      document.addEventListener('selectionchange', handleSelectionChange);
       scheduleSelectionSync();
     });
 
-    cell.addEventListener('pointerup', (event) => {
-      scheduleSelectionSync({ x: event.clientX, y: event.clientY });
+    // Observe Chromium's selection; resetting it from pointer coordinates here
+    // collapses a just-created long-press selection when the finger is lifted.
+    cell.addEventListener('pointerup', () => {
+      console.log(
+        `[KardLeafCM6TableTrace] cell pointerup row=${rowIndex()} col=${colIdx} ` +
+          `native=${window.getSelection()?.toString().length ?? 0}`,
+      );
+      // Tapping the already focused cell after scrolling must reopen its tools.
+      if (document.activeElement === cell && !hasNonEmptyNativeSelection(view)) {
+        const rect = cell.getBoundingClientRect();
+        emitTableMenu(rect.left + rect.width / 2, rect.bottom);
+      }
+      scheduleSelectionSync();
+    });
+
+    cell.addEventListener('input', () => {
+      if (editing) cell.dataset.userEdited = 'true';
     });
 
     cell.addEventListener('blur', (e) => {
       e.stopPropagation();
       if (selectionSyncFrame) cancelAnimationFrame(selectionSyncFrame);
       selectionSyncFrame = 0;
-      pendingCaretPoint = null;
-      document.removeEventListener('selectionchange', handleSelectionChange);
-      commitIfChanged();
-      editing = false;
-      cell.innerHTML = renderInlineMarkdown(cell.dataset.raw ?? '');
-      hydrateMathSpans(cell);
+      console.log(
+        `[KardLeafCM6TableTrace] cell blur row=${rowIndex()} col=${colIdx} ` +
+          `native=${window.getSelection()?.toString().length ?? 0} ` +
+          `next=${e.relatedTarget instanceof Element ? e.relatedTarget.tagName + '.' + e.relatedTarget.className : 'none'} ` +
+          `connected=${cell.isConnected} cmHead=${view.state.selection.main.head} ` +
+          `top=${view.scrollDOM.scrollTop.toFixed(1)} height=${view.scrollDOM.clientHeight}`,
+      );
+      if (selectionRenderingFrozen(view.state) || hasNonEmptyNativeSelection(view)) {
+        const widget = cell.closest<HTMLElement>('.cm-table-widget');
+        if (widget) widget.dataset.pendingBlur = 'true';
+        return;
+      }
+      commitIfChanged(e.relatedTarget);
+      // Keep endpoint nodes alive if selection crosses this cell's boundary.
+      restorePreview();
     });
 
     cell.addEventListener('keydown', (e) => {
@@ -822,48 +1077,13 @@ class EditableTableWidget extends WidgetType {
     });
 
     cell.addEventListener('contextmenu', (e) => {
+      if (window.getSelection()?.isCollapsed === false) return;
       e.preventDefault();
       e.stopPropagation();
       emitTableMenu(e.clientX, e.clientY);
     });
 
     return cell;
-  }
-
-  private syncCellSelection(
-    view: EditorView,
-    cell: HTMLElement,
-    rowIdx: number,
-    colIdx: number,
-  ) {
-    const domSelection = window.getSelection();
-    if (
-      !domSelection ||
-      !cell.contains(domSelection.anchorNode) ||
-      !cell.contains(domSelection.focusNode)
-    ) return;
-
-    const cellIndex = rowIdx < 0
-      ? colIdx
-      : (rowIdx + 1) * this.data.headers.length + colIdx;
-    const sourceRange = tableCellSourceRange(view.state, this.tableFrom, this.tableTo, cellIndex);
-    if (!sourceRange) return;
-    const source = view.state.doc.sliceString(sourceRange.from, sourceRange.to);
-    const anchorOffset = domTextOffset(cell, domSelection.anchorNode, domSelection.anchorOffset);
-    const headOffset = domTextOffset(cell, domSelection.focusNode, domSelection.focusOffset);
-    if (anchorOffset === null || headOffset === null) return;
-
-    const anchor = sourceRange.from + renderedTableCellOffsetToSource(source, anchorOffset);
-    const head = sourceRange.from + renderedTableCellOffsetToSource(source, headOffset);
-    const current = view.state.selection.main;
-    if (current.anchor !== anchor || current.head !== head) {
-      view.dispatch({ selection: { anchor, head } });
-    }
-    window.dispatchEvent(new Event('kardleaf-user-caret'));
-    console.log(
-      `[KardLeafCM6TableTrace] selection row=${rowIdx} col=${colIdx} header=${rowIdx < 0} ` +
-        `dom=${anchorOffset}:${headOffset} source=${anchor}:${head}`,
-    );
   }
 
   private moveToSameColumnNextRow(
@@ -873,7 +1093,7 @@ class EditableTableWidget extends WidgetType {
     colIdx: number,
   ) {
     const nextRowIdx = currentRowIdx + 1;
-    const nextValue = currentCell.textContent ?? '';
+    const nextValue = tableCellDraftValue(currentCell);
     const raw = currentCell.dataset.raw ?? '';
     const hasDraftChange = nextValue !== raw;
 
@@ -985,7 +1205,7 @@ class EditableTableWidget extends WidgetType {
   ): TableData {
     const updated = cloneTableData(this.data);
     const nextValue = activeCell.isConnected
-      ? activeCell.textContent ?? ''
+      ? tableCellDraftValue(activeCell)
       : activeCell.dataset.raw ?? '';
     if (markCommitted) activeCell.dataset.raw = nextValue;
     if (rowIdx === -1) {
@@ -1143,10 +1363,15 @@ function focusCellEnd(target: HTMLElement) {
   target.focus({ preventScroll: true });
   const range = document.createRange();
   range.selectNodeContents(target);
+  const trailingControl = target.querySelector('.cm-table-row-handle, .cm-table-col-handle');
+  if (trailingControl) range.setEndBefore(trailingControl);
+  const placeholder = target.querySelector('[data-table-placeholder]');
+  if (placeholder) range.setEndBefore(placeholder);
   range.collapse(false);
   const sel = window.getSelection();
   sel?.removeAllRanges();
   sel?.addRange(range);
+  target.focus({ preventScroll: true });
   target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
@@ -1252,7 +1477,11 @@ function buildTableDecorations(state: EditorState): DecorationSet {
       const tableData = parseMarkdownTable(tableSource);
       if (!tableData) return;
 
-      const showSource = isTableInSourceMode(sourceRanges, node.from, node.to);
+      // Search selections must expose editable source instead of remaining inside an atomic table widget.
+      // Keep the user's explicit source-mode ranges separate so closing search restores the table.
+      const query = getSearchQuery(state);
+      const showSource = isTableInSourceMode(sourceRanges, node.from, node.to) ||
+        (query.valid && query.search.length > 0 && shouldShowSource(state, node.from, node.to));
 
       if (!showSource) {
         decorations.push(
@@ -1291,7 +1520,12 @@ const tableField = StateField.define<DecorationSet>({
   },
   update(deco, tr) {
     const hasModeToggle = tr.effects.some((e) => e.is(setTableSourceMode));
-    if (tr.docChanged || tr.reconfigured || hasModeToggle) {
+    const hasSearchChange = tr.effects.some(e => e.is(setSearchQuery)) ||
+      (tr.selection && getSearchQuery(tr.state).search.length > 0);
+    const parsed = syntaxTree(tr.startState) !== syntaxTree(tr.state);
+    const resumed = selectionRenderingFrozen(tr.startState) && !selectionRenderingFrozen(tr.state);
+    if (tr.docChanged || tr.reconfigured || hasModeToggle ||
+      hasSearchChange || !selectionRenderingFrozen(tr.state) && (parsed || resumed)) {
       return buildTableDecorations(tr.state);
     }
     return deco;

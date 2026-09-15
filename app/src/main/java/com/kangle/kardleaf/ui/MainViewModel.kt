@@ -143,7 +143,7 @@ class MainViewModel(
         val options: NoteSearchOptions = NoteSearchOptions(),
     ) {
         val isActive: Boolean
-            get() = query.isNotBlank() || options.hasMetadataFilters
+            get() = query.isNotEmpty() || options.hasMetadataFilters
     }
 
     data class EditorSearchJump(
@@ -151,6 +151,8 @@ class MainViewModel(
         val noteId: String,
         val query: String,
         val preferredStart: Int = -1,
+        val options: NoteSearchOptions = NoteSearchOptions(),
+        val scope: String? = null,
     )
 
     sealed interface WikilinkPrompt {
@@ -406,7 +408,7 @@ class MainViewModel(
             if (match != null) {
                 if (match.scope == "历史版本") historyScopeCount++
                 if (match.startOffset < 0) unpositionedCount++
-                matches[note.id] = match
+                matches[note.id] = match.copy(query = request.query, options = request.options)
             }
         }
         KardLeafLog.d(
@@ -736,6 +738,39 @@ class MainViewModel(
     private val _isEditorOpen = MutableStateFlow(false)
     val isEditorOpen: StateFlow<Boolean> = _isEditorOpen.asStateFlow()
 
+    private val _s3Applying = MutableStateFlow(false)
+    val s3Applying: StateFlow<Boolean> = _s3Applying.asStateFlow()
+
+    private suspend fun beginS3Apply() = kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {
+        check(!_isEditorOpen.value && !_editorDirty.value && !_isImportingLibrary.value && _currentScreen.value != Screen.Tasks) {
+            "请先关闭编辑器或任务页面，再接收 S3 文件"
+        }
+        _s3Applying.value = true
+        externalRefreshJob?.cancel()
+    }
+
+    internal suspend fun withS3LocalAccess(applying: Boolean, block: suspend () -> Unit) {
+        if (applying) beginS3Apply()
+        try {
+            val dispatcher = if (applying) Dispatchers.IO + kotlinx.coroutines.NonCancellable else Dispatchers.IO
+            kotlinx.coroutines.withContext(dispatcher) { repository.withS3FileAccess(applying, block) }
+        } finally {
+            if (applying) kotlinx.coroutines.withContext(Dispatchers.Main.immediate + kotlinx.coroutines.NonCancellable) { _s3Applying.value = false }
+        }
+    }
+
+    internal suspend fun refreshAfterS3() {
+        beginS3Apply()
+        try {
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                val result = repository.refreshAfterS3()
+                check(result.success) { "S3 文件已保存，本地缓存刷新失败；下次同步将重试" }
+            }
+        } finally {
+            kotlinx.coroutines.withContext(Dispatchers.Main.immediate + kotlinx.coroutines.NonCancellable) { _s3Applying.value = false }
+        }
+    }
+
     private val _isOpeningNoteContent = MutableStateFlow(false)
     val isOpeningNoteContent: StateFlow<Boolean> = _isOpeningNoteContent.asStateFlow()
 
@@ -835,7 +870,7 @@ class MainViewModel(
     }
 
     private fun isDashboardSearchActive(): Boolean =
-        _searchQuery.value.isNotBlank() || _searchOptions.value.hasMetadataFilters
+        _searchQuery.value.isNotEmpty() || _searchOptions.value.hasMetadataFilters
 
     private fun currentDashboardSort(): Pair<PrefsManager.SortOrder, PrefsManager.SortDirection> {
         val customSortKey = customSortStorageKeyFor(_currentFilter.value)
@@ -1018,6 +1053,8 @@ class MainViewModel(
         changedPaths: List<String> = emptyList(),
         reason: NoteRefreshReason = NoteRefreshReason.EXTERNAL_OBSERVER,
     ) {
+        if (com.kangle.kardleaf.data.sync.S3SyncGate.activeRoot == prefsManager.getRootUri()) return
+        if (prefsManager.getRootUri()?.let { prefsManager.s3Preferences.needsRefresh(it) } == true) return
         if (_isImportingLibrary.value) {
             logStartupPerf("externalVaultChanged skip library import")
             return
@@ -1252,18 +1289,21 @@ class MainViewModel(
         note: Note,
         query: String,
         openSession: EditorOpenSession? = null,
+        renderedMatch: SearchMatch? = null,
     ) {
         val dashboardMatchState = dashboardSearchMatches.value
             .takeIf { it.query == query }
-        val dashboardMatch = dashboardMatchState?.matchesByNoteId?.get(note.id)
-        val preferredStart = dashboardMatch?.startOffset ?: -1
+        val dashboardMatch = renderedMatch ?: dashboardMatchState?.matchesByNoteId?.get(note.id)
+        val options = dashboardMatch?.options ?: dashboardMatchState?.options ?: _searchOptions.value
+        // SQLite offsets count code points; resolve the first match again against full UTF-16 text.
+        val preferredStart = if (options == NoteSearchOptions()) -1 else dashboardMatch?.startOffset ?: -1
         KardLeafLog.d(
             SEARCH_TRACE_TAG,
             "dashboard jump request ${SearchQueryUtils.describeForLog(query)} " +
                 "options=${dashboardMatchState?.options ?: _searchOptions.value} scope=${dashboardMatch?.scope ?: "none"} " +
                 "preferredStart=$preferredStart",
         )
-        prepareEditorSearchJump(note, query, preferredStart)
+        prepareEditorSearchJump(note, dashboardMatch?.query ?: query, preferredStart, options, dashboardMatch?.scope)
         openNote(note, openSession)
     }
 
@@ -1271,19 +1311,22 @@ class MainViewModel(
         note: Note,
         query: String,
         preferredStart: Int = -1,
+        options: NoteSearchOptions = NoteSearchOptions(),
+        scope: String? = null,
     ) {
-        val trimmedQuery = query.trim()
-        if (trimmedQuery.isNotBlank()) {
+        if (query.isNotEmpty()) {
             editorSearchJumpRequestId += 1
             _pendingEditorSearchJump.value = EditorSearchJump(
                 requestId = editorSearchJumpRequestId,
                 noteId = note.id,
-                query = trimmedQuery,
+                query = query,
                 preferredStart = preferredStart,
+                options = options,
+                scope = scope,
             )
             KardLeafLog.d(
                 SEARCH_TRACE_TAG,
-                "dashboard jump queued ${SearchQueryUtils.describeForLog(trimmedQuery)} " +
+                "dashboard jump queued ${SearchQueryUtils.describeForLog(query)} " +
                     "preferredStart=$preferredStart requestId=$editorSearchJumpRequestId",
             )
         }
@@ -3132,6 +3175,9 @@ class MainViewModel(
         currentFolder: String,
     ): String = editorViewModel.preparePreviewMarkdown(markdown, currentFolder)
 
+    suspend fun importAttachment(uri: Uri, folder: String) = editorViewModel.importAttachment(uri, folder)
+    suspend fun resolvePreviewAttachments(markdown: String, folder: String) = editorViewModel.resolvePreviewAttachments(markdown, folder)
+
     suspend fun importImage(
         uri: Uri,
         currentFolder: String,
@@ -3256,6 +3302,7 @@ class MainViewModel(
 private fun NoteSearchMatch.toDashboardSearchMatch(): SearchMatch =
     SearchMatch(
         scope = scope,
-        snippet = snippet.ifBlank { "正文中命中，打开笔记查看完整内容" },
+        snippet = snippet.ifEmpty { "正文中命中，打开笔记查看完整内容" },
         startOffset = startOffset,
+        matchedText = matchedText,
     )

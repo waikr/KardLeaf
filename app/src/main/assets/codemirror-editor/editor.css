@@ -31,7 +31,7 @@ body {
 }
 
 body {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: sans-serif;
 }
 
 #app {
@@ -93,9 +93,12 @@ body {
   overflow: hidden;
 }
 
-.cm-searchMatch,
-.cm-searchMatch-selected {
+.cm-searchMatch {
   background-color: rgba(255, 214, 10, 0.55) !important;
+}
+
+.cm-searchMatch-selected {
+  background-color: rgba(255, 152, 0, 0.75) !important;
 }
 
 .cm-editor.kl-search-active .cm-selectionBackground,
@@ -110,6 +113,13 @@ body {
   overscroll-behavior: contain;
   touch-action: pan-y;
   font-family: inherit;
+}
+
+/* CM's base theme sets monospace/1.4 on the scroller, overriding inheritance
+   from the configured editor theme. Scope the override to live preview. */
+#editorRoot.kl-live-preview .cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
 }
 
 .kl-editor-title-header {
@@ -139,10 +149,11 @@ body {
   outline: none;
   background: transparent;
   color: var(--kl-shell-fg);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: inherit;
   font-size: var(--kl-title-font-size);
   font-weight: 400;
-  line-height: 1.5;
+  line-height: 1.272727;
+  letter-spacing: inherit;
 }
 
 .kl-editor-title-input::placeholder {
@@ -158,11 +169,88 @@ body {
   word-break: break-word;
 }
 
+/* CodeMirror's line-wrapping detector reads .cm-content itself. Keep a
+   pre-wrap fallback for WebViews that do not support white-space: break-spaces. */
+.cm-content.cm-lineWrapping {
+  min-width: 0;
+  flex-shrink: 1;
+  white-space: pre-wrap;
+}
+
 .cm-line {
   max-width: 100%;
+  padding: 0 !important;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* Keep live-preview block content away from its visual left edge. */
+#editorRoot.kl-live-preview .cm-line.cm-blockQuote-d0 {
+  padding-left: 14px !important;
+}
+
+#editorRoot.kl-live-preview .cm-line.cm-blockQuote-d1 {
+  padding-left: 28px !important;
+}
+
+#editorRoot.kl-live-preview .cm-line.cm-blockQuote-d2 {
+  padding-left: 42px !important;
+}
+
+#editorRoot.kl-live-preview .cm-line.cm-blockQuote-d3 {
+  padding-left: 56px !important;
+}
+
+#editorRoot.kl-live-preview .cm-line.cm-codeBlock {
+  padding-left: 12px !important;
+}
+
+/* Keep the rendered edit surface aligned with assets/preview/preview.html. */
+.cm-headerLine {
+  line-height: inherit !important;
+}
+
+.cm-h1 {
+  font-size: 1.68rem !important;
+  line-height: 1.24 !important;
+  padding-top: 0 !important;
+  padding-bottom: 10px !important;
+}
+
+.cm-h2 {
+  font-size: 1.42rem !important;
+  line-height: 1.30 !important;
+  padding-top: 14px !important;
+  padding-bottom: 7px !important;
+}
+
+.cm-h3 {
+  font-size: 1.17em !important;
+  line-height: inherit !important;
+  padding-top: 12px !important;
+  padding-bottom: 6px !important;
+}
+
+.cm-h4 {
+  font-size: 1em !important;
+  line-height: inherit !important;
+  padding-top: 12px !important;
+  padding-bottom: 6px !important;
+}
+
+.cm-h5 {
+  font-size: 0.83em !important;
+  line-height: inherit !important;
+  padding-top: 12px !important;
+  padding-bottom: 6px !important;
+}
+
+.cm-h6 {
+  font-size: 0.67em !important;
+  line-height: inherit !important;
+  padding-top: 12px !important;
+  padding-bottom: 6px !important;
 }
 
 .kl-wiki-image {
