@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.io.File
@@ -18,7 +19,14 @@ internal class S3VaultFiles(private val context: Context, private val rootUri: S
     private val recovery = File(context.noBackupFilesDir, "s3-recovery/${s3Hash(rootUri)}")
     private val gson = Gson()
     private data class Entry(val file: DocumentFile, val name: String, val size: Long, val time: Long, val directory: Boolean)
-    private data class Publication(val path: String, val temporary: String, val backup: String)
+    private data class Publication(
+        @field:SerializedName(value = "path", alternate = ["a"])
+        val path: String,
+        @field:SerializedName(value = "temporary", alternate = ["b"])
+        val temporary: String,
+        @field:SerializedName(value = "backup", alternate = ["c"])
+        val backup: String,
+    )
 
     private fun create(dir: DocumentFile, name: String, mime: String): DocumentFile {
         val uri = DocumentsContract.createDocument(resolver, dir.uri, mime, name) ?: error("无法创建同步文件或目录")

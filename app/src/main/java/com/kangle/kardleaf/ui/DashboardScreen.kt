@@ -59,7 +59,6 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Search
@@ -205,7 +204,6 @@ fun DashboardScreen(
     onOpenDrawer: () -> Unit,
     onOpenCategoryDrawer: () -> Unit = {},
     onCreateQuickNoteClick: () -> Unit = {},
-    onWebClipImported: (KardLeafCustomFeatures.ExternalNoteDraft) -> Unit = {},
     onCreateDrawingClick: () -> Unit = {},
     onOpenPrivacy: () -> Unit = {},
     edgeDrawerWidthPx: Float = 0f,
@@ -280,7 +278,6 @@ fun DashboardScreen(
     val shouldShowInitialNoteLoading = isLoading && allNotes.isEmpty() && !isImportingLibrary
     val context = LocalContext.current
     val unnamedNoteDateFormat = KardLeafCustomFeatures.getUnnamedNoteDateFormat(context)
-    val showHomeWebClipAction = remember(context) { PrefsManager(context).isHomeWebClipActionVisible() }
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val listStates = remember { mutableMapOf<MainViewModel.NoteFilter, LazyStaggeredGridState>() }
@@ -398,6 +395,7 @@ fun DashboardScreen(
     var folderNavigationShowTags by remember { mutableStateOf(false) }
     var folderNavigationEditMode by remember { mutableStateOf(false) }
     var folderNavigationFocusedParentPath by remember { mutableStateOf("") }
+    var folderNavigationCreateFolderRequest by remember { mutableStateOf(0) }
     val folderNavigationChevronRotation by animateFloatAsState(
         targetValue = if (showFolderNavigationPanel) 180f else 0f,
         label = "DashboardFolderChevron",
@@ -409,7 +407,6 @@ fun DashboardScreen(
     var handledSampleCleanupPromptRequestId by remember { mutableStateOf(0L) }
     var previewDashboardTitlePath by remember { mutableStateOf<String?>(null) }
     var showQuickCreateActions by remember { mutableStateOf(false) }
-    var showWebClipImportDialog by remember { mutableStateOf(false) }
     var shareNotesPending by remember { mutableStateOf<List<Note>>(emptyList()) }
     var imageShareWarningPending by remember { mutableStateOf<List<Note>>(emptyList()) }
     var shareBlockedMessage by remember { mutableStateOf<String?>(null) }
@@ -427,6 +424,7 @@ fun DashboardScreen(
         folderNavigationShowTags = currentFilter is MainViewModel.NoteFilter.YamlTag
         folderNavigationEditMode = false
         folderNavigationFocusedParentPath = ""
+        folderNavigationCreateFolderRequest = 0
         showFolderNavigationPanel = true
         folderNavigationPanelProgress = 0f
         coroutineScope.launch {
@@ -1111,7 +1109,11 @@ fun DashboardScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Text(
-                                            text = previewDashboardTitlePath?.let(::dashboardTitleForPath) ?: dashboardTitle(currentFilter),
+                                            text = if (showFolderNavigationPanel && folderNavigationShowTags) {
+                                                "标签"
+                                            } else {
+                                                previewDashboardTitlePath?.let(::dashboardTitleForPath) ?: dashboardTitle(currentFilter)
+                                            },
                                             style = MaterialTheme.typography.titleLarge,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -1156,19 +1158,6 @@ fun DashboardScreen(
                             }
                         },
                         actions = {
-                            if (showHomeWebClipAction) {
-                                IconButton(
-                                    onClick = {
-                                        focusManager.clearFocus()
-                                        showWebClipImportDialog = true
-                                    },
-                                ) {
-                                    Icon(
-                                        Icons.Outlined.Language,
-                                        contentDescription = "网页转 Markdown",
-                                    )
-                                }
-                            }
                             if (showFolderNavigationPanel) {
                                 if (!folderNavigationShowTags && folderNavigationFocusedParentPath.isNotBlank()) {
                                     IconButton(
@@ -1186,6 +1175,7 @@ fun DashboardScreen(
                                 FolderNavigationToolbarActions(
                                     editMode = folderNavigationEditMode,
                                     showTags = folderNavigationShowTags,
+                                    onCreateFolder = { folderNavigationCreateFolderRequest++ },
                                     onEditToggle = {
                                         val enteringEditMode = !folderNavigationEditMode
                                         folderNavigationEditMode = enteringEditMode
@@ -1325,15 +1315,6 @@ fun DashboardScreen(
                             horizontalAlignment = Alignment.End,
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            HomeFabIconButton(
-                                icon = Icons.Outlined.Language,
-                                contentDescription = "网页转 Markdown",
-                                onSwipeDown = { showQuickCreateActions = false },
-                                onClick = {
-                                    showQuickCreateActions = false
-                                    showWebClipImportDialog = true
-                                },
-                            )
                             HomeFabIconButton(
                                 icon = Icons.Outlined.Description,
                                 contentDescription = "新建速记",
@@ -2476,6 +2457,8 @@ fun DashboardScreen(
                 getFolderDisplayOrder = viewModel::getFolderDisplayOrder,
                 onSaveFolderDisplayOrder = viewModel::saveFolderDisplayOrder,
                 onCreateFolder = viewModel::createLabel,
+                createFolderRequest = folderNavigationCreateFolderRequest,
+                onCreateFolderRequestConsumed = { folderNavigationCreateFolderRequest = 0 },
                 onRenameFolder = { oldPath, newPath, onError ->
                     viewModel.renameLabel(
                         oldPath = oldPath,
@@ -2499,17 +2482,6 @@ fun DashboardScreen(
                 },
             )
             }
-        }
-        if (showWebClipImportDialog) {
-            WebClipImportDialog(
-                onDismiss = { showWebClipImportDialog = false },
-                onImported = { draft ->
-                    showWebClipImportDialog = false
-                    onWebClipImported(draft)
-                },
-                targetFolder = (currentFilter as? MainViewModel.NoteFilter.Label)?.name.orEmpty(),
-                importImage = viewModel::importImage,
-            )
         }
         if (showSampleCleanupConfirmDialog) {
             AlertDialog(

@@ -104,6 +104,8 @@ internal fun FolderNavigationPanel(
     getFolderDisplayOrder: (String) -> List<String>,
     onSaveFolderDisplayOrder: (String, List<String>) -> Unit,
     onCreateFolder: (String) -> Unit,
+    createFolderRequest: Int,
+    onCreateFolderRequestConsumed: () -> Unit,
     onRenameFolder: (String, String, (String) -> Unit) -> Unit,
     onDeleteFolder: (String, () -> Unit, (String) -> Unit) -> Unit,
     onDismiss: () -> Unit,
@@ -145,11 +147,12 @@ internal fun FolderNavigationPanel(
     )
     var panelHeightPx by remember { mutableStateOf(0) }
     var renameDialog by remember { mutableStateOf<FolderNavigationNameDialogState?>(null) }
+    var deleteFolderPath by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     fun openRenameDialog(path: String) {
         renameDialog = FolderNavigationNameDialogState(
-            title = "重命名目录",
+            title = "编辑",
             confirmText = "保存",
             initialName = path.substringAfterLast('/'),
             onConfirm = { name ->
@@ -169,12 +172,16 @@ internal fun FolderNavigationPanel(
                     )
                 }
             },
+            onDelete = {
+                renameDialog = null
+                deleteFolderPath = path
+            },
         )
     }
 
     fun openCreateDialog(parentPath: String) {
         renameDialog = FolderNavigationNameDialogState(
-            title = if (parentPath.isBlank()) "新建二级目录" else "新建三级目录",
+            title = "新建文件夹",
             confirmText = "创建",
             initialName = "",
             onConfirm = { name ->
@@ -186,6 +193,13 @@ internal fun FolderNavigationPanel(
                 }
             },
         )
+    }
+
+    LaunchedEffect(createFolderRequest) {
+        if (createFolderRequest > 0) {
+            openCreateDialog(focusedParentPath)
+            onCreateFolderRequestConsumed()
+        }
     }
 
     LaunchedEffect(focusedParentPath, normalizedLabels) {
@@ -441,6 +455,7 @@ internal fun FolderNavigationPanel(
                             },
                             onSelectPath = { path -> onSelect(MainViewModel.NoteFilter.Label(path)) },
                             onRenamePath = ::openRenameDialog,
+                            onCreateChild = ::openCreateDialog,
                             onExpandPath = { path ->
                                 onFocusedParentPathChange(path)
                             },
@@ -458,6 +473,35 @@ internal fun FolderNavigationPanel(
             onConfirm = { name ->
                 dialogState.onConfirm(name)
                 renameDialog = null
+            },
+        )
+    }
+
+    deleteFolderPath?.let { path ->
+        AlertDialog(
+            onDismissRequest = { deleteFolderPath = null },
+            title = { Text("删除分类") },
+            text = { Text("确定删除“$path”及其子级分类和内容吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteFolder(
+                            path,
+                            { deleteFolderPath = null },
+                            { message ->
+                                deleteFolderPath = null
+                                errorMessage = message.ifBlank { "删除失败" }
+                            },
+                        )
+                    },
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteFolderPath = null }) {
+                    Text("取消")
+                }
             },
         )
     }
@@ -526,11 +570,27 @@ private fun folderNavigationPalette(): FolderNavigationPalette {
 internal fun FolderNavigationToolbarActions(
     editMode: Boolean,
     showTags: Boolean,
+    onCreateFolder: () -> Unit,
     onEditToggle: () -> Unit,
     onSwitch: () -> Unit,
 ) {
     val palette = folderNavigationPalette()
     val haptic = LocalHapticFeedback.current
+    if (editMode) {
+        IconButton(
+            onClick = {
+                onCreateFolder()
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            },
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_file_tree_new_folder),
+                contentDescription = "添加文件夹",
+                tint = palette.text,
+                modifier = Modifier.size(24.dp),
+            )
+        }
+    }
     IconButton(
         onClick = {
             onEditToggle()
@@ -640,6 +700,7 @@ private fun FolderNavigationSectionView(
     onDragOver: (String, String?) -> Unit,
     onSelectPath: (String) -> Unit,
     onRenamePath: (String) -> Unit,
+    onCreateChild: (String) -> Unit,
     onExpandPath: (String) -> Unit,
 ) {
     val palette = folderNavigationPalette()
@@ -748,7 +809,12 @@ private fun FolderNavigationSectionView(
                         modifier = Modifier.fillMaxWidth().padding(start = 8.dp),
                     )
                 }
-                if (section.chips.isNotEmpty()) {
+                if (editMode) {
+                    FolderNavigationAddButton(
+                        contentDescription = "添加子级分类",
+                        onClick = { onCreateChild(section.path) },
+                    )
+                } else if (section.chips.isNotEmpty()) {
                     Box(
                         modifier =
                             Modifier
@@ -1251,16 +1317,41 @@ private fun FolderNavigationNameDialog(
             )
         },
         confirmButton = {
-            TextButton(
-                enabled = trimmed.isNotBlank() && !trimmed.contains('/'),
-                onClick = { onConfirm(trimmed) },
-            ) {
-                Text(state.confirmText)
+            if (state.onDelete != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    TextButton(onClick = state.onDelete) {
+                        Text("删除", color = MaterialTheme.colorScheme.error)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = onDismiss) {
+                            Text("取消")
+                        }
+                        TextButton(
+                            enabled = trimmed.isNotBlank() && !trimmed.contains('/'),
+                            onClick = { onConfirm(trimmed) },
+                        ) {
+                            Text(state.confirmText)
+                        }
+                    }
+                }
+            } else {
+                TextButton(
+                    enabled = trimmed.isNotBlank() && !trimmed.contains('/'),
+                    onClick = { onConfirm(trimmed) },
+                ) {
+                    Text(state.confirmText)
+                }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消")
+            if (state.onDelete == null) {
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
+                }
             }
         },
     )
@@ -1294,6 +1385,7 @@ private data class FolderNavigationNameDialogState(
     val confirmText: String,
     val initialName: String,
     val onConfirm: (String) -> Unit,
+    val onDelete: (() -> Unit)? = null,
 )
 
 private fun buildFolderNavigationEditItems(

@@ -1,6 +1,9 @@
 package com.kangle.kardleaf.ui
 
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class KardLeafCustomFeaturesTest {
@@ -72,6 +75,32 @@ class KardLeafCustomFeaturesTest {
         assertEquals(
             "CUSTOM_FUNCTION:${item.id}",
             KardLeafCustomFeatures.EditorToolbarEntry.CustomFunction(item).key,
+        )
+    }
+
+    @Test
+    fun readsLegacyR8JsonAndWritesStableNames() {
+        val gson = Gson()
+        val quickType = object : TypeToken<List<KardLeafCustomFeatures.QuickTextItem>>() {}.type
+        val quickTexts = gson.fromJson<List<KardLeafCustomFeatures.QuickTextItem>>(
+            "[{\"a\":\"名称\",\"b\":\"内容\"}]",
+            quickType,
+        )
+        assertEquals(
+            KardLeafCustomFeatures.QuickTextItem(name = "名称", content = "内容"),
+            quickTexts.single(),
+        )
+        assertTrue(gson.toJson(quickTexts).contains("\"name\""))
+        assertTrue(gson.toJson(quickTexts).contains("\"content\""))
+
+        val functionType = object : TypeToken<List<KardLeafCustomFeatures.CustomFunctionItem>>() {}.type
+        val functions = gson.fromJson<List<KardLeafCustomFeatures.CustomFunctionItem>>(
+            "[{\"a\":\"按钮\",\"b\":\"<svg/>\",\"c\":\"**\",\"d\":\"id\"}]",
+            functionType,
+        )
+        assertEquals(
+            KardLeafCustomFeatures.CustomFunctionItem(name = "按钮", svg = "<svg/>", content = "**", id = "id"),
+            functions.single(),
         )
     }
 }

@@ -1668,16 +1668,6 @@ ${folder.children.joinToString(separator = "\n") { "- $it" }}
                                                 createQuickNoteWithSelectedKernel(source = "home_bottom_toolbar_quick_memo")
                                             }
                                         },
-                                        onWebClipImported = { draft ->
-                                            if (!isDrawerContentBlocked()) {
-                                                markEditorOpenStart("dashboard_web_clip")
-                                                blockDrawerOpenBriefly()
-                                                createNoteWithSelectedKernel(
-                                                    draft = draft,
-                                                    source = "dashboard_web_clip",
-                                                )
-                                            }
-                                        },
                                         onCreateDrawingClick = {
                                             if (!isDrawerContentBlocked()) {
                                                 markEditorOpenStart("dashboard_fab_drawing")

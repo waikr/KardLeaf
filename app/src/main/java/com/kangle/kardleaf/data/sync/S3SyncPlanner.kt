@@ -1,5 +1,6 @@
 package com.kangle.kardleaf.data.sync
 
+import com.google.gson.annotations.SerializedName
 import java.security.MessageDigest
 
 internal data class S3FileState(
@@ -13,7 +14,12 @@ internal data class S3FileState(
     fun remoteVersion(): String = if (directory) "directory" else "$size:$modifiedMs:$etag"
 }
 
-internal data class S3Baseline(val local: String, val remote: String)
+internal data class S3Baseline(
+    @field:SerializedName(value = "local", alternate = ["a"])
+    val local: String,
+    @field:SerializedName(value = "remote", alternate = ["b"])
+    val remote: String,
+)
 
 enum class S3SyncAction(val label: String) {
     UPLOAD("上传"), DOWNLOAD("下载"), DELETE_LOCAL("删除本地"), DELETE_REMOTE("删除远端"),

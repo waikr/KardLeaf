@@ -3,12 +3,17 @@ package com.kangle.kardleaf.data.sync
 import android.content.Context
 import android.util.AtomicFile
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import java.io.File
 
 internal data class S3StoredState(
+    @field:SerializedName(value = "version", alternate = ["a"])
     val version: Int = 1,
+    @field:SerializedName(value = "initialized", alternate = ["b"])
     val initialized: Boolean = false,
+    @field:SerializedName(value = "pendingRefresh", alternate = ["c"])
     val pendingRefresh: Boolean = false,
+    @field:SerializedName(value = "files", alternate = ["d"])
     val files: Map<String, S3Baseline> = emptyMap(),
 )
 

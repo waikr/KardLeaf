@@ -306,7 +306,6 @@ fun KardLeafSettingsScreen(
     val settingsEnglish = appLanguage == "en"
     var editorBottomToolbarAlwaysVisible by remember { mutableStateOf(prefsManager.isEditorBottomToolbarAlwaysVisible()) }
     var homeActionStyle by remember { mutableStateOf(prefsManager.getHomeActionStyle()) }
-    var homeWebClipActionVisible by remember { mutableStateOf(prefsManager.isHomeWebClipActionVisible()) }
     var homeBottomToolbarOrder by remember { mutableStateOf(prefsManager.getHomeBottomToolbarItemOrder()) }
     var homeBottomToolbarHiddenItems by remember { mutableStateOf(prefsManager.getHomeBottomToolbarHiddenItems()) }
     var homeBottomToolbarButtonSizeDp by remember { mutableStateOf(prefsManager.getHomeBottomToolbarButtonSizeDp()) }
@@ -456,7 +455,6 @@ fun KardLeafSettingsScreen(
         SettingsSearchItem(Icons.Outlined.Restore, settingsText(settingsEnglish, "重置", "Reset"), "其他 / Other", "重置 reset 恢复默认", { showResetDialog = true }),
         SettingsSearchItem(Icons.Outlined.MoreHoriz, settingsText(settingsEnglish, "更多", "More"), "其他 / Other", "其他更多 other more", { openSettingsPage("otherMore") }),
     ) + listOf(
-        pageSearchItem(Icons.Outlined.Language, "首页顶部显示保存网站", "首页 / Home", "首页顶部 保存网站 web clip", "home"),
         pageSearchItem(settingsBottomToolbarIcon, "首页底部工具栏", "首页 / Home", "首页底部工具栏 新建按钮 home toolbar", "homeBottomToolbar"),
         pageSearchItem(settingsLongPressToolbarIcon, "长按选择栏", "首页 / Home", "选择栏 selection toolbar 长按", "selectionToolbar"),
         dialogSearchItem(settingsSingleColumnIcon, "布局模式", "应用界面 / Interface", "布局模式 列表 双列 layout list grid", "layout"),
@@ -1118,7 +1116,6 @@ fun KardLeafSettingsScreen(
         appLanguage = PrefsManager.DEFAULT_APP_LANGUAGE
         editorBottomToolbarAlwaysVisible = PrefsManager.DEFAULT_EDITOR_BOTTOM_TOOLBAR_ALWAYS_VISIBLE
         homeActionStyle = PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR
-        homeWebClipActionVisible = PrefsManager.DEFAULT_HOME_WEB_CLIP_ACTION_VISIBLE
         homeBottomToolbarOrder = PrefsManager.HomeBottomToolbarItemId.DEFAULT_ORDER
         homeBottomToolbarHiddenItems = PrefsManager.HomeBottomToolbarItemId.DEFAULT_HIDDEN_ITEMS
         trashFolderName = PrefsManager.DEFAULT_TRASH_FOLDER_NAME
@@ -1181,7 +1178,6 @@ fun KardLeafSettingsScreen(
         prefsManager.saveAppLanguage(appLanguage)
         prefsManager.saveEditorBottomToolbarAlwaysVisible(editorBottomToolbarAlwaysVisible)
         prefsManager.saveHomeActionStyle(homeActionStyle)
-        prefsManager.saveHomeWebClipActionVisible(homeWebClipActionVisible)
         prefsManager.saveHomeBottomToolbarItemOrder(homeBottomToolbarOrder)
         prefsManager.saveHomeBottomToolbarHiddenItems(homeBottomToolbarHiddenItems)
         KardLeafCustomFeatures.saveEditorToolbarOrder(context, toolbarOrder)
@@ -2228,21 +2224,6 @@ fun KardLeafSettingsScreen(
                 "home" -> {
                     SettingsSectionTitle(settingsText(settingsEnglish, "首页", "Home"))
                     SettingsListGroup {
-                        SettingsSwitchRow(
-                            icon = Icons.Outlined.Language,
-                            title = settingsText(settingsEnglish, "首页顶部显示保存网站", "Show Save Website on home top bar"),
-                            subtitle = if (homeWebClipActionVisible) {
-                                settingsText(settingsEnglish, "已显示在首页顶部工具栏", "Shown on the home top bar")
-                            } else {
-                                settingsText(settingsEnglish, "默认隐藏，可从新建笔记顶部使用", "Hidden by default; available in new notes")
-                            },
-                            checked = homeWebClipActionVisible,
-                            onCheckedChange = { visible ->
-                                homeWebClipActionVisible = visible
-                                prefsManager.saveHomeWebClipActionVisible(visible)
-                                onSettingsChanged()
-                            },
-                        )
                         SettingsActionRow(
                             icon = if (homeActionStyle == PrefsManager.HomeActionStyle.BOTTOM_TOOLBAR) settingsBottomToolbarIcon else Icons.Outlined.Add,
                             title = settingsText(settingsEnglish, "首页底部工具栏", "Home toolbar"),
@@ -3865,7 +3846,7 @@ fun KardLeafSettingsScreen(
                     SettingsActionRow(
                         icon = Icons.Outlined.Info,
                         title = "版本",
-                        subtitle = versionName.ifBlank { "1.10.0" },
+                        subtitle = versionName.ifBlank { "1.10.3" },
                         onClick = {},
                     )
                     if (BuildConfig.KARDLEAF_DEV_VARIANT || BuildConfig.DEBUG) {

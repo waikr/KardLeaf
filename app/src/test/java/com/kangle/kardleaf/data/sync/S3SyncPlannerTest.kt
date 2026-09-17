@@ -1,5 +1,7 @@
 package com.kangle.kardleaf.data.sync
 
+import com.google.gson.Gson
+import com.kangle.kardleaf.data.repository.prefs.S3Settings
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -63,5 +65,39 @@ class S3SyncPlannerTest {
         listOf("../x", "/x", "x/../y", "x//y", "x\\y", "x\u0000y").forEach { path ->
             assertThrows(IllegalArgumentException::class.java) { S3Paths.validate(path) }
         }
+    }
+
+    @Test
+    fun readsLegacyR8StateAndSettingsJson() {
+        val gson = Gson()
+        assertEquals(
+            S3Settings(
+                endpoint = "https://s3.example.com/",
+                region = "cn-test-1",
+                bucket = "bucket-name",
+                prefix = "notes/",
+                forcePathStyle = true,
+                syncUnderscore = true,
+                realtime = true,
+                pollSeconds = 60,
+            ),
+            gson.fromJson(
+                """{"a":"https://s3.example.com/","b":"cn-test-1","c":"bucket-name","d":"notes/","e":true,"f":true,"g":true,"h":60}""",
+                S3Settings::class.java,
+            ),
+        )
+        assertEquals(
+            S3StoredState(
+                version = 1,
+                initialized = true,
+                pendingRefresh = true,
+                files = mapOf("note.md" to S3Baseline("local", "remote")),
+            ),
+            gson.fromJson(
+                """{"a":1,"b":true,"c":true,"d":{"note.md":{"a":"local","b":"remote"}}}""",
+                S3StoredState::class.java,
+            ),
+        )
+        assertTrue(gson.toJson(S3Baseline("local", "remote")).contains("\"local\""))
     }
 }

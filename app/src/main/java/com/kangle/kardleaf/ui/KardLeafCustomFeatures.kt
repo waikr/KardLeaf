@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import com.google.gson.reflect.TypeToken
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -86,14 +87,20 @@ object KardLeafCustomFeatures {
     }
 
     data class QuickTextItem(
+        @field:SerializedName(value = "name", alternate = ["a"])
         val name: String = "",
+        @field:SerializedName(value = "content", alternate = ["b"])
         val content: String = "",
     )
 
     data class CustomFunctionItem(
+        @field:SerializedName(value = "name", alternate = ["a"])
         val name: String = "",
+        @field:SerializedName(value = "svg", alternate = ["b"])
         val svg: String = "",
+        @field:SerializedName(value = "content", alternate = ["c"])
         val content: String = "",
+        @field:SerializedName(value = "id", alternate = ["d"])
         val id: String = "",
     )
 

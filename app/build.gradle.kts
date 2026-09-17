@@ -89,8 +89,8 @@ android {
         applicationId = "com.kardleaf"
         minSdk = 23
         targetSdk = 34
-        versionCode = 1100
-        versionName = "1.10.0"
+        versionCode = 1103
+        versionName = "1.10.3"
         manifestPlaceholders["appLabel"] = "KardLeaf"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "KARDLEAF_TRIAL_GATEWAY_URL", buildConfigString("https://ai.waikrfaio.xyz"))

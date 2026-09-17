@@ -12,6 +12,7 @@ object KardLeafLogTags {
     const val FOLDER_NAVIGATION = "KardLeafFolderNavigation"
     const val TASK_SAVE = "KardLeafTaskSave"
     const val TASK_MARKDOWN = "KardLeafTaskMarkdown"
+    const val BETA_EDITOR_DIAGNOSTIC = "KardLeafBetaEditorDiagnostic"
 }
 
 object KardLeafPerfLog {

@@ -14,3 +14,8 @@
 
 -keep class com.google.gson.reflect.TypeToken { *; }
 -keep class * extends com.google.gson.reflect.TypeToken { *; }
+
+# Flexmark resolves several enum constants by their source names at runtime.
+-keepclassmembers enum com.vladsch.flexmark.** {
+    <fields>;
+}

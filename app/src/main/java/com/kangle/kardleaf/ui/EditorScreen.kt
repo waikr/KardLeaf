@@ -4542,7 +4542,8 @@ fun EditorScreen(
                                 Text(item.name)
                             },
                             onClick = {
-                                insertAtCursor(item.content)
+                                editorController.replaceSelection(item.content)
+                                markEditorDirty()
                                 showQuickTextMenu = false
                             },
                         )

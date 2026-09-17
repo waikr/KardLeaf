@@ -51,6 +51,7 @@ import androidx.core.widget.NestedScrollView
 import com.kangle.kardleaf.BuildConfig
 import com.kangle.kardleaf.data.utils.EditorOpenSession
 import com.kangle.kardleaf.data.utils.KardLeafLog
+import com.kangle.kardleaf.data.utils.KardLeafLogTags.BETA_EDITOR_DIAGNOSTIC
 import com.kangle.kardleaf.data.utils.NoteFormatUtils
 import com.kangle.kardleaf.ui.editor.EditorViewportAnchor
 import com.kangle.kardleaf.ui.editor.EditorViewportEdge
@@ -412,6 +413,8 @@ private class KernelExtendedEditText(
         imagePreviewResolver = null
         inlineImageClickCallback = null
     }
+
+    fun inlineImageSpanCount(): Int = imagePreviewItems.size
 
     override fun focusSearch(direction: Int): View? {
         diagnostic?.invoke("focusSearch role=$role direction=$direction constrained=true")
@@ -1380,6 +1383,15 @@ internal class KardLeafQuillpadEditorView
                     count: Int,
                 ) {
                     changedText = s?.subSequence(start, start + count)?.toString().orEmpty()
+                    if (!programmaticChange && !continuingList) {
+                        val kind = when {
+                            before == 0 && count > 0 -> "insert"
+                            before > 0 && count == 0 -> "delete"
+                            before > 0 && count > 0 -> "replace"
+                            else -> "other"
+                        }
+                        logBetaDiagnostic("textChanged kind=$kind start=$start before=$before inserted=$count")
+                    }
                 }
 
                 override fun afterTextChanged(s: Editable?) {
@@ -1553,6 +1565,7 @@ internal class KardLeafQuillpadEditorView
                     }
                 },
             )
+            logBetaDiagnostic("init")
         }
 
         fun configureUserPerf(
@@ -1730,6 +1743,7 @@ internal class KardLeafQuillpadEditorView
                         if (contentLength() == generation.contentLength && measuredGenerationSequence != generation.sequence) {
                             measuredGenerationSequence = generation.sequence
                             logUserStage("newTextMeasureDone", generation)
+                            logBetaDiagnostic("textMeasure")
                         }
                     }
                 }
@@ -1743,11 +1757,39 @@ internal class KardLeafQuillpadEditorView
                         ) {
                             laidOutGenerationSequence = generation.sequence
                             logUserStage("newTextLayoutDone", generation)
+                            logBetaDiagnostic("textLayout")
                         }
                     }
                 }
             }
             logIme(event)
+        }
+
+        private fun logBetaDiagnostic(
+            event: String,
+            spanType: String = "QuillpadInlineImageLineHeightSpan",
+            spanCount: Int = contentEditText.inlineImageSpanCount(),
+        ) {
+            if (!KardLeafLog.isEnabled(BETA_EDITOR_DIAGNOSTIC)) return
+            val text = contentEditText.text?.toString().orEmpty()
+            val generation = currentTextGeneration
+            val config = appliedConfig
+            val layout = contentEditText.layout
+            KardLeafLog.d(
+                BETA_EDITOR_DIAGNOSTIC,
+                "event=$event editor=${System.identityHashCode(this)} " +
+                    "documentGeneration=${openSession?.contentGeneration ?: -1} " +
+                    "textGeneration=${generation?.sessionId ?: -1}.${generation?.sequence ?: -1} " +
+                    "textLen=${text.length} textHash=${text.hashCode()} " +
+                    "fontSizeSp=${config?.contentTextSizeSp ?: -1f} font=${config?.contentFontFamily ?: "unknown"} " +
+                    "lineHeightMultiplier=${contentEditText.lineSpacingMultiplier} lineSpacingExtraPx=${contentEditText.lineSpacingExtra} " +
+                    "letterSpacingSp=${config?.contentLetterSpacingSp ?: -1f} letterSpacingEm=${contentEditText.letterSpacing} " +
+                    "textScaleX=${contentEditText.paint.textScaleX} includeFontPadding=${contentEditText.includeFontPadding} " +
+                    "breakStrategy=${contentEditText.breakStrategy} hyphenationFrequency=${contentEditText.hyphenationFrequency} " +
+                    "viewWidth=${contentEditText.width} measuredHeight=${contentEditText.measuredHeight} " +
+                    "lineCount=${layout?.lineCount ?: -1} layoutHeight=${layout?.height ?: -1} " +
+                    "spanType=$spanType spanCount=$spanCount",
+            )
         }
 
         private fun logIme(event: String) {
@@ -1837,6 +1879,15 @@ internal class KardLeafQuillpadEditorView
                 logIme("configure skipped=same")
                 return
             }
+            val typographyChanged =
+                appliedConfig?.let { previous ->
+                    previous.titleTextSizeSp != config.titleTextSizeSp ||
+                        previous.contentTextSizeSp != config.contentTextSizeSp ||
+                        previous.contentLineHeightMultiplier != config.contentLineHeightMultiplier ||
+                        previous.contentLetterSpacingSp != config.contentLetterSpacingSp ||
+                        previous.contentParagraphSpacingDp != config.contentParagraphSpacingDp ||
+                        previous.contentFontFamily != config.contentFontFamily
+                } ?: true
             appliedConfig = config
             configureAppliedCount++
             logIme("configure applied=true")
@@ -1864,6 +1915,7 @@ internal class KardLeafQuillpadEditorView
                 isCursorVisible = !readOnly
                 showSoftInputOnFocus = !readOnly
             }
+            if (typographyChanged) logBetaDiagnostic("typographyChanged")
         }
 
         fun bindDocument(
@@ -1881,6 +1933,10 @@ internal class KardLeafQuillpadEditorView
                 logIme("bindDocument skipped=same")
                 return
             }
+            logBetaDiagnostic(
+                "bindDocument keyHash=${documentKey.hashCode()} incomingLen=${initialContent.length} " +
+                    "incomingHash=${initialContent.hashCode()}",
+            )
             if (boundDocumentKey == null) {
                 boundDocumentKey = documentKey
                 setInitialSnapshot(preferredSnapshot.title, preferredSnapshot.content, preferredSnapshot.selection)
@@ -1947,6 +2003,7 @@ internal class KardLeafQuillpadEditorView
                 "editorOpen setTextDone durationUs=$durationUs ${generation.trace} " +
                     (openSession?.trace(content.length) ?: "sessionId=$sessionId documentKey=${boundDocumentKey?.hashCode()} elapsed=-1ms"),
             )
+            logBetaDiagnostic("setInitialSnapshot")
             scheduleCurrentTextPreDraw(generation)
         }
 
@@ -2194,21 +2251,29 @@ internal class KardLeafQuillpadEditorView
             val selection = getContentSelection()
             val start = minOf(selection.start, selection.end)
             val end = maxOf(selection.start, selection.end)
+            val replacedLength = end - start
             withProgrammaticContentChange {
                 contentEditText.text?.replace(start, end, insertion)
             }
             contentEditText.setSelection(start + insertion.length)
+            logBetaDiagnostic(
+                "replaceSelection start=$start before=$replacedLength inserted=${insertion.length}",
+            )
         }
 
         override fun replaceContent(
             newText: String,
             selection: TextRange?,
         ) {
+            val previousLength = contentEditText.length()
             withProgrammaticContentChange {
                 contentEditText.text?.replace(0, contentEditText.length(), newText)
             }
             val target = selection ?: TextRange(newText.length)
             setContentSelection(target.start, target.end)
+            logBetaDiagnostic(
+                "batchReplace start=0 before=$previousLength inserted=${newText.length}",
+            )
         }
 
         override fun setContentSelection(
@@ -2270,14 +2335,28 @@ internal class KardLeafQuillpadEditorView
                     Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
                 )
             }
+            if (result.matches.isNotEmpty()) {
+                logBetaDiagnostic(
+                    "spanAdd type=QuillpadSearchHighlightSpan",
+                    "QuillpadSearchHighlightSpan",
+                    result.matches.size,
+                )
+            }
             contentEditText.invalidate()
             return result.matches.size
         }
 
         override fun clearContentSearchHighlights() {
             val editable = contentEditText.text ?: return
-            editable.getSpans(0, editable.length, QuillpadSearchHighlightSpan::class.java)
-                .forEach(editable::removeSpan)
+            val spans = editable.getSpans(0, editable.length, QuillpadSearchHighlightSpan::class.java)
+            spans.forEach(editable::removeSpan)
+            if (spans.isNotEmpty()) {
+                logBetaDiagnostic(
+                    "spanRemove type=QuillpadSearchHighlightSpan removed=${spans.size}",
+                    "QuillpadSearchHighlightSpan",
+                    0,
+                )
+            }
             contentEditText.invalidate()
         }
 

@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import com.kangle.kardleaf.data.sync.S3Paths
 import com.kangle.kardleaf.data.sync.s3Hash
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -15,13 +16,21 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 data class S3Settings(
+    @field:SerializedName(value = "endpoint", alternate = ["a"])
     val endpoint: String = "",
+    @field:SerializedName(value = "region", alternate = ["b"])
     val region: String = "",
+    @field:SerializedName(value = "bucket", alternate = ["c"])
     val bucket: String = "",
+    @field:SerializedName(value = "prefix", alternate = ["d"])
     val prefix: String = "",
+    @field:SerializedName(value = "forcePathStyle", alternate = ["e"])
     val forcePathStyle: Boolean = false,
+    @field:SerializedName(value = "syncUnderscore", alternate = ["f"])
     val syncUnderscore: Boolean = false,
+    @field:SerializedName(value = "realtime", alternate = ["g"])
     val realtime: Boolean = false,
+    @field:SerializedName(value = "pollSeconds", alternate = ["h"])
     val pollSeconds: Int = 30,
 ) {
     fun validate() {

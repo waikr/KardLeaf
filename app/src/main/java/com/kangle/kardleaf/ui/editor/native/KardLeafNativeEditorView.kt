@@ -150,6 +150,8 @@ class KardLeafEditorController {
         }
 
         val isStillAtLoadedText = cachedTitle == lastLoadedTitle && cachedContent == lastLoadedContent
+        val contentChanged = cachedContent != initialContent
+        if (!isDifferentDocument && !contentChanged && cachedTitle == initialTitle) return
         if (isDifferentDocument || isStillAtLoadedText) {
             this.documentKey = documentKey
             lastLoadedTitle = initialTitle
@@ -158,7 +160,7 @@ class KardLeafEditorController {
             cachedContent = initialContent
             cachedSelection = when {
                 isDifferentDocument -> initialSelection ?: TextRange(initialContent.length, initialContent.length)
-                initialSelection != null -> initialSelection
+                contentChanged && initialSelection != null -> initialSelection
                 else -> TextRange(
                     cachedSelection.start.coerceIn(0, initialContent.length),
                     cachedSelection.end.coerceIn(0, initialContent.length),
@@ -404,10 +406,7 @@ class KardLeafEditorController {
             val end = cachedSelection.end.coerceIn(0, cachedContent.length)
             val selectedText = cachedContent.substring(start, end)
             val insertion = prefix + selectedText + suffix
-            cachedContent = cachedContent.substring(0, start) + insertion + cachedContent.substring(end)
-            val cursor = start + prefix.length + selectedText.length
-            cachedSelection = TextRange(cursor, cursor)
-            notifyExternalContentUpdater()
+            replaceSelection(insertion)
         }
     }
 

@@ -122,7 +122,6 @@ class PrefsManager(context: Context) {
         private const val KEY_CUSTOM_HIDDEN_FILENAME_PATTERNS = "custom_hidden_filename_patterns"
         private const val KEY_APP_LANGUAGE = "app_language"
         private const val KEY_HOME_ACTION_STYLE = "home_action_style"
-        private const val KEY_HOME_WEB_CLIP_ACTION_VISIBLE = "home_web_clip_action_visible"
         private const val KEY_HOME_BOTTOM_TOOLBAR_ITEM_ORDER = "home_bottom_toolbar_item_order"
         private const val KEY_HOME_BOTTOM_TOOLBAR_HIDDEN_ITEMS = "home_bottom_toolbar_hidden_items"
         private const val KEY_HOME_BOTTOM_TOOLBAR_DEFAULTS_V2_MIGRATED = "home_bottom_toolbar_defaults_v2_migrated"
@@ -173,7 +172,6 @@ class PrefsManager(context: Context) {
         const val DEFAULT_APP_LANGUAGE = "zh"
         const val DEFAULT_EDITOR_BOTTOM_TOOLBAR_ALWAYS_VISIBLE = true
         const val DEFAULT_HOME_ACTION_STYLE = "BOTTOM_TOOLBAR"
-        const val DEFAULT_HOME_WEB_CLIP_ACTION_VISIBLE = false
         const val DEFAULT_HOME_BOTTOM_TOOLBAR_BUTTON_SIZE_DP = 46
         const val DEFAULT_TASK_CORNER_RADIUS_DP = 16
         const val THEME_CORNER_RADIUS_FOLLOW = -1
@@ -382,13 +380,6 @@ class PrefsManager(context: Context) {
         return runCatching { HomeActionStyle.valueOf(name ?: DEFAULT_HOME_ACTION_STYLE) }
             .getOrDefault(HomeActionStyle.BOTTOM_TOOLBAR)
     }
-
-    fun saveHomeWebClipActionVisible(visible: Boolean) {
-        prefs.edit().putBoolean(KEY_HOME_WEB_CLIP_ACTION_VISIBLE, visible).apply()
-    }
-
-    fun isHomeWebClipActionVisible(): Boolean =
-        prefs.getBoolean(KEY_HOME_WEB_CLIP_ACTION_VISIBLE, DEFAULT_HOME_WEB_CLIP_ACTION_VISIBLE)
 
     enum class ThemeColor {
         BLUE,
