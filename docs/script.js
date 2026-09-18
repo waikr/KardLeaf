@@ -5,7 +5,25 @@ const releaseVersion = document.querySelector('#releaseVersion');
 const releaseSize = document.querySelector('#releaseSize');
 const downloadLinks = document.querySelectorAll('[data-download-link]');
 const downloadTexts = document.querySelectorAll('[data-download-text]');
-const localApkUrl = './downloads/KardLeaf.apk';
+const pageLang = (root.lang || '').toLowerCase().startsWith('en') ? 'en' : 'zh';
+const i18n = pageLang === 'en'
+  ? {
+      locale: 'en-US',
+      latest: 'Latest release',
+      direct: 'Direct download',
+      releases: 'Download from Releases',
+      fallback: 'Get the latest APK from GitHub Releases',
+      download: 'Download'
+    }
+  : {
+      locale: 'zh-CN',
+      latest: '最新版本',
+      direct: '本站直连',
+      releases: '前往 Releases 下载',
+      fallback: '前往 GitHub Releases 获取最新安装包',
+      download: '下载'
+    };
+const localApkUrl = '/downloads/KardLeaf.apk';
 
 const savedTheme = localStorage.getItem('kardleaf-theme');
 const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -32,7 +50,7 @@ const formatBytes = (bytes) => {
 
 const formatDate = (value) => {
   if (!value) return '';
-  return new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat(i18n.locale, {
     year: 'numeric',
     month: 'long',
     day: 'numeric'
@@ -54,7 +72,7 @@ async function loadLatestRelease() {
     if (localApkAvailable) {
       downloadLinks.forEach((link) => { link.href = localApkUrl; });
       if (localApkSize > 0) releaseSize.textContent = formatBytes(localApkSize);
-      releaseStatus.textContent = `本站直连${localApkSize > 0 ? ` · ${formatBytes(localApkSize)}` : ''}`;
+      releaseStatus.textContent = `${i18n.direct}${localApkSize > 0 ? ` · ${formatBytes(localApkSize)}` : ''}`;
     }
   } catch (error) {
     localApkAvailable = false;
@@ -68,7 +86,7 @@ async function loadLatestRelease() {
 
     const release = await response.json();
     const apk = release.assets?.find((asset) => asset.name.toLowerCase().endsWith('.apk'));
-    const version = release.name || release.tag_name || '最新版本';
+    const version = release.name || release.tag_name || i18n.latest;
     const date = formatDate(release.published_at);
 
     releaseVersion.textContent = version;
@@ -78,14 +96,14 @@ async function loadLatestRelease() {
       if (!localApkAvailable) {
         downloadLinks.forEach((link) => { link.href = apk.browser_download_url; });
       }
-      downloadTexts.forEach((text) => { text.textContent = `下载 ${version}`; });
-      releaseStatus.textContent = `${version}${date ? ` · ${date}` : ''} · ${formatBytes(displayedSize)}${localApkAvailable ? ' · 本站直连' : ''}`;
+      downloadTexts.forEach((text) => { text.textContent = `${i18n.download} ${version}`; });
+      releaseStatus.textContent = `${version}${date ? ` · ${date}` : ''} · ${formatBytes(displayedSize)}${localApkAvailable ? ` · ${i18n.direct}` : ''}`;
     } else if (!localApkAvailable) {
-      releaseStatus.textContent = `${version}${date ? ` · ${date}` : ''} · 前往 Releases 下载`;
+      releaseStatus.textContent = `${version}${date ? ` · ${date}` : ''} · ${i18n.releases}`;
     }
   } catch (error) {
     if (!localApkAvailable) {
-      releaseStatus.textContent = '前往 GitHub Releases 获取最新安装包';
+      releaseStatus.textContent = i18n.fallback;
     }
   }
 }
