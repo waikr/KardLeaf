@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#4c7a62" />
-  <meta name="robots" content="index,follow,max-image-preview:large" />
-  <meta name="description" content="卡叶笔记（KardLeaf）是一款本地优先的 Android Markdown 笔记应用，支持真实 Markdown/TXT 文件、实时编辑与预览、Obsidian 工作流，以及 WebDAV / Syncthing 同步。" />
+  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1" />
+  <meta name="description" content="卡叶笔记（KardLeaf）是一款本地优先的开源 Android Markdown 笔记应用，使用真实 Markdown/TXT 文件，支持 Obsidian 工作流、全文搜索、任务、思维导图、WebDAV/S3/Syncthing 同步与隐私加密。" />
   <link rel="canonical" href="https://waikrfaio.xyz/" />
   <link rel="alternate" hreflang="zh-CN" href="https://waikrfaio.xyz/" />
   <link rel="alternate" hreflang="en" href="https://waikrfaio.xyz/en/" />
@@ -36,25 +36,6 @@
         "name": "卡叶笔记",
         "alternateName": ["KardLeaf", "KardLeaf 卡叶笔记"],
         "inLanguage": "zh-CN"
-      },
-      {
-        "@type": "SoftwareApplication",
-        "@id": "https://waikrfaio.xyz/#app",
-        "name": "卡叶笔记",
-        "alternateName": "KardLeaf",
-        "url": "https://waikrfaio.xyz/",
-        "downloadUrl": "https://github.com/waikr/KardLeaf/releases/latest",
-        "applicationCategory": "ProductivityApplication",
-        "operatingSystem": "Android 6.0+",
-        "description": "卡叶笔记（KardLeaf）是一款本地优先的 Android Markdown 笔记应用，正文保存为真实 Markdown/TXT 文件，支持实时编辑与预览、Obsidian 工作流和灵活同步。",
-        "image": "https://waikrfaio.xyz/images/home-cards.jpg",
-        "screenshot": "https://waikrfaio.xyz/images/home-cards.jpg",
-        "softwareHelp": "https://github.com/waikr/KardLeaf/blob/main/README.md",
-        "sameAs": [
-          "https://github.com/waikr/KardLeaf"
-        ],
-        "license": "https://github.com/waikr/KardLeaf/blob/main/LICENSE",
-        "isAccessibleForFree": true
       }
     ]
   }
@@ -84,6 +65,7 @@
       <nav class="desktop-nav" aria-label="主导航">
         <a href="#features">功能</a>
         <a href="#screenshots">截图</a>
+        <a href="/faq/">FAQ</a>
         <a href="#download">下载</a>
         <a href="https://github.com/waikr/KardLeaf" target="_blank" rel="noreferrer">GitHub</a>
       </nav>
@@ -279,6 +261,92 @@
       </div>
     </section>
 
+
+
+    <section class="section section-soft" id="topic-guides">
+      <div class="container">
+        <div class="section-heading reveal">
+          <div><span class="section-kicker">功能专题</span><h2>按需求直接查看详细说明</h2></div>
+          <p>每个专题都是独立可索引页面，包含当前公开版本的能力、使用方式、兼容边界与相关功能，方便按具体需求了解 KardLeaf。</p>
+        </div>
+        <div class="topic-link-grid">
+          <a class="topic-link-card" href="/features/editor/"><strong>Markdown 编辑器</strong><span>实时编辑、预览、表格、公式、Mermaid</span></a>
+          <a class="topic-link-card" href="/features/organization/"><strong>笔记与文件管理</strong><span>本地文件、多级文件夹、标签与批量操作</span></a>
+          <a class="topic-link-card" href="/features/search/"><strong>全文搜索</strong><span>标题/正文、正则、标签、日期与统计</span></a>
+          <a class="topic-link-card" href="/features/tasks/"><strong>任务与提醒</strong><span>Markdown 任务、重复任务与系统提醒</span></a>
+          <a class="topic-link-card" href="/features/mind-map/"><strong>思维导图</strong><span>从 Markdown 标题生成可交互导图</span></a>
+          <a class="topic-link-card" href="/features/relationships/"><strong>知识关系图</strong><span>Wikilink 双向链接与自定义关系图</span></a>
+          <a class="topic-link-card" href="/features/images-drawing/"><strong>图片与绘图</strong><span>图库、本地图片、绘图与图片标注</span></a>
+          <a class="topic-link-card" href="/features/media-attachments/"><strong>音视频与附件</strong><span>本地音频、视频与普通附件预览</span></a>
+          <a class="topic-link-card" href="/features/privacy-history/"><strong>隐私与历史版本</strong><span>加密仓库、生物识别、版本恢复</span></a>
+          <a class="topic-link-card" href="/features/sync-backup/"><strong>同步与备份</strong><span>WebDAV、S3、Syncthing 与自动备份</span></a>
+          <a class="topic-link-card" href="/features/obsidian/"><strong>Obsidian 兼容</strong><span>Vault、YAML、Wikilink 与开放文件工作流</span></a>
+          <a class="topic-link-card" href="/features/web-clip/"><strong>网页笔记</strong><span>正文提取、在线阅读与离线保存</span></a>
+          <a class="topic-link-card" href="/features/widgets-capture/"><strong>桌面小部件</strong><span>笔记、任务、每日笔记与快捷记录</span></a>
+          <a class="topic-link-card" href="/features/quick-notes/"><strong>速记</strong><span>分享接收、Quick Memo 与快速新建</span></a>
+          <a class="topic-link-card" href="/features/daily-notes/"><strong>每日笔记</strong><span>日期型记录、工作日志与日记流程</span></a>
+          <a class="topic-link-card" href="/features/archive-trash/"><strong>归档与废弃</strong><span>恢复、彻底删除与自动清理</span></a>
+          <a class="topic-link-card" href="/features/customization/"><strong>界面自定义</strong><span>主题、侧边栏、工具栏与编辑排版</span></a>
+          <a class="topic-link-card" href="/features/ai/"><strong>AI 写作助手</strong><span>摘要、润色、翻译与自定义模型接口</span></a>
+          <a class="topic-link-card" href="/features/updates/"><strong>版本更新</strong><span>GitHub Releases 与应用内更新检查</span></a>
+          <a class="topic-link-card" href="/features/"><strong>完整功能总览</strong><span>查看 KardLeaf 当前公开功能全貌</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section faq-preview-section" id="faq">
+      <div class="container">
+        <div class="section-heading reveal">
+          <div>
+            <span class="section-kicker">常见问题</span>
+            <h2>开始之前，你可能想知道这些</h2>
+          </div>
+          <p>从文件保存、Obsidian 兼容到同步和隐私，先回答最常见的问题。更完整的下载安装、迁移、任务、AI、网页笔记与故障排查见完整 FAQ。</p>
+        </div>
+
+        <div class="faq-preview-grid">
+          <details class="faq-item reveal" open>
+            <summary>KardLeaf 和普通云笔记最大的区别是什么？</summary>
+            <div class="faq-answer"><p>核心区别是<strong>本地文件优先</strong>：正文以真实 Markdown/TXT 文件保存，不需要先进入某个专有云格式。你可以直接备份、复制、同步，也能继续用 Obsidian、VS Code、Typora 等工具读取。</p></div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>需要注册账号或联网才能记笔记吗？</summary>
+            <div class="faq-answer"><p>不需要强制账号。普通本地创建、编辑、搜索和分类可以离线使用；只有 WebDAV/S3 同步、网页读取、AI 和版本检查等网络功能需要联网。</p></div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>能直接配合 Obsidian 使用吗？</summary>
+            <div class="faq-answer"><p>可以把普通 Markdown Vault 作为开放文件工作流使用，并保留目录、标签、YAML 属性和 <code>[[Wikilink]]</code> 等常用结构。KardLeaf 不是 Obsidian 官方客户端，也不承诺兼容全部桌面插件。<a href="/features/obsidian/">了解兼容边界 →</a></p></div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>支持哪些同步方式？</summary>
+            <div class="faq-answer"><p>可以使用应用内 WebDAV、S3 兼容对象存储，也可以让 Syncthing 或其他文件同步工具负责整个笔记库。<a href="/features/sync-backup/">查看同步与备份 →</a></p></div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>隐私笔记只是“隐藏”吗？</summary>
+            <div class="faq-answer"><p>不是。隐私仓库使用独立加密流程；当前公开实现包含 PBKDF2-HMAC-SHA256、AES-GCM、HKDF-SHA256 和随机主密钥。<a href="/features/privacy-history/">查看加密实现 →</a></p></div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>除了写 Markdown，还有任务和思维导图吗？</summary>
+            <div class="faq-answer"><p>有。KardLeaf 提供独立任务清单与提醒，也能从 Markdown 标题生成思维导图，并用 Wikilink 生成笔记关系图。</p></div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>可以把网页保存成笔记吗？</summary>
+            <div class="faq-answer"><p>可以先在线读取并提取网页正文，需要编辑时再离线保存为 Markdown，还能选择下载网页图片。<a href="/features/web-clip/">查看网页笔记 →</a></p></div>
+          </details>
+          <details class="faq-item reveal">
+            <summary>换手机或以后不用 KardLeaf，笔记怎么办？</summary>
+            <div class="faq-answer"><p>正文就是普通 Markdown/TXT 文件，可以直接复制迁移；应用还提供 JSON 导出/导入与定期自动备份，降低被单一应用锁定的风险。</p></div>
+          </details>
+        </div>
+
+        <div class="faq-preview-more reveal">
+          <a class="button button-secondary" href="/faq/">
+            <span><small>安装 / Markdown / 同步 / 隐私 / 故障排查</small><strong>查看 106 个完整 FAQ →</strong></span>
+          </a>
+        </div>
+      </div>
+    </section>
+
     <section class="section download-section" id="download">
       <div class="container download-card reveal">
         <div class="download-pattern" aria-hidden="true"></div>
@@ -316,7 +384,7 @@
       </div>
       <div class="footer-links">
         <div><strong>项目</strong><a href="https://github.com/waikr/KardLeaf">GitHub</a><a href="https://github.com/waikr/KardLeaf/releases">版本发布</a><a href="https://github.com/waikr/KardLeaf/issues">问题反馈</a></div>
-        <div><strong>了解</strong><a href="#features">功能特性</a><a href="#screenshots">界面预览</a><a href="https://github.com/waikr/KardLeaf/blob/main/README.md">使用说明</a></div>
+        <div><strong>了解</strong><a href="#features">功能特性</a><a href="/features/">完整功能</a><a href="/faq/">常见问题</a><a href="#screenshots">界面预览</a><a href="https://github.com/waikr/KardLeaf/blob/main/README.md">使用说明</a></div>
       </div>
     </div>
     <div class="container footer-bottom">

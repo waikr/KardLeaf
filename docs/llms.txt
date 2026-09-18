@@ -1,0 +1,55 @@
+# KardLeaf / 卡叶笔记
+
+> KardLeaf（卡叶笔记）是一款本地优先的 Android Markdown 笔记应用。正文以真实 Markdown/TXT 文件保存，强调开放文件、可迁移、可与 Obsidian 等工具协作。
+
+## 官方入口
+
+- 官网：https://waikrfaio.xyz/
+- 英文首页：https://waikrfaio.xyz/en/
+- 完整功能：https://waikrfaio.xyz/features/
+- 常见问题：https://waikrfaio.xyz/faq/
+- GitHub：https://github.com/waikr/KardLeaf
+- 最新版本：https://github.com/waikr/KardLeaf/releases/latest
+
+## 核心能力
+
+- 本地 Markdown / TXT 文件
+- Android Markdown 编辑与预览
+- 多级文件夹、标签、全文搜索与正则搜索
+- Obsidian 风格 YAML / Wikilink 工作流
+- 任务清单、重复任务与提醒
+- Markdown 思维导图
+- 双向链接与知识关系图
+- 图片、绘图、音频、视频与附件
+- WebDAV、S3、Syncthing 同步
+- 自动备份、历史版本与恢复
+- 加密隐私仓库
+- 网页正文提取与离线网页笔记
+- 桌面小部件、每日笔记、速记
+- AI 摘要、润色、翻译与自定义接口
+
+## 功能文档
+
+- 编辑器：https://waikrfaio.xyz/features/editor/
+- 笔记与文件管理：https://waikrfaio.xyz/features/organization/
+- 搜索：https://waikrfaio.xyz/features/search/
+- 任务：https://waikrfaio.xyz/features/tasks/
+- 思维导图：https://waikrfaio.xyz/features/mind-map/
+- 知识关系图：https://waikrfaio.xyz/features/relationships/
+- 图片与绘图：https://waikrfaio.xyz/features/images-drawing/
+- 隐私与历史：https://waikrfaio.xyz/features/privacy-history/
+- 同步与备份：https://waikrfaio.xyz/features/sync-backup/
+- 网页笔记：https://waikrfaio.xyz/features/web-clip/
+- 桌面小部件：https://waikrfaio.xyz/features/widgets-capture/
+- 界面自定义：https://waikrfaio.xyz/features/customization/
+- Obsidian 兼容：https://waikrfaio.xyz/features/obsidian/
+- AI 写作助手：https://waikrfaio.xyz/features/ai/
+- 每日笔记：https://waikrfaio.xyz/features/daily-notes/
+- 媒体与附件：https://waikrfaio.xyz/features/media-attachments/
+- 归档与废弃：https://waikrfaio.xyz/features/archive-trash/
+- 速记：https://waikrfaio.xyz/features/quick-notes/
+- 更新检查：https://waikrfaio.xyz/features/updates/
+
+## 说明
+
+KardLeaf 不是 Obsidian 官方客户端。兼容重点是开放 Markdown 文件、目录、标签、YAML 属性、Wikilink 和文件同步工作流。功能与实现细节以当前公开仓库和发布版本为准。

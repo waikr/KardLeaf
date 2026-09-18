@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#4c7a62" />
+  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1" />
+  <meta name="description" content="KardLeaf 卡叶笔记完整 FAQ：下载安装、Markdown、文件夹、Obsidian、WebDAV/S3/Syncthing、加密隐私、任务、思维导图、AI、网页笔记、备份迁移与故障排查。" />
+  <link rel="canonical" href="https://waikrfaio.xyz/faq/" />
+  <link rel="icon" href="/images/kardleaf.svg" type="image/svg+xml" />
+  <meta property="og:title" content="KardLeaf 常见问题 FAQ | 卡叶笔记" />
+  <meta property="og:description" content="从下载安装到 Markdown、Obsidian、同步、加密、任务、思维导图、AI、网页笔记和故障排查，一页查清 KardLeaf 常见问题。" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://waikrfaio.xyz/faq/" />
+  <meta property="og:site_name" content="卡叶笔记 KardLeaf" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta property="og:image" content="https://waikrfaio.xyz/images/home-cards.jpg" />
+  <meta property="og:image:alt" content="KardLeaf 卡叶笔记 Android 应用界面" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="KardLeaf 常见问题 FAQ | 卡叶笔记" />
+  <meta name="twitter:description" content="下载安装、Markdown、Obsidian、同步、隐私、任务、思维导图、AI、网页笔记和故障排查。" />
+  <meta name="twitter:image" content="https://waikrfaio.xyz/images/home-cards.jpg" />
+  <title>KardLeaf 常见问题 FAQ | 卡叶笔记 Markdown / Obsidian / 同步 / 隐私</title>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://waikrfaio.xyz/faq/#webpage","url":"https://waikrfaio.xyz/faq/","name":"KardLeaf 常见问题 FAQ | 卡叶笔记","description":"KardLeaf 卡叶笔记完整 FAQ：下载安装、Markdown、文件夹、Obsidian、WebDAV/S3/Syncthing、加密隐私、任务、思维导图、AI、网页笔记、备份迁移与故障排查。","inLanguage":"zh-CN","isPartOf":{"@id":"https://waikrfaio.xyz/#website"},"about":{"@id":"https://waikrfaio.xyz/#app"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"KardLeaf 首页","item":"https://waikrfaio.xyz/"},{"@type":"ListItem","position":2,"name":"常见问题 FAQ","item":"https://waikrfaio.xyz/faq/"}]},{"@type":"FAQPage","@id":"https://waikrfaio.xyz/faq/#faq","mainEntity":[{"@type":"Question","name":"卡叶笔记（KardLeaf）是什么？","acceptedAnswer":{"@type":"Answer","text":"卡叶笔记（英文名 KardLeaf ）是一款面向 Android 的本地优先 Markdown 笔记应用。它以真实 .md / .txt 文件为核心，提供编辑、预览、文件夹、标签、搜索、任务、思维导图、知识关系、同步、隐私仓库等能力。"}},{"@type":"Question","name":"KardLeaf 适合哪些用户？","acceptedAnswer":{"@type":"Answer","text":"适合希望 笔记文件掌握在自己手里 、需要 Android Markdown 编辑、使用 Obsidian/Typora/VS Code 工作流、想通过 WebDAV/S3/Syncthing 自己控制同步，或不希望被单一云笔记格式锁定的用户。"}},{"@type":"Question","name":"KardLeaf 是免费的吗？","acceptedAnswer":{"@type":"Answer","text":"项目当前以开源方式发布，官网直接提供 APK 下载入口，源码采用 Apache License 2.0。具体版本、发布包和变更请以 GitHub Releases 为准。"}},{"@type":"Question","name":"KardLeaf 是开源软件吗？","acceptedAnswer":{"@type":"Answer","text":"是。源码公开在 GitHub ，许可证为 Apache License 2.0，可在许可证允许的范围内查看、修改和分发代码。"}},{"@type":"Question","name":"KardLeaf 支持哪些系统？","acceptedAnswer":{"@type":"Answer","text":"当前公开版本面向 Android 6.0+ 。官网与仓库说明均以 Android 为主要平台。"}},{"@type":"Question","name":"KardLeaf 有 iOS、Windows 或 macOS 版本吗？","acceptedAnswer":{"@type":"Answer","text":"当前官网定位是 Android 应用。电脑端可以继续使用 Obsidian、VS Code、Typora 等工具打开同一批 Markdown 文件，再通过同步方案与手机协作。"}},{"@type":"Question","name":"KardLeaf 应该从哪里下载？","acceptedAnswer":{"@type":"Answer","text":"推荐从官网的“下载 APK”按钮或 GitHub Releases 最新版本 下载，避免来源不明的二次打包 APK。"}},{"@type":"Question","name":"安装 APK 时 Android 提示“禁止安装未知应用”怎么办？","acceptedAnswer":{"@type":"Answer","text":"这是 Android 对浏览器/文件管理器侧载 APK 的系统保护。你需要在系统设置中临时允许当前下载来源安装应用；安装完成后可以再关闭该权限。"}},{"@type":"Question","name":"KardLeaf 需要注册账号吗？","acceptedAnswer":{"@type":"Answer","text":"不需要强制注册账号。普通本地笔记可以直接使用；只有你主动启用 WebDAV、S3、AI 等网络功能时，才需要填写相应服务的配置。"}},{"@type":"Question","name":"没有网络还能使用 KardLeaf 吗？","acceptedAnswer":{"@type":"Answer","text":"可以。普通本地笔记的创建、编辑、搜索、分类、历史版本等核心能力不依赖互联网。网页读取、云同步、AI 请求和版本检查等网络功能需要联网。"}},{"@type":"Question","name":"KardLeaf 会自动更新吗？","acceptedAnswer":{"@type":"Answer","text":"应用内包含版本检查逻辑，可以查询 GitHub Releases 的最新版本并提示更新；实际安装仍以你下载并安装新的 APK 为准。详见 版本更新检查 。"}},{"@type":"Question","name":"如何确认自己安装的是最新版？","acceptedAnswer":{"@type":"Answer","text":"可以在应用设置中手动检查更新，也可以直接查看 最新 Release 的版本号和发布时间。"}},{"@type":"Question","name":"KardLeaf 的笔记保存在哪里？","acceptedAnswer":{"@type":"Answer","text":"笔记正文保存在你授权给应用的普通目录中，并以真实 Markdown/TXT 文件存在。应用数据库主要承担索引、缓存和状态管理，而不是把正文锁进专有数据库。详见 本地文件管理 。"}},{"@type":"Question","name":"KardLeaf 使用什么文件格式？","acceptedAnswer":{"@type":"Answer","text":"正文核心格式是 .md 和 .txt 。Markdown 文件可以继续被 Obsidian、VS Code、Typora 等工具读取。"}},{"@type":"Question","name":"如果删除 KardLeaf，Markdown 文件会不会一起消失？","acceptedAnswer":{"@type":"Answer","text":"正文位于你选择的笔记库目录中，是否保留取决于 Android 卸载时该目录的位置和系统行为。重要笔记仍建议定期复制笔记库并设置备份，不要把“卸载应用”当成备份方式。"}},{"@type":"Question","name":"可以直接导入现有 Markdown 文件夹吗？","acceptedAnswer":{"@type":"Answer","text":"KardLeaf 的设计就是使用普通文件夹作为笔记库。你可以把现有 .md / .txt 文件放在授权目录中，再让 KardLeaf 读取和建立索引。"}},{"@type":"Question","name":"支持多个笔记库吗？","acceptedAnswer":{"@type":"Answer","text":"支持。当前功能包含新增、切换、重命名和管理多个笔记库，可将工作、学习、私人资料分开。"}},{"@type":"Question","name":"支持多级文件夹吗？","acceptedAnswer":{"@type":"Answer","text":"支持真实的多级目录结构，也支持展开/折叠、创建、重命名、移动、自定义排序和隐藏目录等管理能力。"}},{"@type":"Question","name":"电脑修改 Markdown 后，手机能识别吗？","acceptedAnswer":{"@type":"Answer","text":"可以。KardLeaf 可以重新读取外部变化并刷新索引，因此电脑端修改同一批 Markdown 文件后，手机端仍可继续使用。"}},{"@type":"Question","name":"换手机时怎么迁移 KardLeaf？","acceptedAnswer":{"@type":"Answer","text":"最重要的是迁移你的笔记库文件夹；如果还希望恢复应用设置或其他应用数据，可以结合 JSON 导出/导入与自动备份。同步用户也可以先把旧设备内容完整同步到远端，再让新设备拉取。"}},{"@type":"Question","name":"KardLeaf 支持导出吗？","acceptedAnswer":{"@type":"Answer","text":"正文天然就是可复制的 Markdown/TXT 文件；此外设置中还有应用数据 JSON 导出/导入与自动备份功能。详见 同步与备份 。"}},{"@type":"Question","name":"归档和删除有什么区别？","acceptedAnswer":{"@type":"Answer","text":"归档用于把内容暂时移出日常视图但继续保留；“废弃/Trash”用于进入后续恢复或彻底清理流程。详见 归档、废弃与自动清理 。"}},{"@type":"Question","name":"误改笔记后能恢复旧内容吗？","acceptedAnswer":{"@type":"Answer","text":"普通笔记提供历史版本列表、关键词搜索、版本比较和恢复能力，也可配置历史版本保留数量。详见 历史版本 。"}},{"@type":"Question","name":"移动笔记后图片路径会不会失效？","acceptedAnswer":{"@type":"Answer","text":"KardLeaf 支持根目录和相对路径等图片模式，并包含移动文件时重写相对图片引用的处理。跨工具工作流中仍建议统一图片目录规则，避免不同编辑器各自改写路径。"}},{"@type":"Question","name":"KardLeaf 支持哪些 Markdown 格式？","acceptedAnswer":{"@type":"Answer","text":"除标题、列表、引用、链接、代码等基础 Markdown 外，当前编辑链路还包含表格、数学公式、代码块、Mermaid、Admonition、HTML 块、图片、Wikilink 等扩展能力。详见 Markdown 编辑器 。"}},{"@type":"Question","name":"可以边写边预览 Markdown 吗？","acceptedAnswer":{"@type":"Answer","text":"可以。KardLeaf 支持编辑与预览切换，并提供 CodeMirror 6 等编辑内核；你也可以设置打开笔记时优先进入编辑或预览。"}},{"@type":"Question","name":"为什么 KardLeaf 有多个编辑内核？","acceptedAnswer":{"@type":"Answer","text":"不同内核侧重不同体验：Native 系列强调原生输入/光标体验，CodeMirror 6 强调丰富 Markdown 交互与实时渲染。应用将文件管理与编辑内核分开，因此同一批 Markdown 文件可以切换不同编辑方式。"}},{"@type":"Question","name":"支持文章目录或大纲吗？","acceptedAnswer":{"@type":"Answer","text":"支持。编辑器侧边面板可以根据标题结构生成文章目录，用于长文快速定位。"}},{"@type":"Question","name":"支持在当前笔记内查找文字吗？","acceptedAnswer":{"@type":"Answer","text":"支持。编辑场景有文档内查找能力；跨笔记则使用全局搜索。"}},{"@type":"Question","name":"支持 [[双向链接]] 吗？","acceptedAnswer":{"@type":"Answer","text":"支持 Wikilink 形式的 [[笔记]] 链接，并可以进一步用于笔记关系图。详见 知识关系图 。"}},{"@type":"Question","name":"支持 YAML / Front Matter 吗？","acceptedAnswer":{"@type":"Answer","text":"支持解析和显示 Front Matter 属性，YAML 中的标签也可进入索引并用于筛选，适合与 Obsidian 工作流配合。"}},{"@type":"Question","name":"支持 Markdown 表格吗？","acceptedAnswer":{"@type":"Answer","text":"支持。编辑器包含表格工具和表格渲染逻辑，可在 Markdown 文档中处理表格。"}},{"@type":"Question","name":"支持数学公式吗？","acceptedAnswer":{"@type":"Answer","text":"支持。预览链路包含 KaTeX/TeX 相关渲染，编辑工具栏也提供数学内容入口。"}},{"@type":"Question","name":"支持 Mermaid 图表吗？","acceptedAnswer":{"@type":"Answer","text":"支持。代码中包含 Mermaid 渲染、缓存和放大查看相关逻辑。"}},{"@type":"Question","name":"可以插入本地图片吗？","acceptedAnswer":{"@type":"Answer","text":"可以。支持本地图片引用、预览、首页首图缩略图、图库和图片查看。详见 图片与绘图 。"}},{"@type":"Question","name":"支持画图或给图片做标注吗？","acceptedAnswer":{"@type":"Answer","text":"支持内置绘图，并提供画笔、荧光笔、橡皮、网格、撤销恢复及在原图上标注等能力。"}},{"@type":"Question","name":"支持音频、视频和普通附件吗？","acceptedAnswer":{"@type":"Answer","text":"支持在 Markdown Preview 中处理本地音频、视频和普通附件；音视频使用媒体控件和 Range 请求进行流式读取。详见 附件与媒体预览 。"}},{"@type":"Question","name":"可以统计字数吗？","acceptedAnswer":{"@type":"Answer","text":"可以。属性面板可统计字符数、词数、行数、段落数等，并尽量排除 Front Matter 对正文统计的干扰。"}},{"@type":"Question","name":"编辑工具栏能自定义吗？","acceptedAnswer":{"@type":"Answer","text":"可以。当前代码定义了多种内置工具，并允许调整工具栏顺序、配置快捷文本、自定义符号和自定义功能项。"}},{"@type":"Question","name":"能快速插入常用模板或文本吗？","acceptedAnswer":{"@type":"Answer","text":"可以使用快捷文本、自定义符号和自定义功能项保存常用片段；速记与外部 URL Scheme 也适合快速套用固定记录流程。"}},{"@type":"Question","name":"KardLeaf 支持全文搜索吗？","acceptedAnswer":{"@type":"Answer","text":"支持标题和正文搜索，并可组合大小写匹配、正则表达式、标签和文件夹条件。详见 搜索、日期与统计 。"}},{"@type":"Question","name":"可以只搜标题、不搜正文吗？","acceptedAnswer":{"@type":"Answer","text":"可以。搜索选项把标题与正文范围分开控制，可以只查标题、只查正文或同时搜索。"}},{"@type":"Question","name":"搜索支持正则表达式吗？","acceptedAnswer":{"@type":"Answer","text":"支持，可与大小写、标签、文件夹等条件一起使用。"}},{"@type":"Question","name":"搜索结果能跳到命中的位置吗？","acceptedAnswer":{"@type":"Answer","text":"搜索结果模型包含命中片段和偏移信息，可用于显示附近正文并从结果跳转到命中位置。"}},{"@type":"Question","name":"支持标签吗？","acceptedAnswer":{"@type":"Answer","text":"支持正文 #标签 与 YAML 标签，并有标签管理和标签筛选能力。"}},{"@type":"Question","name":"支持收藏和置顶吗？","acceptedAnswer":{"@type":"Answer","text":"支持收藏、置顶、最近修改、速记、随机、日期、归档、废弃等多种首页/侧边栏视图。"}},{"@type":"Question","name":"支持批量移动或批量管理笔记吗？","acceptedAnswer":{"@type":"Answer","text":"支持多选后的移动、复制、合并、置顶、收藏、标签、归档、分享、隐私处理和删除等批量操作。"}},{"@type":"Question","name":"可以按日期查看笔记吗？","acceptedAnswer":{"@type":"Answer","text":"可以按今天、本周、月份等时间范围浏览笔记，并按修改时间组织结果。"}},{"@type":"Question","name":"有记录热力图吗？","acceptedAnswer":{"@type":"Answer","text":"侧边栏包含按天统计的热力图组件，用于观察一段时间内的记录活动；具体指标和展示算法可能随版本调整。"}},{"@type":"Question","name":"笔记很多时怎么更快找到内容？","acceptedAnswer":{"@type":"Answer","text":"建议组合使用文件夹、标签、标题/正文范围、正则、日期视图和收藏；大型知识库还可以拆分为多个笔记库，以减少单一入口的管理复杂度。"}},{"@type":"Question","name":"KardLeaf 支持 WebDAV 同步吗？","acceptedAnswer":{"@type":"Answer","text":"支持应用内 WebDAV 同步管理器，并包含连接信息、同步预览、远端检查和实时同步相关配置。详见 WebDAV、S3 同步与自动备份 。"}},{"@type":"Question","name":"KardLeaf 支持 S3 / OSS 一类对象存储吗？","acceptedAnswer":{"@type":"Answer","text":"支持兼容 S3 API 的对象存储，设置包含端点、Bucket、前缀和凭据，并可先测试连接和生成同步计划。"}},{"@type":"Question","name":"可以用 Syncthing 同步吗？","acceptedAnswer":{"@type":"Answer","text":"可以。由于正文是普通文件夹中的 Markdown/TXT，你可以让 Syncthing 负责同步整个笔记库，KardLeaf 负责本地读取和索引。"}},{"@type":"Question","name":"可以一边用 Obsidian，一边用 KardLeaf 吗？","acceptedAnswer":{"@type":"Answer","text":"可以。常见方式是电脑用 Obsidian 打开 Vault，Android 用 KardLeaf 打开同一结构，再通过 Syncthing、WebDAV、S3 或其他文件同步方式传递修改。详见 Obsidian 工作流 。"}},{"@type":"Question","name":"KardLeaf 会强制把笔记上传到官方云吗？","acceptedAnswer":{"@type":"Answer","text":"不会强制。你可以只使用本地文件；如果需要多设备同步，可以自行选择 WebDAV、S3、Syncthing 或手动复制。"}},{"@type":"Question","name":"支持自动备份吗？","acceptedAnswer":{"@type":"Answer","text":"支持选择备份目标目录和备份周期；同时正文 Markdown/TXT 本身也可以直接复制保存。"}},{"@type":"Question","name":"两台设备同时修改同一篇笔记会怎样？","acceptedAnswer":{"@type":"Answer","text":"任何文件同步方案都可能产生冲突。KardLeaf 的同步实现包含差异计划和冲突选择，但更稳妥的方式仍是先让一端同步完成，再在另一端继续编辑。"}},{"@type":"Question","name":"离线写完后能等联网再同步吗？","acceptedAnswer":{"@type":"Answer","text":"可以先在本地继续写作，之后再执行你选择的同步方式。是否自动同步以及冲突处理取决于具体同步配置。"}},{"@type":"Question","name":"WebDAV 或 S3 连接失败应该检查什么？","acceptedAnswer":{"@type":"Answer","text":"先检查端点地址、账号/密钥、Bucket/路径、网络和服务端权限；优先使用应用中的连接测试或远端检查，再执行正式同步。"}},{"@type":"Question","name":"备份和同步是一回事吗？","acceptedAnswer":{"@type":"Answer","text":"不是。同步强调多端保持相近状态，错误删除也可能被同步；备份强调保留可恢复副本。重要数据建议同时保留独立备份。"}},{"@type":"Question","name":"KardLeaf 有加密笔记功能吗？","acceptedAnswer":{"@type":"Answer","text":"有独立隐私仓库。隐私内容不是只在首页隐藏，而是进入加密存储流程，并在解锁后才把内容加载到内存。详见 隐私仓库 。"}},{"@type":"Question","name":"隐私仓库使用什么加密方式？","acceptedAnswer":{"@type":"Answer","text":"当前公开实现使用 32 字节随机主密钥；密码 KDF 为基于 HMAC-SHA256 的 PBKDF2，默认 600,000 次；主密钥和正文使用 AES-GCM 相关流程，单篇笔记密钥还通过 HKDF-SHA256 派生。这里描述的是公开代码实现，不等同于第三方安全审计结论。"}},{"@type":"Question","name":"为什么需要 PBKDF2 这么多次迭代？","acceptedAnswer":{"@type":"Answer","text":"密码通常比随机密钥弱，KDF 的作用是把用户密码转换为更适合加密使用的密钥材料，同时提高暴力尝试每个候选密码的计算成本。"}},{"@type":"Question","name":"可以用指纹或生物识别解锁隐私笔记吗？","acceptedAnswer":{"@type":"Answer","text":"可以作为快捷解锁方式。首次密码成功后，可通过 Android Keystore 保护相关密钥，再结合生物识别流程使用。"}},{"@type":"Question","name":"忘记隐私密码还能找回吗？","acceptedAnswer":{"@type":"Answer","text":"从当前公开实现看，修改密码需要验证旧密码，并没有提供“绕过加密直接恢复明文”的设计。应把隐私密码视为重要密钥凭证，妥善保存，并保留独立备份；生物识别也不应当作永久密码恢复方案。"}},{"@type":"Question","name":"应用密码和隐私仓库密码是同一个东西吗？","acceptedAnswer":{"@type":"Answer","text":"不是完全同一层。应用级密码/指纹锁主要保护进入应用或界面；隐私仓库则涉及单独的加密存储和密钥流程。"}},{"@type":"Question","name":"普通本地笔记会自动上传吗？","acceptedAnswer":{"@type":"Answer","text":"普通本地编辑不要求上传。只有你主动使用云同步、网页读取、AI 等网络能力时，相应数据才需要与所配置的服务通信。"}},{"@type":"Question","name":"使用 AI 功能时笔记内容会发送到哪里？","acceptedAnswer":{"@type":"Answer","text":"当你主动调用 AI 时，相关文本会发送到你选择的 AI 服务端点。KardLeaf 支持 OpenAI 兼容接口、New API 和试用模式；第三方服务如何处理数据取决于对应服务商。详见 AI 写作助手 。"}},{"@type":"Question","name":"AI API Key 怎么保存？","acceptedAnswer":{"@type":"Answer","text":"当前实现使用 Android Keystore 创建 AES 密钥，并以 AES/GCM 加密后保存用户配置的 API Key，而不是直接以普通明文 SharedPreferences 保存。"}},{"@type":"Question","name":"使用 WebDAV/S3 后数据是否仍然安全？","acceptedAnswer":{"@type":"Answer","text":"传输和远端存储安全取决于你的服务端、HTTPS/TLS、账号权限和服务商配置。KardLeaf 可以减少专有格式锁定，但不能替代云服务本身的安全配置。"}},{"@type":"Question","name":"KardLeaf 有独立任务清单吗？","acceptedAnswer":{"@type":"Answer","text":"有。任务可包含分组、父子任务、优先级、到期时间、提醒时间、重复规则、备注、手动排序和废弃状态。详见 任务与提醒 。"}},{"@type":"Question","name":"Markdown 里的待办能进入任务视图吗？","acceptedAnswer":{"@type":"Answer","text":"可以选择把从笔记中扫描到的 Markdown 任务合并显示，并保留来源文件路径以便回到原笔记。"}},{"@type":"Question","name":"任务支持重复和提醒吗？","acceptedAnswer":{"@type":"Answer","text":"支持每天、每周、每月等重复规则，并支持弹窗或系统通知、铃声、振动、精确提醒权限检查和开机后的提醒恢复。"}},{"@type":"Question","name":"KardLeaf 有思维导图吗？","acceptedAnswer":{"@type":"Answer","text":"有。可以根据 Markdown 标题层级生成思维导图，并支持节点新增、重命名、删除、拖拽、撤销恢复、单向/双向布局和大纲定位。详见 Markdown 思维导图 。"}},{"@type":"Question","name":"KardLeaf 有知识图谱或关系图吗？","acceptedAnswer":{"@type":"Answer","text":"有。可以读取 [[双向链接]] 生成笔记关系图，也可以手动创建自定义知识关系图。"}},{"@type":"Question","name":"支持每日笔记吗？","acceptedAnswer":{"@type":"Answer","text":"支持每日笔记目录和桌面小部件，以日期规则快速打开或创建当天笔记。详见 每日笔记 。"}},{"@type":"Question","name":"有桌面小部件吗？","acceptedAnswer":{"@type":"Answer","text":"有笔记列表、任务清单、每日笔记和快速记录等 Widget，也包含 Android 快捷设置磁贴和固定快捷方式。详见 桌面小部件与快速记录 。"}},{"@type":"Question","name":"能从其他 App 分享内容到 KardLeaf 吗？","acceptedAnswer":{"@type":"Answer","text":"可以通过 Android 分享接收流程进入速记，也可以使用快捷设置、Widget 或自定义 URL Scheme 快速新建。"}},{"@type":"Question","name":"支持网页剪藏或稍后读吗？","acceptedAnswer":{"@type":"Answer","text":"支持在线读取网页、提取正文并在 Preview 中阅读；决定编辑时再离线保存为本地 Markdown，还可选择下载网页图片。详见 网页笔记与外部调用 。"}},{"@type":"Question","name":"网页离线后还能继续编辑吗？","acceptedAnswer":{"@type":"Answer","text":"可以。执行“离线并编辑”后，提取内容会进入普通本地 Markdown 工作流，可以继续使用搜索、标签、历史版本等能力。"}},{"@type":"Question","name":"KardLeaf 的 AI 能做什么？","acceptedAnswer":{"@type":"Answer","text":"当前公开实现包含摘要、润色、扩写、续写、缩短、纠错、翻译、解释、提取要点、提取待办、生成标题和自定义指令等操作。"}},{"@type":"Question","name":"可以使用自己的 OpenAI 兼容接口吗？","acceptedAnswer":{"@type":"Answer","text":"可以填写 Base URL、模型名称和可选 API Key，并在设置中测试连接。"}},{"@type":"Question","name":"能用 Tasker 或自动化脚本新建笔记吗？","acceptedAnswer":{"@type":"Answer","text":"可以。KardLeaf 提供 kardleaf://new URL Scheme，可传入标题、正文、网页地址、目录、置顶等参数，适合浏览器、Tasker、快捷方式和其他应用调用。"}},{"@type":"Question","name":"想快速记一条临时想法，有不用先找文件夹的方法吗？","acceptedAnswer":{"@type":"Answer","text":"可以使用速记、首页快速新建、Quick Memo 快捷设置磁贴、桌面 Widget、固定快捷方式或 Android 分享入口。详见 速记与快速新建 。"}},{"@type":"Question","name":"为什么安装 APK 后打不开或被系统拦截？","acceptedAnswer":{"@type":"Answer","text":"先确认 Android 版本满足要求，并检查系统是否阻止未知来源安装、APK 是否完整、是否来自官方 Release。若仍异常，可到 GitHub Issues 提交设备型号、Android 版本和错误现象。"}},{"@type":"Question","name":"为什么应用看不到我刚在电脑修改的 Markdown？","acceptedAnswer":{"@type":"Answer","text":"确认同步工具已经把文件真正写到手机授权目录，然后在 KardLeaf 中触发外部文件刷新/重新索引。若文件仍不可见，再检查扩展名、目录授权和隐藏目录规则。"}},{"@type":"Question","name":"为什么移动笔记后图片不显示？","acceptedAnswer":{"@type":"Answer","text":"通常与图片路径有关。检查当前使用的是根目录还是相对路径模式、图片文件是否一起移动、Markdown 引用是否仍指向有效位置。跨 Obsidian/其他编辑器时最好统一图片目录策略。"}},{"@type":"Question","name":"为什么任务提醒没有响？","acceptedAnswer":{"@type":"Answer","text":"检查 Android 通知权限、精确闹钟权限、电池优化/后台限制、任务提醒时间，以及任务是否启用了铃声/振动。设备重启后应用也有提醒恢复逻辑，但厂商后台限制仍可能影响调度。"}},{"@type":"Question","name":"为什么 WebDAV 同步失败？","acceptedAnswer":{"@type":"Answer","text":"先用连接/远端检查验证服务器地址、用户名密码、路径和证书，再检查服务端是否允许需要的文件操作。不要一上来反复执行完整同步。"}},{"@type":"Question","name":"为什么 S3 连接测试失败？","acceptedAnswer":{"@type":"Answer","text":"检查 Endpoint、Bucket、前缀、Access Key/Secret、区域/签名兼容性以及网络。不同 S3 兼容服务对条件写入等细节可能不同。"}},{"@type":"Question","name":"为什么网页无法提取正文？","acceptedAnswer":{"@type":"Answer","text":"网页入口要求有效的 HTTP/HTTPS 地址；某些需要登录、强脚本渲染、反爬或结构特殊的网站可能无法正常读取。可以先在浏览器确认页面可访问，再尝试导入。"}},{"@type":"Question","name":"为什么网页离线后某些图片缺失？","acceptedAnswer":{"@type":"Answer","text":"离线时需要开启下载网页图片；即使开启，单张图片仍可能因防盗链、权限、失效 URL 或网络问题下载失败。正文导入不会要求所有图片必须成功。"}},{"@type":"Question","name":"为什么本地音频或视频无法播放？","acceptedAnswer":{"@type":"Answer","text":"先确认文件仍存在、应用有目录访问权限、附件链接有效且 MIME 类型可识别。普通不支持直接播放的附件会保留为链接交给系统处理。"}},{"@type":"Question","name":"笔记库很大时怎样减少查找和管理压力？","acceptedAnswer":{"@type":"Answer","text":"可以把工作/学习/私人内容拆成多个笔记库，利用标签、文件夹、日期和搜索条件缩小范围，并避免多个设备同时大规模改写同一批文件。实际性能仍取决于设备、文件数量和单篇内容规模。"}},{"@type":"Question","name":"同步冲突时应该选哪一个版本？","acceptedAnswer":{"@type":"Answer","text":"先比较本地与远端的修改时间和内容，优先保留你确认更新的一份；重要内容先复制出独立备份再处理冲突。不要在不确定时直接批量覆盖。"}},{"@type":"Question","name":"遇到 Bug 应该提供哪些信息？","acceptedAnswer":{"@type":"Answer","text":"建议提供 KardLeaf 版本、Android 版本、设备型号、可复现步骤、期望结果、实际结果，以及必要的截图或日志；涉及隐私笔记时不要上传真实密钥或敏感正文。"}},{"@type":"Question","name":"KardLeaf 和 Obsidian 是什么关系？","acceptedAnswer":{"@type":"Answer","text":"KardLeaf 不是 Obsidian 官方客户端，也不承诺实现 Obsidian 全部插件生态。它更像 Android 端的开放 Markdown 工具，重点兼容普通 Markdown、目录、标签、YAML、Wikilink 和文件工作流。"}},{"@type":"Question","name":"能直接打开 Obsidian Vault 吗？","acceptedAnswer":{"@type":"Answer","text":"在 Android 文件权限允许的前提下，可以把普通 Markdown Vault 目录作为笔记库使用。复杂插件生成的数据或 Obsidian 私有扩展不保证完全兼容。"}},{"@type":"Question","name":"为什么说 KardLeaf 不容易被“格式锁定”？","acceptedAnswer":{"@type":"Answer","text":"因为正文主要是普通 Markdown/TXT 文件，目录也是实际文件夹结构。即使以后不用 KardLeaf，这些文件仍可被大量文本编辑器和 Markdown 工具读取。"}},{"@type":"Question","name":"KardLeaf 能代替 Obsidian 桌面版吗？","acceptedAnswer":{"@type":"Answer","text":"定位不同。KardLeaf 更适合作为 Android 本地 Markdown/Obsidian 工作流的移动补充；如果依赖大量桌面插件、复杂脚本或桌面布局，仍建议保留 Obsidian 桌面端。"}},{"@type":"Question","name":"KardLeaf 能和 Typora、VS Code 一起用吗？","acceptedAnswer":{"@type":"Answer","text":"可以，只要它们操作的是同一批 Markdown 文件，并通过你选择的同步方式保持文件一致。"}},{"@type":"Question","name":"KardLeaf 的源码在哪里？","acceptedAnswer":{"@type":"Answer","text":"源码仓库： github.com/waikr/KardLeaf 。"}},{"@type":"Question","name":"我可以自己编译 KardLeaf 吗？","acceptedAnswer":{"@type":"Answer","text":"可以。仓库 README 给出的开发环境包括 Android Studio、JDK 17、Android 设备或模拟器，构建可使用 Gradle。"}},{"@type":"Question","name":"我可以基于 KardLeaf 修改或二次开发吗？","acceptedAnswer":{"@type":"Answer","text":"可以在 Apache License 2.0 允许的范围内进行修改与分发，同时需要遵守许可证中的相关要求。"}},{"@type":"Question","name":"如何提交问题或建议？","acceptedAnswer":{"@type":"Answer","text":"可以前往 GitHub Issues 。功能建议最好说明使用场景、当前痛点和期望交互，而不仅是功能名称。"}},{"@type":"Question","name":"哪里能看到 KardLeaf 的完整功能列表？","acceptedAnswer":{"@type":"Answer","text":"可以查看 完整功能总览 ，并进入编辑器、搜索、任务、思维导图、同步、隐私、AI、网页笔记等独立详情页。"}}]}]}</script>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <header class="site-header" id="top">
+    <div class="container nav-shell">
+      <a class="brand" href="/" aria-label="KardLeaf 首页">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48"><path d="M11 8.5h18.5c4.7 0 8.5 3.8 8.5 8.5v22.5H19.5C14.8 39.5 11 35.7 11 31V8.5Z" /><path d="M16.5 31.2c7.8-1.2 12.7-5.9 15.2-14.2-8.6.4-14 5.2-15.2 14.2Z" /><path d="M17 32c3.6-4.3 7.3-7.7 12.9-11.4" /></svg>
+        </span>
+        <span class="brand-copy"><strong>KardLeaf</strong><small>卡叶笔记</small></span>
+      </a>
+      <nav class="desktop-nav" aria-label="主导航">
+        <a href="/#features">功能</a>
+        <a href="/features/">完整功能</a>
+        <a href="/faq/" aria-current="page">FAQ</a>
+        <a href="/#download">下载</a>
+        <a href="https://github.com/waikr/KardLeaf" target="_blank" rel="noreferrer">GitHub</a>
+      </nav>
+      <div class="nav-actions">
+        <a class="language-switch" href="/en/" lang="en" hreflang="en" aria-label="Switch to English" title="English">EN</a>
+        <a class="nav-download" href="https://github.com/waikr/KardLeaf/releases/latest" data-download-link>下载 APK</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="faq-hero section-soft">
+      <div class="container faq-hero-inner">
+        <nav class="breadcrumb" aria-label="面包屑"><a href="/">首页</a><span>›</span><span>常见问题</span></nav>
+        <span class="section-kicker">KardLeaf Help Center</span>
+        <h1>KardLeaf 常见问题 FAQ</h1>
+        <p>这里集中回答卡叶笔记从下载安装到 Markdown 编辑、Obsidian 工作流、同步备份、隐私加密、任务、思维导图、AI、网页笔记和常见故障等问题。当前共整理 <strong>106</strong> 个问题。</p>
+        <div class="faq-search-wrap">
+          <label for="faqSearch">搜索 FAQ</label>
+          <input id="faqSearch" type="search" placeholder="例如：Obsidian、WebDAV、图片、密码、任务提醒…" autocomplete="off" />
+          <span id="faqSearchStatus" aria-live="polite"></span>
+        </div>
+        <div class="faq-topic-nav"><a href="#getting-started">下载安装与基本使用</a>
+<a href="#files-migration">文件、数据与迁移</a>
+<a href="#markdown-editing">Markdown 编辑与内容能力</a>
+<a href="#organization-search">分类、搜索与知识整理</a>
+<a href="#sync-backup">同步、多设备与备份</a>
+<a href="#privacy-security">隐私、安全与加密</a>
+<a href="#features-needs">任务、思维导图、网页、AI 与快速记录</a>
+<a href="#troubleshooting">常见问题与故障排查</a>
+<a href="#obsidian-developer">Obsidian、开放工作流与开发者</a></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container faq-layout">
+        <aside class="faq-sidebar" aria-label="FAQ 分类">
+          <strong>问题分类</strong>
+          <a href="#getting-started">下载安装与基本使用</a>
+<a href="#files-migration">文件、数据与迁移</a>
+<a href="#markdown-editing">Markdown 编辑与内容能力</a>
+<a href="#organization-search">分类、搜索与知识整理</a>
+<a href="#sync-backup">同步、多设备与备份</a>
+<a href="#privacy-security">隐私、安全与加密</a>
+<a href="#features-needs">任务、思维导图、网页、AI 与快速记录</a>
+<a href="#troubleshooting">常见问题与故障排查</a>
+<a href="#obsidian-developer">Obsidian、开放工作流与开发者</a>
+          <a href="/features/">查看完整功能 →</a>
+        </aside>
+        <div class="faq-content" id="faqContent">
+          
+<section class="faq-group" id="getting-started">
+  <div class="faq-group-heading">
+    <h2>下载安装与基本使用</h2>
+    <p>适合第一次了解、下载或安装 KardLeaf 的用户。</p>
+  </div>
+  <div class="faq-list">
+    
+    <details class="faq-item" open>
+      <summary>卡叶笔记（KardLeaf）是什么？</summary>
+      <div class="faq-answer"><p>卡叶笔记（英文名 <strong>KardLeaf</strong>）是一款面向 Android 的本地优先 Markdown 笔记应用。它以真实 <code>.md</code> / <code>.txt</code> 文件为核心，提供编辑、预览、文件夹、标签、搜索、任务、思维导图、知识关系、同步、隐私仓库等能力。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 适合哪些用户？</summary>
+      <div class="faq-answer"><p>适合希望<strong>笔记文件掌握在自己手里</strong>、需要 Android Markdown 编辑、使用 Obsidian/Typora/VS Code 工作流、想通过 WebDAV/S3/Syncthing 自己控制同步，或不希望被单一云笔记格式锁定的用户。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 是免费的吗？</summary>
+      <div class="faq-answer"><p>项目当前以开源方式发布，官网直接提供 APK 下载入口，源码采用 Apache License 2.0。具体版本、发布包和变更请以 <a href="https://github.com/waikr/KardLeaf/releases">GitHub Releases</a> 为准。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 是开源软件吗？</summary>
+      <div class="faq-answer"><p>是。源码公开在 <a href="https://github.com/waikr/KardLeaf">GitHub</a>，许可证为 Apache License 2.0，可在许可证允许的范围内查看、修改和分发代码。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 支持哪些系统？</summary>
+      <div class="faq-answer"><p>当前公开版本面向 <strong>Android 6.0+</strong>。官网与仓库说明均以 Android 为主要平台。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 有 iOS、Windows 或 macOS 版本吗？</summary>
+      <div class="faq-answer"><p>当前官网定位是 Android 应用。电脑端可以继续使用 Obsidian、VS Code、Typora 等工具打开同一批 Markdown 文件，再通过同步方案与手机协作。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 应该从哪里下载？</summary>
+      <div class="faq-answer"><p>推荐从官网的“下载 APK”按钮或 <a href="https://github.com/waikr/KardLeaf/releases/latest">GitHub Releases 最新版本</a>下载，避免来源不明的二次打包 APK。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>安装 APK 时 Android 提示“禁止安装未知应用”怎么办？</summary>
+      <div class="faq-answer"><p>这是 Android 对浏览器/文件管理器侧载 APK 的系统保护。你需要在系统设置中临时允许当前下载来源安装应用；安装完成后可以再关闭该权限。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 需要注册账号吗？</summary>
+      <div class="faq-answer"><p>不需要强制注册账号。普通本地笔记可以直接使用；只有你主动启用 WebDAV、S3、AI 等网络功能时，才需要填写相应服务的配置。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>没有网络还能使用 KardLeaf 吗？</summary>
+      <div class="faq-answer"><p>可以。普通本地笔记的创建、编辑、搜索、分类、历史版本等核心能力不依赖互联网。网页读取、云同步、AI 请求和版本检查等网络功能需要联网。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 会自动更新吗？</summary>
+      <div class="faq-answer"><p>应用内包含版本检查逻辑，可以查询 GitHub Releases 的最新版本并提示更新；实际安装仍以你下载并安装新的 APK 为准。详见 <a href="/features/updates/">版本更新检查</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>如何确认自己安装的是最新版？</summary>
+      <div class="faq-answer"><p>可以在应用设置中手动检查更新，也可以直接查看 <a href="https://github.com/waikr/KardLeaf/releases/latest">最新 Release</a> 的版本号和发布时间。</p></div>
+    </details>
+  </div>
+</section>
+
+<section class="faq-group" id="files-migration">
+  <div class="faq-group-heading">
+    <h2>文件、数据与迁移</h2>
+    <p>关于笔记保存位置、文件格式、导入现有笔记库和换设备。</p>
+  </div>
+  <div class="faq-list">
+    
+    <details class="faq-item" open>
+      <summary>KardLeaf 的笔记保存在哪里？</summary>
+      <div class="faq-answer"><p>笔记正文保存在你授权给应用的普通目录中，并以真实 Markdown/TXT 文件存在。应用数据库主要承担索引、缓存和状态管理，而不是把正文锁进专有数据库。详见 <a href="/features/organization/">本地文件管理</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 使用什么文件格式？</summary>
+      <div class="faq-answer"><p>正文核心格式是 <code>.md</code> 和 <code>.txt</code>。Markdown 文件可以继续被 Obsidian、VS Code、Typora 等工具读取。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>如果删除 KardLeaf，Markdown 文件会不会一起消失？</summary>
+      <div class="faq-answer"><p>正文位于你选择的笔记库目录中，是否保留取决于 Android 卸载时该目录的位置和系统行为。重要笔记仍建议定期复制笔记库并设置备份，不要把“卸载应用”当成备份方式。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>可以直接导入现有 Markdown 文件夹吗？</summary>
+      <div class="faq-answer"><p>KardLeaf 的设计就是使用普通文件夹作为笔记库。你可以把现有 <code>.md</code>/<code>.txt</code> 文件放在授权目录中，再让 KardLeaf 读取和建立索引。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持多个笔记库吗？</summary>
+      <div class="faq-answer"><p>支持。当前功能包含新增、切换、重命名和管理多个笔记库，可将工作、学习、私人资料分开。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持多级文件夹吗？</summary>
+      <div class="faq-answer"><p>支持真实的多级目录结构，也支持展开/折叠、创建、重命名、移动、自定义排序和隐藏目录等管理能力。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>电脑修改 Markdown 后，手机能识别吗？</summary>
+      <div class="faq-answer"><p>可以。KardLeaf 可以重新读取外部变化并刷新索引，因此电脑端修改同一批 Markdown 文件后，手机端仍可继续使用。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>换手机时怎么迁移 KardLeaf？</summary>
+      <div class="faq-answer"><p>最重要的是迁移你的笔记库文件夹；如果还希望恢复应用设置或其他应用数据，可以结合 JSON 导出/导入与自动备份。同步用户也可以先把旧设备内容完整同步到远端，再让新设备拉取。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 支持导出吗？</summary>
+      <div class="faq-answer"><p>正文天然就是可复制的 Markdown/TXT 文件；此外设置中还有应用数据 JSON 导出/导入与自动备份功能。详见 <a href="/features/sync-backup/">同步与备份</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>归档和删除有什么区别？</summary>
+      <div class="faq-answer"><p>归档用于把内容暂时移出日常视图但继续保留；“废弃/Trash”用于进入后续恢复或彻底清理流程。详见 <a href="/features/archive-trash/">归档、废弃与自动清理</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>误改笔记后能恢复旧内容吗？</summary>
+      <div class="faq-answer"><p>普通笔记提供历史版本列表、关键词搜索、版本比较和恢复能力，也可配置历史版本保留数量。详见 <a href="/features/privacy-history/">历史版本</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>移动笔记后图片路径会不会失效？</summary>
+      <div class="faq-answer"><p>KardLeaf 支持根目录和相对路径等图片模式，并包含移动文件时重写相对图片引用的处理。跨工具工作流中仍建议统一图片目录规则，避免不同编辑器各自改写路径。</p></div>
+    </details>
+  </div>
+</section>
+
+<section class="faq-group" id="markdown-editing">
+  <div class="faq-group-heading">
+    <h2>Markdown 编辑与内容能力</h2>
+    <p>关于编辑器、预览、格式、图片、附件和长文写作。</p>
+  </div>
+  <div class="faq-list">
+    
+    <details class="faq-item" open>
+      <summary>KardLeaf 支持哪些 Markdown 格式？</summary>
+      <div class="faq-answer"><p>除标题、列表、引用、链接、代码等基础 Markdown 外，当前编辑链路还包含表格、数学公式、代码块、Mermaid、Admonition、HTML 块、图片、Wikilink 等扩展能力。详见 <a href="/features/editor/">Markdown 编辑器</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>可以边写边预览 Markdown 吗？</summary>
+      <div class="faq-answer"><p>可以。KardLeaf 支持编辑与预览切换，并提供 CodeMirror 6 等编辑内核；你也可以设置打开笔记时优先进入编辑或预览。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么 KardLeaf 有多个编辑内核？</summary>
+      <div class="faq-answer"><p>不同内核侧重不同体验：Native 系列强调原生输入/光标体验，CodeMirror 6 强调丰富 Markdown 交互与实时渲染。应用将文件管理与编辑内核分开，因此同一批 Markdown 文件可以切换不同编辑方式。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持文章目录或大纲吗？</summary>
+      <div class="faq-answer"><p>支持。编辑器侧边面板可以根据标题结构生成文章目录，用于长文快速定位。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持在当前笔记内查找文字吗？</summary>
+      <div class="faq-answer"><p>支持。编辑场景有文档内查找能力；跨笔记则使用全局搜索。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持 [[双向链接]] 吗？</summary>
+      <div class="faq-answer"><p>支持 Wikilink 形式的 <code>[[笔记]]</code> 链接，并可以进一步用于笔记关系图。详见 <a href="/features/relationships/">知识关系图</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持 YAML / Front Matter 吗？</summary>
+      <div class="faq-answer"><p>支持解析和显示 Front Matter 属性，YAML 中的标签也可进入索引并用于筛选，适合与 Obsidian 工作流配合。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持 Markdown 表格吗？</summary>
+      <div class="faq-answer"><p>支持。编辑器包含表格工具和表格渲染逻辑，可在 Markdown 文档中处理表格。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持数学公式吗？</summary>
+      <div class="faq-answer"><p>支持。预览链路包含 KaTeX/TeX 相关渲染，编辑工具栏也提供数学内容入口。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持 Mermaid 图表吗？</summary>
+      <div class="faq-answer"><p>支持。代码中包含 Mermaid 渲染、缓存和放大查看相关逻辑。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>可以插入本地图片吗？</summary>
+      <div class="faq-answer"><p>可以。支持本地图片引用、预览、首页首图缩略图、图库和图片查看。详见 <a href="/features/images-drawing/">图片与绘图</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持画图或给图片做标注吗？</summary>
+      <div class="faq-answer"><p>支持内置绘图，并提供画笔、荧光笔、橡皮、网格、撤销恢复及在原图上标注等能力。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持音频、视频和普通附件吗？</summary>
+      <div class="faq-answer"><p>支持在 Markdown Preview 中处理本地音频、视频和普通附件；音视频使用媒体控件和 Range 请求进行流式读取。详见 <a href="/features/media-attachments/">附件与媒体预览</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>可以统计字数吗？</summary>
+      <div class="faq-answer"><p>可以。属性面板可统计字符数、词数、行数、段落数等，并尽量排除 Front Matter 对正文统计的干扰。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>编辑工具栏能自定义吗？</summary>
+      <div class="faq-answer"><p>可以。当前代码定义了多种内置工具，并允许调整工具栏顺序、配置快捷文本、自定义符号和自定义功能项。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>能快速插入常用模板或文本吗？</summary>
+      <div class="faq-answer"><p>可以使用快捷文本、自定义符号和自定义功能项保存常用片段；速记与外部 URL Scheme 也适合快速套用固定记录流程。</p></div>
+    </details>
+  </div>
+</section>
+
+<section class="faq-group" id="organization-search">
+  <div class="faq-group-heading">
+    <h2>分类、搜索与知识整理</h2>
+    <p>适合笔记越来越多之后的查找、筛选、回顾和知识管理。</p>
+  </div>
+  <div class="faq-list">
+    
+    <details class="faq-item" open>
+      <summary>KardLeaf 支持全文搜索吗？</summary>
+      <div class="faq-answer"><p>支持标题和正文搜索，并可组合大小写匹配、正则表达式、标签和文件夹条件。详见 <a href="/features/search/">搜索、日期与统计</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>可以只搜标题、不搜正文吗？</summary>
+      <div class="faq-answer"><p>可以。搜索选项把标题与正文范围分开控制，可以只查标题、只查正文或同时搜索。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>搜索支持正则表达式吗？</summary>
+      <div class="faq-answer"><p>支持，可与大小写、标签、文件夹等条件一起使用。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>搜索结果能跳到命中的位置吗？</summary>
+      <div class="faq-answer"><p>搜索结果模型包含命中片段和偏移信息，可用于显示附近正文并从结果跳转到命中位置。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持标签吗？</summary>
+      <div class="faq-answer"><p>支持正文 <code>#标签</code> 与 YAML 标签，并有标签管理和标签筛选能力。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持收藏和置顶吗？</summary>
+      <div class="faq-answer"><p>支持收藏、置顶、最近修改、速记、随机、日期、归档、废弃等多种首页/侧边栏视图。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持批量移动或批量管理笔记吗？</summary>
+      <div class="faq-answer"><p>支持多选后的移动、复制、合并、置顶、收藏、标签、归档、分享、隐私处理和删除等批量操作。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>可以按日期查看笔记吗？</summary>
+      <div class="faq-answer"><p>可以按今天、本周、月份等时间范围浏览笔记，并按修改时间组织结果。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>有记录热力图吗？</summary>
+      <div class="faq-answer"><p>侧边栏包含按天统计的热力图组件，用于观察一段时间内的记录活动；具体指标和展示算法可能随版本调整。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>笔记很多时怎么更快找到内容？</summary>
+      <div class="faq-answer"><p>建议组合使用文件夹、标签、标题/正文范围、正则、日期视图和收藏；大型知识库还可以拆分为多个笔记库，以减少单一入口的管理复杂度。</p></div>
+    </details>
+  </div>
+</section>
+
+<section class="faq-group" id="sync-backup">
+  <div class="faq-group-heading">
+    <h2>同步、多设备与备份</h2>
+    <p>关于 WebDAV、S3、Syncthing、电脑协作和冲突处理。</p>
+  </div>
+  <div class="faq-list">
+    
+    <details class="faq-item" open>
+      <summary>KardLeaf 支持 WebDAV 同步吗？</summary>
+      <div class="faq-answer"><p>支持应用内 WebDAV 同步管理器，并包含连接信息、同步预览、远端检查和实时同步相关配置。详见 <a href="/features/sync-backup/">WebDAV、S3 同步与自动备份</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 支持 S3 / OSS 一类对象存储吗？</summary>
+      <div class="faq-answer"><p>支持兼容 S3 API 的对象存储，设置包含端点、Bucket、前缀和凭据，并可先测试连接和生成同步计划。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>可以用 Syncthing 同步吗？</summary>
+      <div class="faq-answer"><p>可以。由于正文是普通文件夹中的 Markdown/TXT，你可以让 Syncthing 负责同步整个笔记库，KardLeaf 负责本地读取和索引。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>可以一边用 Obsidian，一边用 KardLeaf 吗？</summary>
+      <div class="faq-answer"><p>可以。常见方式是电脑用 Obsidian 打开 Vault，Android 用 KardLeaf 打开同一结构，再通过 Syncthing、WebDAV、S3 或其他文件同步方式传递修改。详见 <a href="/features/obsidian/">Obsidian 工作流</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 会强制把笔记上传到官方云吗？</summary>
+      <div class="faq-answer"><p>不会强制。你可以只使用本地文件；如果需要多设备同步，可以自行选择 WebDAV、S3、Syncthing 或手动复制。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持自动备份吗？</summary>
+      <div class="faq-answer"><p>支持选择备份目标目录和备份周期；同时正文 Markdown/TXT 本身也可以直接复制保存。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>两台设备同时修改同一篇笔记会怎样？</summary>
+      <div class="faq-answer"><p>任何文件同步方案都可能产生冲突。KardLeaf 的同步实现包含差异计划和冲突选择，但更稳妥的方式仍是先让一端同步完成，再在另一端继续编辑。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>离线写完后能等联网再同步吗？</summary>
+      <div class="faq-answer"><p>可以先在本地继续写作，之后再执行你选择的同步方式。是否自动同步以及冲突处理取决于具体同步配置。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>WebDAV 或 S3 连接失败应该检查什么？</summary>
+      <div class="faq-answer"><p>先检查端点地址、账号/密钥、Bucket/路径、网络和服务端权限；优先使用应用中的连接测试或远端检查，再执行正式同步。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>备份和同步是一回事吗？</summary>
+      <div class="faq-answer"><p>不是。同步强调多端保持相近状态，错误删除也可能被同步；备份强调保留可恢复副本。重要数据建议同时保留独立备份。</p></div>
+    </details>
+  </div>
+</section>
+
+<section class="faq-group" id="privacy-security">
+  <div class="faq-group-heading">
+    <h2>隐私、安全与加密</h2>
+    <p>关于隐私仓库、密码、生物识别以及网络功能的数据边界。</p>
+  </div>
+  <div class="faq-list">
+    
+    <details class="faq-item" open>
+      <summary>KardLeaf 有加密笔记功能吗？</summary>
+      <div class="faq-answer"><p>有独立隐私仓库。隐私内容不是只在首页隐藏，而是进入加密存储流程，并在解锁后才把内容加载到内存。详见 <a href="/features/privacy-history/">隐私仓库</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>隐私仓库使用什么加密方式？</summary>
+      <div class="faq-answer"><p>当前公开实现使用 32 字节随机主密钥；密码 KDF 为基于 HMAC-SHA256 的 PBKDF2，默认 600,000 次；主密钥和正文使用 AES-GCM 相关流程，单篇笔记密钥还通过 HKDF-SHA256 派生。这里描述的是公开代码实现，不等同于第三方安全审计结论。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么需要 PBKDF2 这么多次迭代？</summary>
+      <div class="faq-answer"><p>密码通常比随机密钥弱，KDF 的作用是把用户密码转换为更适合加密使用的密钥材料，同时提高暴力尝试每个候选密码的计算成本。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>可以用指纹或生物识别解锁隐私笔记吗？</summary>
+      <div class="faq-answer"><p>可以作为快捷解锁方式。首次密码成功后，可通过 Android Keystore 保护相关密钥，再结合生物识别流程使用。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>忘记隐私密码还能找回吗？</summary>
+      <div class="faq-answer"><p>从当前公开实现看，修改密码需要验证旧密码，并没有提供“绕过加密直接恢复明文”的设计。应把隐私密码视为重要密钥凭证，妥善保存，并保留独立备份；生物识别也不应当作永久密码恢复方案。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>应用密码和隐私仓库密码是同一个东西吗？</summary>
+      <div class="faq-answer"><p>不是完全同一层。应用级密码/指纹锁主要保护进入应用或界面；隐私仓库则涉及单独的加密存储和密钥流程。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>普通本地笔记会自动上传吗？</summary>
+      <div class="faq-answer"><p>普通本地编辑不要求上传。只有你主动使用云同步、网页读取、AI 等网络能力时，相应数据才需要与所配置的服务通信。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>使用 AI 功能时笔记内容会发送到哪里？</summary>
+      <div class="faq-answer"><p>当你主动调用 AI 时，相关文本会发送到你选择的 AI 服务端点。KardLeaf 支持 OpenAI 兼容接口、New API 和试用模式；第三方服务如何处理数据取决于对应服务商。详见 <a href="/features/ai/">AI 写作助手</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>AI API Key 怎么保存？</summary>
+      <div class="faq-answer"><p>当前实现使用 Android Keystore 创建 AES 密钥，并以 AES/GCM 加密后保存用户配置的 API Key，而不是直接以普通明文 SharedPreferences 保存。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>使用 WebDAV/S3 后数据是否仍然安全？</summary>
+      <div class="faq-answer"><p>传输和远端存储安全取决于你的服务端、HTTPS/TLS、账号权限和服务商配置。KardLeaf 可以减少专有格式锁定，但不能替代云服务本身的安全配置。</p></div>
+    </details>
+  </div>
+</section>
+
+<section class="faq-group" id="features-needs">
+  <div class="faq-group-heading">
+    <h2>任务、思维导图、网页、AI 与快速记录</h2>
+    <p>针对“我需要某个具体能力”的用户。</p>
+  </div>
+  <div class="faq-list">
+    
+    <details class="faq-item" open>
+      <summary>KardLeaf 有独立任务清单吗？</summary>
+      <div class="faq-answer"><p>有。任务可包含分组、父子任务、优先级、到期时间、提醒时间、重复规则、备注、手动排序和废弃状态。详见 <a href="/features/tasks/">任务与提醒</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>Markdown 里的待办能进入任务视图吗？</summary>
+      <div class="faq-answer"><p>可以选择把从笔记中扫描到的 Markdown 任务合并显示，并保留来源文件路径以便回到原笔记。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>任务支持重复和提醒吗？</summary>
+      <div class="faq-answer"><p>支持每天、每周、每月等重复规则，并支持弹窗或系统通知、铃声、振动、精确提醒权限检查和开机后的提醒恢复。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 有思维导图吗？</summary>
+      <div class="faq-answer"><p>有。可以根据 Markdown 标题层级生成思维导图，并支持节点新增、重命名、删除、拖拽、撤销恢复、单向/双向布局和大纲定位。详见 <a href="/features/mind-map/">Markdown 思维导图</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 有知识图谱或关系图吗？</summary>
+      <div class="faq-answer"><p>有。可以读取 <code>[[双向链接]]</code> 生成笔记关系图，也可以手动创建自定义知识关系图。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持每日笔记吗？</summary>
+      <div class="faq-answer"><p>支持每日笔记目录和桌面小部件，以日期规则快速打开或创建当天笔记。详见 <a href="/features/daily-notes/">每日笔记</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>有桌面小部件吗？</summary>
+      <div class="faq-answer"><p>有笔记列表、任务清单、每日笔记和快速记录等 Widget，也包含 Android 快捷设置磁贴和固定快捷方式。详见 <a href="/features/widgets-capture/">桌面小部件与快速记录</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>能从其他 App 分享内容到 KardLeaf 吗？</summary>
+      <div class="faq-answer"><p>可以通过 Android 分享接收流程进入速记，也可以使用快捷设置、Widget 或自定义 URL Scheme 快速新建。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持网页剪藏或稍后读吗？</summary>
+      <div class="faq-answer"><p>支持在线读取网页、提取正文并在 Preview 中阅读；决定编辑时再离线保存为本地 Markdown，还可选择下载网页图片。详见 <a href="/features/web-clip/">网页笔记与外部调用</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>网页离线后还能继续编辑吗？</summary>
+      <div class="faq-answer"><p>可以。执行“离线并编辑”后，提取内容会进入普通本地 Markdown 工作流，可以继续使用搜索、标签、历史版本等能力。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 的 AI 能做什么？</summary>
+      <div class="faq-answer"><p>当前公开实现包含摘要、润色、扩写、续写、缩短、纠错、翻译、解释、提取要点、提取待办、生成标题和自定义指令等操作。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>可以使用自己的 OpenAI 兼容接口吗？</summary>
+      <div class="faq-answer"><p>可以填写 Base URL、模型名称和可选 API Key，并在设置中测试连接。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>能用 Tasker 或自动化脚本新建笔记吗？</summary>
+      <div class="faq-answer"><p>可以。KardLeaf 提供 <code>kardleaf://new</code> URL Scheme，可传入标题、正文、网页地址、目录、置顶等参数，适合浏览器、Tasker、快捷方式和其他应用调用。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>想快速记一条临时想法，有不用先找文件夹的方法吗？</summary>
+      <div class="faq-answer"><p>可以使用速记、首页快速新建、Quick Memo 快捷设置磁贴、桌面 Widget、固定快捷方式或 Android 分享入口。详见 <a href="/features/quick-notes/">速记与快速新建</a>。</p></div>
+    </details>
+  </div>
+</section>
+
+<section class="faq-group" id="troubleshooting">
+  <div class="faq-group-heading">
+    <h2>常见问题与故障排查</h2>
+    <p>遇到异常时先从这些高频原因开始检查。</p>
+  </div>
+  <div class="faq-list">
+    
+    <details class="faq-item" open>
+      <summary>为什么安装 APK 后打不开或被系统拦截？</summary>
+      <div class="faq-answer"><p>先确认 Android 版本满足要求，并检查系统是否阻止未知来源安装、APK 是否完整、是否来自官方 Release。若仍异常，可到 <a href="https://github.com/waikr/KardLeaf/issues">GitHub Issues</a> 提交设备型号、Android 版本和错误现象。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么应用看不到我刚在电脑修改的 Markdown？</summary>
+      <div class="faq-answer"><p>确认同步工具已经把文件真正写到手机授权目录，然后在 KardLeaf 中触发外部文件刷新/重新索引。若文件仍不可见，再检查扩展名、目录授权和隐藏目录规则。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么移动笔记后图片不显示？</summary>
+      <div class="faq-answer"><p>通常与图片路径有关。检查当前使用的是根目录还是相对路径模式、图片文件是否一起移动、Markdown 引用是否仍指向有效位置。跨 Obsidian/其他编辑器时最好统一图片目录策略。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么任务提醒没有响？</summary>
+      <div class="faq-answer"><p>检查 Android 通知权限、精确闹钟权限、电池优化/后台限制、任务提醒时间，以及任务是否启用了铃声/振动。设备重启后应用也有提醒恢复逻辑，但厂商后台限制仍可能影响调度。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么 WebDAV 同步失败？</summary>
+      <div class="faq-answer"><p>先用连接/远端检查验证服务器地址、用户名密码、路径和证书，再检查服务端是否允许需要的文件操作。不要一上来反复执行完整同步。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么 S3 连接测试失败？</summary>
+      <div class="faq-answer"><p>检查 Endpoint、Bucket、前缀、Access Key/Secret、区域/签名兼容性以及网络。不同 S3 兼容服务对条件写入等细节可能不同。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么网页无法提取正文？</summary>
+      <div class="faq-answer"><p>网页入口要求有效的 HTTP/HTTPS 地址；某些需要登录、强脚本渲染、反爬或结构特殊的网站可能无法正常读取。可以先在浏览器确认页面可访问，再尝试导入。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么网页离线后某些图片缺失？</summary>
+      <div class="faq-answer"><p>离线时需要开启下载网页图片；即使开启，单张图片仍可能因防盗链、权限、失效 URL 或网络问题下载失败。正文导入不会要求所有图片必须成功。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么本地音频或视频无法播放？</summary>
+      <div class="faq-answer"><p>先确认文件仍存在、应用有目录访问权限、附件链接有效且 MIME 类型可识别。普通不支持直接播放的附件会保留为链接交给系统处理。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>笔记库很大时怎样减少查找和管理压力？</summary>
+      <div class="faq-answer"><p>可以把工作/学习/私人内容拆成多个笔记库，利用标签、文件夹、日期和搜索条件缩小范围，并避免多个设备同时大规模改写同一批文件。实际性能仍取决于设备、文件数量和单篇内容规模。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>同步冲突时应该选哪一个版本？</summary>
+      <div class="faq-answer"><p>先比较本地与远端的修改时间和内容，优先保留你确认更新的一份；重要内容先复制出独立备份再处理冲突。不要在不确定时直接批量覆盖。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>遇到 Bug 应该提供哪些信息？</summary>
+      <div class="faq-answer"><p>建议提供 KardLeaf 版本、Android 版本、设备型号、可复现步骤、期望结果、实际结果，以及必要的截图或日志；涉及隐私笔记时不要上传真实密钥或敏感正文。</p></div>
+    </details>
+  </div>
+</section>
+
+<section class="faq-group" id="obsidian-developer">
+  <div class="faq-group-heading">
+    <h2>Obsidian、开放工作流与开发者</h2>
+    <p>关于与其他工具协作、项目源码和二次开发。</p>
+  </div>
+  <div class="faq-list">
+    
+    <details class="faq-item" open>
+      <summary>KardLeaf 和 Obsidian 是什么关系？</summary>
+      <div class="faq-answer"><p>KardLeaf 不是 Obsidian 官方客户端，也不承诺实现 Obsidian 全部插件生态。它更像 Android 端的开放 Markdown 工具，重点兼容普通 Markdown、目录、标签、YAML、Wikilink 和文件工作流。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>能直接打开 Obsidian Vault 吗？</summary>
+      <div class="faq-answer"><p>在 Android 文件权限允许的前提下，可以把普通 Markdown Vault 目录作为笔记库使用。复杂插件生成的数据或 Obsidian 私有扩展不保证完全兼容。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么说 KardLeaf 不容易被“格式锁定”？</summary>
+      <div class="faq-answer"><p>因为正文主要是普通 Markdown/TXT 文件，目录也是实际文件夹结构。即使以后不用 KardLeaf，这些文件仍可被大量文本编辑器和 Markdown 工具读取。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 能代替 Obsidian 桌面版吗？</summary>
+      <div class="faq-answer"><p>定位不同。KardLeaf 更适合作为 Android 本地 Markdown/Obsidian 工作流的移动补充；如果依赖大量桌面插件、复杂脚本或桌面布局，仍建议保留 Obsidian 桌面端。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 能和 Typora、VS Code 一起用吗？</summary>
+      <div class="faq-answer"><p>可以，只要它们操作的是同一批 Markdown 文件，并通过你选择的同步方式保持文件一致。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>KardLeaf 的源码在哪里？</summary>
+      <div class="faq-answer"><p>源码仓库：<a href="https://github.com/waikr/KardLeaf">github.com/waikr/KardLeaf</a>。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>我可以自己编译 KardLeaf 吗？</summary>
+      <div class="faq-answer"><p>可以。仓库 README 给出的开发环境包括 Android Studio、JDK 17、Android 设备或模拟器，构建可使用 Gradle。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>我可以基于 KardLeaf 修改或二次开发吗？</summary>
+      <div class="faq-answer"><p>可以在 Apache License 2.0 允许的范围内进行修改与分发，同时需要遵守许可证中的相关要求。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>如何提交问题或建议？</summary>
+      <div class="faq-answer"><p>可以前往 <a href="https://github.com/waikr/KardLeaf/issues">GitHub Issues</a>。功能建议最好说明使用场景、当前痛点和期望交互，而不仅是功能名称。</p></div>
+    </details>
+
+    <details class="faq-item">
+      <summary>哪里能看到 KardLeaf 的完整功能列表？</summary>
+      <div class="faq-answer"><p>可以查看 <a href="/features/">完整功能总览</a>，并进入编辑器、搜索、任务、思维导图、同步、隐私、AI、网页笔记等独立详情页。</p></div>
+    </details>
+  </div>
+</section>
+          <section class="faq-contact-card">
+            <h2>没有找到你的问题？</h2>
+            <p>先查看 <a href="/features/">完整功能总览</a>。如果确认是 Bug 或功能缺失，可以在 <a href="https://github.com/waikr/KardLeaf/issues">GitHub Issues</a> 提交问题，并附上版本、Android 版本、设备型号和复现步骤。</p>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M11 8.5h18.5c4.7 0 8.5 3.8 8.5 8.5v22.5H19.5C14.8 39.5 11 35.7 11 31V8.5Z" /><path d="M16.5 31.2c7.8-1.2 12.7-5.9 15.2-14.2-8.6.4-14 5.2-15.2 14.2Z" /><path d="M17 32c3.6-4.3 7.3-7.7 12.9-11.4" /></svg></span><span class="brand-copy"><strong>KardLeaf</strong><small>卡叶笔记</small></span></a>
+        <p>本地优先的 Android Markdown 笔记应用。</p>
+      </div>
+      <div class="footer-links">
+        <div><strong>项目</strong><a href="https://github.com/waikr/KardLeaf">GitHub</a><a href="https://github.com/waikr/KardLeaf/releases">版本发布</a><a href="https://github.com/waikr/KardLeaf/issues">问题反馈</a></div>
+        <div><strong>了解</strong><a href="/features/">完整功能</a><a href="/faq/">常见问题</a><a href="/#screenshots">界面预览</a></div>
+      </div>
+    </div>
+    <div class="container footer-bottom"><span>© <span id="year"></span> KardLeaf. 基于 Apache License 2.0 开源。</span><span>Made for writing, built for freedom.</span></div>
+  </footer>
+
+  <script>
+  (() => {
+    const input = document.querySelector('#faqSearch');
+    const status = document.querySelector('#faqSearchStatus');
+    const groups = [...document.querySelectorAll('.faq-group')];
+    const items = [...document.querySelectorAll('.faq-item')];
+    if (!input) return;
+    input.addEventListener('input', () => {
+      const q = input.value.trim().toLowerCase();
+      let visible = 0;
+      items.forEach((item) => {
+        const hit = !q || item.textContent.toLowerCase().includes(q);
+        item.hidden = !hit;
+        if (hit) {
+          visible += 1;
+          if (q) item.open = true;
+        }
+      });
+      groups.forEach((group) => {
+        group.hidden = ![...group.querySelectorAll('.faq-item')].some(item => !item.hidden);
+      });
+      status.textContent = q ? '找到 ' + visible + ' 个相关问题' : '';
+    });
+  })();
+  </script>
+</body>
+</html>
