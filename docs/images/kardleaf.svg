@@ -1,51 +1,64 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
-<title id="title">KardLeaf 应用图标</title>
-<desc id="desc">纯矢量的蓝绿色 Markdown 笔记卡片图标</desc>
-<defs>
-  <linearGradient id="outerFill" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#fbfdff"/>
-  </linearGradient>
-  <linearGradient id="backCard" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#dbeaff"/><stop offset="0.58" stop-color="#c6ddff"/><stop offset="1" stop-color="#b5d2ff"/>
-  </linearGradient>
-  <linearGradient id="frontCard" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#fbfdff"/>
-  </linearGradient>
-  <linearGradient id="blueStroke" x1="0" y1="0" x2="1" y2="0">
-    <stop offset="0" stop-color="#78b2ff"/><stop offset="1" stop-color="#4e98ff"/>
-  </linearGradient>
-  <linearGradient id="greenTab" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#a7f4ca"/><stop offset="1" stop-color="#7fe6b2"/>
-  </linearGradient>
-  <linearGradient id="foldFill" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#ffffff"/><stop offset="0.55" stop-color="#eef5ff"/><stop offset="1" stop-color="#d7e8ff"/>
-  </linearGradient>
-  <filter id="outerShadow" x="-25%" y="-25%" width="150%" height="150%">
-    <feDropShadow dx="0" dy="22" stdDeviation="32" flood-color="#89a8cc" flood-opacity="0.18"/>
-  </filter>
-  <filter id="cardShadow" x="-30%" y="-30%" width="160%" height="160%">
-    <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#7893b5" flood-opacity="0.22"/>
-  </filter>
-  <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
-    <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#6f89a9" flood-opacity="0.15"/>
-  </filter>
-</defs>
-<rect x="96" y="96" width="832" height="832" rx="190" fill="url(#outerFill)" filter="url(#outerShadow)"/>
-<rect x="738" y="487" width="88" height="174" rx="38" fill="url(#greenTab)" opacity="0.95" transform="rotate(4 782 574)" filter="url(#softShadow)"/>
-<g transform="rotate(7 610 500)" filter="url(#cardShadow)">
-  <rect x="386" y="276" width="418" height="520" rx="74" fill="url(#backCard)"/>
-</g>
-<g filter="url(#cardShadow)">
-  <path d="M300 355H664C716 355 752 391 752 443V676C752 713 739 742 713 769L641 841C616 867 588 881 549 881H300C242 881 204 843 204 785V451C204 393 242 355 300 355Z" fill="url(#frontCard)"/>
-</g>
-<path d="M641 841C633 812 638 782 658 762C679 741 710 734 752 738C744 752 733 765 713 785L663 835C655 843 648 846 641 841Z" fill="url(#foldFill)" filter="url(#softShadow)"/>
-<g fill="url(#blueStroke)">
-  <rect x="306" y="433" width="25" height="112" rx="12" transform="rotate(10 318.5 489)"/>
-  <rect x="351" y="433" width="25" height="112" rx="12" transform="rotate(10 363.5 489)"/>
-  <rect x="285" y="466" width="112" height="25" rx="12"/>
-  <rect x="278" y="507" width="112" height="25" rx="12"/>
-</g>
-<rect x="286" y="600" width="372" height="27" rx="13.5" fill="url(#blueStroke)"/>
-<rect x="286" y="687" width="280" height="27" rx="13.5" fill="url(#blueStroke)"/>
-<rect x="286" y="774" width="164" height="27" rx="13.5" fill="url(#blueStroke)"/>
+  <title id="title">KardLeaf 应用图标</title>
+  <desc id="desc">与 Android 默认桌面图标统一的 KardLeaf 图标</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#fbfcfd"/>
+    </linearGradient>
+    <linearGradient id="back" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#dceaff"/>
+      <stop offset="1" stop-color="#c5ddff"/>
+    </linearGradient>
+    <linearGradient id="front" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#fcfdff"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#cfe2ff"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6ca9ff"/>
+      <stop offset="1" stop-color="#4d92ff"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a3f1c8"/>
+      <stop offset="1" stop-color="#76e2ad"/>
+    </linearGradient>
+    <filter id="bgShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="22" stdDeviation="34" flood-color="#9aa9b9" flood-opacity="0.18"/>
+    </filter>
+    <filter id="cardShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="25" stdDeviation="30" flood-color="#7d95b1" flood-opacity="0.23"/>
+    </filter>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#7f98b4" flood-opacity="0.17"/>
+    </filter>
+  </defs>
+
+  <rect x="22" y="22" width="980" height="980" rx="205" fill="url(#bg)" filter="url(#bgShadow)"/>
+
+  <rect x="837" y="503" width="64" height="192" rx="31" fill="url(#green)" transform="rotate(4 869 599)" filter="url(#softShadow)"/>
+
+  <g transform="rotate(6.5 610 470)" filter="url(#softShadow)">
+    <rect x="325" y="166" width="548" height="654" rx="86" fill="url(#back)"/>
+  </g>
+
+  <g filter="url(#cardShadow)">
+    <path d="M232 232H676C739 232 780 273 780 336V698C780 742 765 775 735 807L665 877C636 907 601 922 555 922H232C171 922 132 883 132 822V332C132 271 171 232 232 232Z" fill="url(#front)"/>
+  </g>
+
+  <path d="M646 871C639 839 647 799 676 771C704 744 742 735 781 741C770 762 755 781 735 802L681 856C667 870 655 877 646 871Z" fill="url(#fold)" filter="url(#softShadow)"/>
+
+  <g fill="url(#blue)">
+    <rect x="255" y="309" width="27" height="126" rx="13.5" transform="rotate(10 268.5 372)"/>
+    <rect x="306" y="309" width="27" height="126" rx="13.5" transform="rotate(10 319.5 372)"/>
+    <rect x="236" y="350" width="122" height="28" rx="14"/>
+    <rect x="229" y="397" width="122" height="28" rx="14"/>
+  </g>
+
+  <rect x="239" y="515" width="472" height="27" rx="13.5" fill="url(#blue)"/>
+  <rect x="239" y="609" width="357" height="27" rx="13.5" fill="url(#blue)"/>
+  <rect x="239" y="704" width="202" height="27" rx="13.5" fill="url(#blue)"/>
 </svg>
