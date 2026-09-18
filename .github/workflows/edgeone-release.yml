@@ -1,0 +1,15 @@
+name: Trigger EdgeOne Deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger EdgeOne deploy hook
+        env:
+          EDGEONE_DEPLOY_HOOK: ${{ secrets.EDGEONE_DEPLOY_HOOK }}
+        run: curl -fsS -X POST "$EDGEONE_DEPLOY_HOOK"
