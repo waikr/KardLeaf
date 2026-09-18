@@ -1,6 +1,6 @@
 /* Detailed feature/document pages */
 .feature-page-shell { min-height: 100vh; }
-.command-glyph { display: inline-grid; place-items: center; width: 20px; height: 20px; font-size: 19px; line-height: 1; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 800; }
+.command-glyph { display: inline-block; width: 18px; height: 18px; border: 1.8px solid currentColor; border-radius: 4px; font-size: 0; line-height: 1; background: linear-gradient(currentColor, currentColor) 50% 0 / 1.5px 100% no-repeat, linear-gradient(currentColor, currentColor) 0 50% / 100% 1.5px no-repeat; }
 .command-button[aria-current="page"] { color: var(--brand-strong); border-color: color-mix(in srgb, var(--brand) 55%, var(--line)); background: var(--brand-soft); }
 
 .doc-hero { position: relative; overflow: hidden; padding: 76px 0 58px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, color-mix(in srgb, var(--brand-soft) 42%, var(--bg)), var(--bg)); }
